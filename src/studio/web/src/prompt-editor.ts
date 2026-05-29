@@ -22,7 +22,7 @@ export function PromptEditor(props: {
   return h("div", { class: "grid gap-5" }, [
     h("div", { class: "grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]" }, [
       h("label", { class: "grid gap-2 text-sm font-medium text-neutral-600 dark:text-neutral-300" }, [
-        h("span", {}, "Profile"),
+        h("span", {}, "프로필"),
         h("input", {
           id: "profile-prompt-name",
           name: "profile-prompt-name",
@@ -35,7 +35,7 @@ export function PromptEditor(props: {
         })
       ]),
       h("div", { class: "grid content-end gap-2" }, [
-        h("span", { class: "text-sm font-medium text-neutral-600 dark:text-neutral-300" }, "Mode"),
+        h("span", { class: "text-sm font-medium text-neutral-600 dark:text-neutral-300" }, "모드"),
         h(
           "div",
           { class: "flex flex-wrap gap-2" },
@@ -54,7 +54,7 @@ export function PromptEditor(props: {
                   transition
                 )
               },
-              mode
+              promptModeLabel(mode)
             )
           )
         )
@@ -83,7 +83,37 @@ export function PromptEditor(props: {
 
 export function promptLineSummary(value: string) {
   const lines = value.length === 0 ? 0 : value.split(/\r\n|\r|\n/).length;
-  return `${lines.toLocaleString("ko-KR")} lines`;
+  return `${lines.toLocaleString("ko-KR")}줄`;
+}
+
+export function promptModeLabel(mode: PromptMode) {
+  switch (mode) {
+    case "workflow":
+      return "워크플로우";
+    case "issue":
+      return "이슈";
+    case "branch":
+      return "브랜치";
+    case "pr":
+      return "PR";
+    case "common":
+      return "공통";
+  }
+}
+
+export function promptModeSummary(mode: PromptMode) {
+  switch (mode) {
+    case "workflow":
+      return "워크플로우 작업 범위";
+    case "issue":
+      return "이슈 워크트리 범위";
+    case "branch":
+      return "브랜치 워크트리 범위";
+    case "pr":
+      return "PR 범위";
+    case "common":
+      return "공통 범위";
+  }
 }
 
 function icon(IconComponent: IconComponent) {

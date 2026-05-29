@@ -45,27 +45,27 @@ export function WorkflowView(props: {
   iconComponent: IconComponent;
 }) {
   if (props.loading) {
-    return h("div", { class: "grid min-h-[24rem] place-items-center text-sm text-neutral-500 dark:text-neutral-400" }, "Workflow 읽는 중");
+    return h("div", { class: "grid min-h-[24rem] place-items-center text-sm text-neutral-500 dark:text-neutral-400" }, "워크플로우 읽는 중");
   }
   if (!props.workflow) {
-    return h("div", { class: "grid min-h-[24rem] place-items-center text-sm text-neutral-500 dark:text-neutral-400" }, "선택된 Workflow가 없습니다.");
+    return h("div", { class: "grid min-h-[24rem] place-items-center text-sm text-neutral-500 dark:text-neutral-400" }, "선택된 워크플로우가 없습니다.");
   }
 
   const workflow = props.workflow;
   return h("div", { class: "grid gap-6" }, [
     h("div", { class: "grid gap-4 md:grid-cols-2" }, [
       readOnlyField("ID", workflow.id, "font-mono"),
-      readOnlyField("Mode", workflow.mode),
-      readOnlyField("Title", workflow.title || "제목 없음", "md:col-span-2"),
-      readOnlyField("Base", workflow.base || workflow.base_mode),
-      readOnlyField("Color", workflow.color || "없음", "", workflow.color),
-      readOnlyField("Pull request", workflow.policy.pull_request),
-      readOnlyField("Landing", workflow.policy.landing),
-      readOnlyField("Created", workflow.created_at),
-      readOnlyField("Updated", workflow.updated_at)
+      readOnlyField("모드", workflow.mode),
+      readOnlyField("제목", workflow.title || "제목 없음", "md:col-span-2"),
+      readOnlyField("베이스", workflow.base || workflow.base_mode),
+      readOnlyField("색상", workflow.color || "없음", "", workflow.color),
+      readOnlyField("PR", workflow.policy.pull_request),
+      readOnlyField("랜딩", workflow.policy.landing),
+      readOnlyField("생성", workflow.created_at),
+      readOnlyField("수정", workflow.updated_at)
     ]),
     h("section", { class: "grid gap-2 text-sm font-medium text-neutral-600 dark:text-neutral-300" }, [
-      h("span", {}, "Body"),
+      h("span", {}, "본문"),
       h(
         "div",
         {
@@ -81,7 +81,7 @@ export function WorkflowView(props: {
       h("div", { class: "flex items-center gap-3" }, [
         h("span", { class: "grid h-10 w-10 place-items-center rounded-full bg-studio-accent/10 text-studio-accent ring-1 ring-studio-accent/20" }, h(props.iconComponent, { size: 20, weight: "light", className: "h-5 w-5" })),
         h("div", {}, [
-          h("p", { class: "text-sm font-medium text-neutral-950 dark:text-neutral-50" }, `${workflow.tasks.length} tasks`),
+          h("p", { class: "text-sm font-medium text-neutral-950 dark:text-neutral-50" }, `${workflow.tasks.length.toLocaleString("ko-KR")}개 작업`),
           h("p", { class: "text-xs text-neutral-500 dark:text-neutral-500" }, workflow.path)
         ])
       ]),
@@ -90,7 +90,7 @@ export function WorkflowView(props: {
           h("div", { key: `${task.task}-${index}`, class: "grid gap-1 border-b border-black/5 bg-white/50 px-5 py-4 last:border-b-0 dark:border-white/10 dark:bg-white/[0.03]" }, [
             h("div", { class: "flex flex-wrap items-center gap-2" }, [
               h("span", { class: "font-mono text-sm text-neutral-950 dark:text-neutral-100" }, task.task),
-              task.parent && h("span", { class: "rounded-full bg-black/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-neutral-500 ring-1 ring-black/5 dark:bg-white/[0.04] dark:ring-white/10" }, `parent ${task.parent}`)
+              task.parent && h("span", { class: "rounded-full bg-black/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-neutral-500 ring-1 ring-black/5 dark:bg-white/[0.04] dark:ring-white/10" }, `부모 ${task.parent}`)
             ]),
             h("p", { class: "font-mono text-xs text-neutral-500 dark:text-neutral-500" }, task.run || task.runs.map((run) => `${run.profile}:${run.run}`).join(", "))
           ])
@@ -99,7 +99,7 @@ export function WorkflowView(props: {
     ]),
     workflow.origin &&
       h("section", { class: "grid gap-2 rounded-[1.5rem] bg-black/[0.03] p-5 text-sm ring-1 ring-black/5 dark:bg-white/[0.03] dark:ring-white/10" }, [
-        h("p", { class: "text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-400 dark:text-neutral-500" }, "Origin"),
+        h("p", { class: "text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-400 dark:text-neutral-500" }, "출처"),
         h("p", { class: "font-mono text-neutral-700 dark:text-neutral-300" }, `${workflow.origin.provider}:${workflow.origin.id}`)
       ])
   ]);

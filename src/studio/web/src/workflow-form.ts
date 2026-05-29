@@ -107,10 +107,10 @@ export function WorkflowForm(props: {
   onChange: (draft: WorkflowDraft) => void;
 }) {
   if (props.loading) {
-    return h("div", { class: "grid min-h-[24rem] place-items-center text-sm text-neutral-500 dark:text-neutral-400" }, "Workflow 읽는 중");
+    return h("div", { class: "grid min-h-[24rem] place-items-center text-sm text-neutral-500 dark:text-neutral-400" }, "워크플로우 읽는 중");
   }
   if (!props.workflow || !props.draft) {
-    return h("div", { class: "grid min-h-[24rem] place-items-center text-sm text-neutral-500 dark:text-neutral-400" }, "선택된 Workflow가 없습니다.");
+    return h("div", { class: "grid min-h-[24rem] place-items-center text-sm text-neutral-500 dark:text-neutral-400" }, "선택된 워크플로우가 없습니다.");
   }
 
   const workflow = props.workflow;
@@ -119,29 +119,29 @@ export function WorkflowForm(props: {
 
   return h("div", { class: "grid gap-6" }, [
     h("div", { class: "grid gap-4 md:grid-cols-2" }, [
-      field({ key: "title", label: "Title", value: draft.title }, (value) => update({ title: value })),
-      field({ key: "color", label: "Color", value: draft.color, kind: "select", options: ["", ...workflowColors] }, (value) =>
+      field({ key: "title", label: "제목", value: draft.title }, (value) => update({ title: value })),
+      field({ key: "color", label: "색상", value: draft.color, kind: "select", options: ["", ...workflowColors] }, (value) =>
         update({ color: value })
       ),
-      field({ key: "pull-request", label: "Pull request", value: draft.pullRequest, kind: "select", options: ["none", "draft", "ready"] }, (value) =>
+      field({ key: "pull-request", label: "PR", value: draft.pullRequest, kind: "select", options: ["none", "draft", "ready"] }, (value) =>
         update({ pullRequest: value })
       ),
-      field({ key: "landing", label: "Landing", value: draft.landing, kind: "select", options: ["manual", "auto"] }, (value) => update({ landing: value }))
+      field({ key: "landing", label: "랜딩", value: draft.landing, kind: "select", options: ["manual", "auto"] }, (value) => update({ landing: value }))
     ]),
-    field({ key: "body", label: "Body", value: draft.body, kind: "textarea" }, (value) => update({ body: value })),
+    field({ key: "body", label: "본문", value: draft.body, kind: "textarea" }, (value) => update({ body: value })),
     h("div", { class: "grid gap-4 md:grid-cols-2" }, [
       readOnlyField("ID", workflow.id, "font-mono"),
-      readOnlyField("Mode", workflow.mode),
-      readOnlyField("Base", workflow.base || workflow.base_mode),
-      readOnlyField("Created", workflow.created_at),
-      readOnlyField("Updated", workflow.updated_at),
-      readOnlyField("Profile", workflow.profile || workflow.profiles.join(", ") || "없음")
+      readOnlyField("모드", workflow.mode),
+      readOnlyField("베이스", workflow.base || workflow.base_mode),
+      readOnlyField("생성", workflow.created_at),
+      readOnlyField("수정", workflow.updated_at),
+      readOnlyField("프로필", workflow.profile || workflow.profiles.join(", ") || "없음")
     ]),
     h("section", { class: "grid gap-3" }, [
       h("div", { class: "flex items-center gap-3" }, [
         h("span", { class: "grid h-10 w-10 place-items-center rounded-full bg-studio-accent/10 text-studio-accent ring-1 ring-studio-accent/20" }, h(props.iconComponent, { size: 20, weight: "light", className: "h-5 w-5" })),
         h("div", {}, [
-          h("p", { class: "text-sm font-medium text-neutral-950 dark:text-neutral-50" }, `${workflow.tasks.length} tasks`),
+          h("p", { class: "text-sm font-medium text-neutral-950 dark:text-neutral-50" }, `${workflow.tasks.length.toLocaleString("ko-KR")}개 작업`),
           h("p", { class: "text-xs text-neutral-500 dark:text-neutral-500" }, workflow.path)
         ])
       ]),
@@ -149,7 +149,7 @@ export function WorkflowForm(props: {
     ]),
     workflow.origin &&
       h("section", { class: "grid gap-2 rounded-[1.5rem] bg-black/[0.03] p-5 text-sm ring-1 ring-black/5 dark:bg-white/[0.03] dark:ring-white/10" }, [
-        h("p", { class: "text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-400 dark:text-neutral-500" }, "Origin"),
+        h("p", { class: "text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-400 dark:text-neutral-500" }, "출처"),
         h("p", { class: "font-mono text-neutral-700 dark:text-neutral-300" }, `${workflow.origin.provider}:${workflow.origin.id}`)
       ])
   ]);
@@ -182,7 +182,7 @@ function field(
               onInput: (event: Event) => onInput((event.currentTarget as HTMLSelectElement).value),
               class: baseClass
             },
-            spec.options?.map((option) => h("option", { key: option, value: option }, option || "unset"))
+            spec.options?.map((option) => h("option", { key: option, value: option }, option || "미설정"))
           )
         : h("input", {
             id,
@@ -210,7 +210,7 @@ function taskRow(task: WorkflowTask, index: number) {
   return h("div", { key: `${task.task}-${index}`, class: "grid gap-1 border-b border-black/5 bg-white/50 px-5 py-4 last:border-b-0 dark:border-white/10 dark:bg-white/[0.03]" }, [
     h("div", { class: "flex flex-wrap items-center gap-2" }, [
       h("span", { class: "font-mono text-sm text-neutral-950 dark:text-neutral-100" }, task.task),
-      task.parent && h("span", { class: "rounded-full bg-black/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-neutral-500 ring-1 ring-black/5 dark:bg-white/[0.04] dark:ring-white/10" }, `parent ${task.parent}`)
+      task.parent && h("span", { class: "rounded-full bg-black/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-neutral-500 ring-1 ring-black/5 dark:bg-white/[0.04] dark:ring-white/10" }, `부모 ${task.parent}`)
     ]),
     h("p", { class: "font-mono text-xs text-neutral-500 dark:text-neutral-500" }, task.run || task.runs.map((run) => `${run.profile}:${run.run}`).join(", "))
   ]);

@@ -323,80 +323,80 @@ export function ConfigForm(props: {
   };
 
   return h("div", { class: "grid gap-4" }, [
-    sectionPanel("workflow", "Workflow", props.draft.workflow.enabled, props.iconComponent, (enabled) => updateSection("workflow", { enabled }), [
-      field({ key: "pullRequest", label: "Pull request", value: props.draft.workflow.pullRequest, kind: "select", options: ["none", "draft", "ready"] }, (value) =>
+    sectionPanel("workflow", "워크플로우", props.draft.workflow.enabled, props.iconComponent, (enabled) => updateSection("workflow", { enabled }), [
+      field({ key: "pullRequest", label: "PR", value: props.draft.workflow.pullRequest, kind: "select", options: ["none", "draft", "ready"] }, (value) =>
         updateSection("workflow", { pullRequest: value })
       ),
-      field({ key: "landing", label: "Landing", value: props.draft.workflow.landing, kind: "select", options: ["manual", "auto"] }, (value) =>
+      field({ key: "landing", label: "랜딩", value: props.draft.workflow.landing, kind: "select", options: ["manual", "auto"] }, (value) =>
         updateSection("workflow", { landing: value })
       )
     ]),
-    sectionPanel("agent", "Agent", props.draft.agent.enabled, props.iconComponent, (enabled) => updateSection("agent", { enabled }), [
+    sectionPanel("agent", "에이전트", props.draft.agent.enabled, props.iconComponent, (enabled) => updateSection("agent", { enabled }), [
       field({ key: "cli", label: "CLI", value: props.draft.agent.cli, kind: "select", options: ["none", "codex", "claude", "gemini"] }, (value) =>
         updateSection("agent", { cli: value })
       ),
-      field({ key: "args", label: "Args", value: props.draft.agent.args, placeholder: "one argument per line" }, (value) => updateSection("agent", { args: value })),
-      field({ key: "command", label: "Command", value: props.draft.agent.command }, (value) => updateSection("agent", { command: value })),
-      field({ key: "ready", label: "Ready", value: props.draft.agent.ready }, (value) => updateSection("agent", { ready: value })),
-      field({ key: "submit", label: "Submit", value: props.draft.agent.submit, kind: "select", options: ["", "auto", "newline", "carriage_return", "none"] }, (value) =>
+      field({ key: "args", label: "인자", value: props.draft.agent.args, placeholder: "한 줄에 하나씩" }, (value) => updateSection("agent", { args: value })),
+      field({ key: "command", label: "명령", value: props.draft.agent.command }, (value) => updateSection("agent", { command: value })),
+      field({ key: "ready", label: "준비 신호", value: props.draft.agent.ready }, (value) => updateSection("agent", { ready: value })),
+      field({ key: "submit", label: "제출 방식", value: props.draft.agent.submit, kind: "select", options: ["", "auto", "newline", "carriage_return", "none"] }, (value) =>
         updateSection("agent", { submit: value })
       ),
-      field({ key: "timeout", label: "Timeout", value: props.draft.agent.timeout }, (value) => updateSection("agent", { timeout: value })),
-      field({ key: "sendAfter", label: "Send after", value: props.draft.agent.sendAfter }, (value) => updateSection("agent", { sendAfter: value }))
+      field({ key: "timeout", label: "제한 시간", value: props.draft.agent.timeout }, (value) => updateSection("agent", { timeout: value })),
+      field({ key: "sendAfter", label: "전송 대기", value: props.draft.agent.sendAfter }, (value) => updateSection("agent", { sendAfter: value }))
     ]),
-    sectionPanel("workspace", "Workspace", props.draft.workspace.enabled, props.iconComponent, (enabled) => updateSection("workspace", { enabled }), [
-      field({ key: "tabs", label: "Tabs", value: props.draft.workspace.tabs, kind: "textarea", placeholder: "one tab per line" }, (value) =>
+    sectionPanel("workspace", "워크스페이스", props.draft.workspace.enabled, props.iconComponent, (enabled) => updateSection("workspace", { enabled }), [
+      field({ key: "tabs", label: "탭", value: props.draft.workspace.tabs, kind: "textarea", placeholder: "한 줄에 하나씩" }, (value) =>
         updateSection("workspace", { tabs: value })
       ),
-      field({ key: "postDepsTabs", label: "Post deps tabs", value: props.draft.workspace.postDepsTabs, kind: "textarea", placeholder: "one tab per line" }, (value) =>
+      field({ key: "postDepsTabs", label: "의존성 후 탭", value: props.draft.workspace.postDepsTabs, kind: "textarea", placeholder: "한 줄에 하나씩" }, (value) =>
         updateSection("workspace", { postDepsTabs: value })
       ),
-      field({ key: "browserMode", label: "Browser mode", value: props.draft.workspace.browserMode, kind: "select", options: ["", "none", "system", "chrome_devtools"] }, (value) =>
+      field({ key: "browserMode", label: "브라우저 모드", value: props.draft.workspace.browserMode, kind: "select", options: ["", "none", "system", "chrome_devtools"] }, (value) =>
         updateSection("workspace", { browserMode: value })
       ),
-      field({ key: "browserUrl", label: "Browser URL", value: props.draft.workspace.browserUrl }, (value) => updateSection("workspace", { browserUrl: value })),
-      field({ key: "browserApp", label: "Browser app", value: props.draft.workspace.browserApp }, (value) => updateSection("workspace", { browserApp: value })),
-      field({ key: "chromePort", label: "Chrome port", value: props.draft.workspace.chromePort }, (value) => updateSection("workspace", { chromePort: value })),
-      field({ key: "chromeUserDataDir", label: "Chrome user data dir", value: props.draft.workspace.chromeUserDataDir }, (value) =>
+      field({ key: "browserUrl", label: "브라우저 URL", value: props.draft.workspace.browserUrl }, (value) => updateSection("workspace", { browserUrl: value })),
+      field({ key: "browserApp", label: "브라우저 앱", value: props.draft.workspace.browserApp }, (value) => updateSection("workspace", { browserApp: value })),
+      field({ key: "chromePort", label: "Chrome 포트", value: props.draft.workspace.chromePort }, (value) => updateSection("workspace", { chromePort: value })),
+      field({ key: "chromeUserDataDir", label: "Chrome 사용자 데이터 디렉터리", value: props.draft.workspace.chromeUserDataDir }, (value) =>
         updateSection("workspace", { chromeUserDataDir: value })
       )
     ]),
-    sectionPanel("site", "Site", props.draft.site.enabled, props.iconComponent, (enabled) => updateSection("site", { enabled }), [
-      field({ key: "provider", label: "Provider", value: props.draft.site.provider, kind: "select", options: ["none", "herd", "valet", "docker_proxy", "traefik"] }, (value) =>
+    sectionPanel("site", "사이트", props.draft.site.enabled, props.iconComponent, (enabled) => updateSection("site", { enabled }), [
+      field({ key: "provider", label: "제공자", value: props.draft.site.provider, kind: "select", options: ["none", "herd", "valet", "docker_proxy", "traefik"] }, (value) =>
         updateSection("site", { provider: value })
       ),
-      field({ key: "name", label: "Name", value: props.draft.site.name }, (value) => updateSection("site", { name: value })),
-      field({ key: "root", label: "Root", value: props.draft.site.root }, (value) => updateSection("site", { root: value })),
-      field({ key: "secure", label: "Secure", value: props.draft.site.secure, kind: "select", options: ["", "true", "false"] }, (value) => updateSection("site", { secure: value })),
+      field({ key: "name", label: "이름", value: props.draft.site.name }, (value) => updateSection("site", { name: value })),
+      field({ key: "root", label: "루트", value: props.draft.site.root }, (value) => updateSection("site", { root: value })),
+      field({ key: "secure", label: "보안 연결", value: props.draft.site.secure, kind: "select", options: ["", "true", "false"] }, (value) => updateSection("site", { secure: value })),
       field({ key: "url", label: "URL", value: props.draft.site.url }, (value) => updateSection("site", { url: value })),
-      field({ key: "target", label: "Target", value: props.draft.site.target }, (value) => updateSection("site", { target: value }))
+      field({ key: "target", label: "대상", value: props.draft.site.target }, (value) => updateSection("site", { target: value }))
     ]),
-    sectionPanel("worktree", "Worktree", props.draft.worktree.enabled, props.iconComponent, (enabled) => updateSection("worktree", { enabled }), [
-      field({ key: "path", label: "Path", value: props.draft.worktree.path }, (value) => updateSection("worktree", { path: value })),
-      field({ key: "copy", label: "Copy", value: props.draft.worktree.copy, kind: "textarea", placeholder: "one path per line" }, (value) => updateSection("worktree", { copy: value })),
-      field({ key: "link", label: "Link", value: props.draft.worktree.link, kind: "textarea", placeholder: "one path per line" }, (value) => updateSection("worktree", { link: value })),
-      field({ key: "injectLocalContext", label: "Inject local context", value: props.draft.worktree.injectLocalContext }, (value) =>
+    sectionPanel("worktree", "워크트리", props.draft.worktree.enabled, props.iconComponent, (enabled) => updateSection("worktree", { enabled }), [
+      field({ key: "path", label: "경로", value: props.draft.worktree.path }, (value) => updateSection("worktree", { path: value })),
+      field({ key: "copy", label: "복사", value: props.draft.worktree.copy, kind: "textarea", placeholder: "한 줄에 하나씩" }, (value) => updateSection("worktree", { copy: value })),
+      field({ key: "link", label: "링크", value: props.draft.worktree.link, kind: "textarea", placeholder: "한 줄에 하나씩" }, (value) => updateSection("worktree", { link: value })),
+      field({ key: "injectLocalContext", label: "로컬 컨텍스트 주입", value: props.draft.worktree.injectLocalContext }, (value) =>
         updateSection("worktree", { injectLocalContext: value })
       )
     ]),
-    sectionPanel("editor", "Editor", props.draft.editor.enabled, props.iconComponent, (enabled) => updateSection("editor", { enabled }), [
-      field({ key: "command", label: "Command", value: props.draft.editor.command }, (value) => updateSection("editor", { command: value })),
-      field({ key: "placement", label: "Placement", value: props.draft.editor.placement, kind: "select", options: ["", "cmux_surface", "process"] }, (value) =>
+    sectionPanel("editor", "에디터", props.draft.editor.enabled, props.iconComponent, (enabled) => updateSection("editor", { enabled }), [
+      field({ key: "command", label: "명령", value: props.draft.editor.command }, (value) => updateSection("editor", { command: value })),
+      field({ key: "placement", label: "배치", value: props.draft.editor.placement, kind: "select", options: ["", "cmux_surface", "process"] }, (value) =>
         updateSection("editor", { placement: value })
       )
     ]),
-    sectionPanel("setup", "Setup", props.draft.setup.enabled, props.iconComponent, (enabled) => updateSection("setup", { enabled }), [
+    sectionPanel("setup", "셋업", props.draft.setup.enabled, props.iconComponent, (enabled) => updateSection("setup", { enabled }), [
       field({ key: "env", label: "Env", value: props.draft.setup.env, kind: "textarea", placeholder: "KEY=value" }, (value) => updateSection("setup", { env: value }))
     ]),
-    sectionPanel("profile", "Profile", props.draft.profile.enabled, props.iconComponent, (enabled) => updateSection("profile", { enabled }), [
-      field({ key: "name", label: "Name", value: props.draft.profile.name }, (value) => updateSection("profile", { name: value }))
+    sectionPanel("profile", "프로필", props.draft.profile.enabled, props.iconComponent, (enabled) => updateSection("profile", { enabled }), [
+      field({ key: "name", label: "이름", value: props.draft.profile.name }, (value) => updateSection("profile", { name: value }))
     ]),
-    sectionPanel("issues", "Issues", props.draft.issues.enabled, props.iconComponent, (enabled) => updateSection("issues", { enabled }), [
-      field({ key: "provider", label: "Provider", value: props.draft.issues.provider, kind: "select", options: ["linear", "github"] }, (value) => updateSection("issues", { provider: value })),
-      field({ key: "ghUser", label: "GitHub user", value: props.draft.issues.ghUser }, (value) => updateSection("issues", { ghUser: value }))
+    sectionPanel("issues", "이슈", props.draft.issues.enabled, props.iconComponent, (enabled) => updateSection("issues", { enabled }), [
+      field({ key: "provider", label: "제공자", value: props.draft.issues.provider, kind: "select", options: ["linear", "github"] }, (value) => updateSection("issues", { provider: value })),
+      field({ key: "ghUser", label: "GitHub 사용자", value: props.draft.issues.ghUser }, (value) => updateSection("issues", { ghUser: value }))
     ]),
-    sectionPanel("test", "Test", props.draft.test.enabled, props.iconComponent, (enabled) => updateSection("test", { enabled }), [
-      field({ key: "commands", label: "Commands", value: props.draft.test.commands, kind: "textarea", placeholder: "command labels for simple validation" }, (value) =>
+    sectionPanel("test", "테스트", props.draft.test.enabled, props.iconComponent, (enabled) => updateSection("test", { enabled }), [
+      field({ key: "commands", label: "명령", value: props.draft.test.commands, kind: "textarea", placeholder: "간단한 검증용 명령 라벨" }, (value) =>
         updateSection("test", { commands: value })
       )
     ])
@@ -435,7 +435,7 @@ function sectionPanel(
             onChange: (event: Event) => onToggle((event.currentTarget as HTMLInputElement).checked),
             class: "h-4 w-4 accent-blue-500"
           }),
-          enabled ? "active" : "inactive"
+          enabled ? "활성" : "비활성"
         ])
       ]),
       enabled && h("div", { class: "grid gap-4 md:grid-cols-2" }, children)
@@ -468,7 +468,7 @@ function field(spec: FieldSpec, onInput: (value: string) => void) {
               onInput: (event: Event) => onInput((event.currentTarget as HTMLSelectElement).value),
               class: baseClass
             },
-            spec.options?.map((option) => h("option", { key: option, value: option }, option || "unset"))
+            spec.options?.map((option) => h("option", { key: option, value: option }, option || "미설정"))
           )
         : h("input", {
             id,

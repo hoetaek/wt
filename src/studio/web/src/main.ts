@@ -29,7 +29,7 @@ import {
   serializeProfileDraft,
   type ProfileDraft
 } from "./profile-form";
-import { PromptEditor, promptModes, type PromptMode } from "./prompt-editor";
+import { PromptEditor, promptModeLabel, promptModeSummary, promptModes, type PromptMode } from "./prompt-editor";
 import {
   WorkflowForm,
   draftFromWorkflow,
@@ -321,9 +321,9 @@ function App() {
       : surface === "profiles"
         ? profileDisplayPath(selectedProfileName)
       : surface === "config"
-        ? "Personal config"
+        ? "개인 설정"
         : surface === "workflow"
-          ? workflowDetail?.title || "Workflow"
+          ? workflowDetail?.title || "워크플로우"
         : draft.title.trim() || "제목 없는 TaskDocument";
   const detailMetrics = useMemo(
     () =>
@@ -1275,7 +1275,7 @@ function App() {
         h("div", { class: "flex items-center gap-3" }, [
           h("button", {
             type: "button",
-            "aria-label": drawerOpen ? "TaskDocument 목록 숨기기" : "TaskDocument 목록 보이기",
+            "aria-label": drawerOpen ? "작업 문서 목록 숨기기" : "작업 문서 목록 보이기",
             onClick: () => setDrawerOpen((open) => !open),
             class: clsx(
               "group flex h-12 w-12 items-center justify-center rounded-full bg-black/[0.04] text-neutral-700 ring-1 ring-black/5 active:scale-[0.98] dark:bg-white/[0.08] dark:text-neutral-200 dark:ring-white/10",
@@ -1285,11 +1285,11 @@ function App() {
           h("p", { class: "hidden text-[11px] font-medium uppercase tracking-[0.2em] text-neutral-500 dark:text-neutral-400 md:block" }, "wt studio")
         ]),
         h("div", { class: "inline-flex rounded-full bg-black/[0.04] p-1 ring-1 ring-black/5 dark:bg-white/[0.05] dark:ring-white/10" }, [
-          h(SurfacePill, { label: "Tasks", active: surface === "tasks", onClick: () => switchSurface("tasks") }),
-          h(SurfacePill, { label: "Personal config", active: surface === "config", onClick: () => switchSurface("config") }),
-          h(SurfacePill, { label: "Profiles", active: surface === "profiles", onClick: () => switchSurface("profiles") }),
-          h(SurfacePill, { label: "Prompts", active: surface === "prompts", onClick: () => switchSurface("prompts") }),
-          h(SurfacePill, { label: "Workflows", active: surface === "workflow", onClick: () => switchSurface("workflow") })
+          h(SurfacePill, { label: "작업 문서", active: surface === "tasks", onClick: () => switchSurface("tasks") }),
+          h(SurfacePill, { label: "개인 설정", active: surface === "config", onClick: () => switchSurface("config") }),
+          h(SurfacePill, { label: "프로필", active: surface === "profiles", onClick: () => switchSurface("profiles") }),
+          h(SurfacePill, { label: "프롬프트", active: surface === "prompts", onClick: () => switchSurface("prompts") }),
+          h(SurfacePill, { label: "워크플로우", active: surface === "workflow", onClick: () => switchSurface("workflow") })
         ]),
         h("div", { class: "flex items-center gap-2" }, [
           surface === "tasks" && h(IconButton, { label: "새로 만들기", iconComponent: StudioPlus, onClick: selectCreate }),
@@ -1319,13 +1319,13 @@ function App() {
               "p",
               { class: eyebrow },
               surface === "config"
-                ? "Personal config"
+                ? "개인 설정"
                 : surface === "profiles"
-                  ? "Profile config"
+                  ? "프로필 설정"
                   : surface === "prompts"
-                    ? "Profile prompt"
+                    ? "프로필 프롬프트"
                     : surface === "workflow"
-                      ? "Workflow"
+                      ? "워크플로우"
                     : mode === "create"
                       ? "새 초안"
                       : "선택됨"
@@ -1348,7 +1348,7 @@ function App() {
                   class:
                     "text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-400 dark:text-neutral-500"
                 },
-                surface === "prompts" ? "Prompt Plan" : surface === "config" ? "Config Plan" : surface === "workflow" ? "Workflow Plan" : mode === "create" ? "생성 Plan" : "수정 Plan"
+                surface === "prompts" ? "프롬프트 Plan" : surface === "config" ? "설정 Plan" : surface === "workflow" ? "워크플로우 Plan" : mode === "create" ? "생성 Plan" : "수정 Plan"
               ),
               h(MetaPill, {
                 label:
@@ -1395,7 +1395,7 @@ function App() {
                     h("div", { class: "flex items-center justify-between gap-4" }, [
                       h("div", {}, [
                         h("p", { class: eyebrow }, "디스크"),
-                        h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, `${inventory.items.length} TaskDocuments`)
+                        h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, `${inventory.items.length.toLocaleString("ko-KR")}개 작업 문서`)
                       ]),
                       h("button", {
                         type: "button",
@@ -1411,7 +1411,7 @@ function App() {
             ])
         ])
       ]),
-      h("section", { class: "grid gap-8 md:col-span-7", "aria-label": surface === "prompts" ? "Profile prompt editor" : surface === "profiles" ? "Profile config editor" : surface === "config" ? "Personal config editor" : surface === "workflow" ? "Workflow inspector" : "TaskDocument editor" }, [
+      h("section", { class: "grid gap-8 md:col-span-7", "aria-label": surface === "prompts" ? "프로필 프롬프트 편집기" : surface === "profiles" ? "프로필 설정 편집기" : surface === "config" ? "개인 설정 편집기" : surface === "workflow" ? "워크플로우 편집기" : "작업 문서 편집기" }, [
         h(Bezel, {}, [
           h("div", { class: "flex flex-col gap-6 md:flex-row md:items-center md:justify-between" }, [
             h("div", {}, [
@@ -1419,7 +1419,7 @@ function App() {
               h(
                 "h2",
                 { class: "mt-4 text-3xl font-medium tracking-normal text-neutral-950 dark:text-neutral-50" },
-                surface === "prompts" ? "Prompt Markdown Plan" : surface === "profiles" ? "profile.toml Plan" : surface === "config" ? "local.toml Plan" : surface === "workflow" ? "Workflow Plan" : "Apply 전 Plan"
+                surface === "prompts" ? "프롬프트 Markdown Plan" : surface === "profiles" ? "profile.toml Plan" : surface === "config" ? "local.toml Plan" : surface === "workflow" ? "워크플로우 Plan" : "적용 전 Plan"
               )
             ]),
             h("span", { "aria-live": "polite", "aria-atomic": "true" }, [
@@ -1510,7 +1510,7 @@ function App() {
               ],
           h("div", { class: "flex flex-col gap-3 pt-2 sm:flex-row" }, [
             h(ActionButton, {
-              label: "Apply",
+              label: "적용",
               iconComponent: StudioSave,
               onClick: surface === "workflow" ? applyWorkflowPlan : surface === "prompts" ? applyPromptPlan : surface === "profiles" ? applyProfilePlan : surface === "config" ? applyConfigPlan : applyPlan,
               disabled:
@@ -1549,7 +1549,7 @@ function TaskList(props: {
   selectUpdate: (path: string) => void;
 }) {
   if (props.inventory.items.length === 0) {
-    return h("p", { class: "mt-6 text-sm leading-6 text-neutral-500 dark:text-neutral-400" }, "디스크에 TaskDocument가 없습니다.");
+    return h("p", { class: "mt-6 text-sm leading-6 text-neutral-500 dark:text-neutral-400" }, "디스크에 작업 문서가 없습니다.");
   }
   return h("div", { class: "mt-6 grid max-h-[24rem] gap-2 overflow-auto pr-1" }, [
     ...props.inventory.items.map((item) => {
@@ -1576,7 +1576,7 @@ function TaskList(props: {
     }),
     props.inventory.invalid.length > 0 &&
       h("div", { class: "mt-4 rounded-[1.25rem] bg-amber-400/10 p-4 text-sm text-amber-700 ring-1 ring-amber-500/20 dark:text-amber-300" }, [
-        h("div", { class: "flex items-center gap-2 font-medium" }, [icon(StudioWarning, "h-4 w-4"), "오류 TaskDocuments"]),
+        h("div", { class: "flex items-center gap-2 font-medium" }, [icon(StudioWarning, "h-4 w-4"), "오류 작업 문서"]),
         ...props.inventory.invalid.map((item) =>
           h("p", { key: item.path, class: "mt-2 [overflow-wrap:anywhere] text-xs leading-5" }, `${item.path}: ${item.error}`)
         )
@@ -1590,12 +1590,12 @@ function WorkflowList(props: {
   selectWorkflow: (id: string) => void;
 }) {
   if (props.workflows.items.length === 0) {
-    return h("p", { class: "mt-6 text-sm leading-6 text-neutral-500 dark:text-neutral-400" }, "디스크에 Workflow가 없습니다.");
+    return h("p", { class: "mt-6 text-sm leading-6 text-neutral-500 dark:text-neutral-400" }, "디스크에 워크플로우가 없습니다.");
   }
   return h("div", { class: "grid gap-5" }, [
     h("div", {}, [
       h("p", { class: eyebrow }, "디스크"),
-      h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, `${props.workflows.items.length} Workflows`)
+      h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, `${props.workflows.items.length.toLocaleString("ko-KR")}개 워크플로우`)
     ]),
     h(
       "div",
@@ -1673,7 +1673,7 @@ function ConfigResourceList(props: { selected: boolean }) {
   return h("div", { class: "grid gap-5" }, [
     h("div", {}, [
       h("p", { class: eyebrow }, "디스크"),
-      h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, "Personal config")
+      h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, "개인 설정")
     ]),
     h(
       "button",
@@ -1704,7 +1704,7 @@ function ProfileResourceList(props: {
     return h("div", { class: "grid gap-5" }, [
       h("div", {}, [
         h("p", { class: eyebrow }, "디스크"),
-        h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, "Profiles")
+        h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, "프로필")
       ]),
       h("p", { class: "text-sm leading-6 text-neutral-500 dark:text-neutral-400" }, "profile.toml이 있는 profile이 없습니다.")
     ]);
@@ -1713,7 +1713,7 @@ function ProfileResourceList(props: {
   return h("div", { class: "grid gap-5" }, [
     h("div", {}, [
       h("p", { class: eyebrow }, "디스크"),
-      h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, `${props.profiles.items.length} Profiles`)
+      h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, `${props.profiles.items.length.toLocaleString("ko-KR")}개 프로필`)
     ]),
     h(
       "div",
@@ -1752,7 +1752,7 @@ function PromptResourceList(props: {
   return h("div", { class: "grid gap-5" }, [
     h("div", {}, [
       h("p", { class: eyebrow }, "디스크"),
-      h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, "Profile prompts")
+      h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, "프로필 프롬프트")
     ]),
     h("div", { class: "grid gap-2" }, [
       h(
@@ -1785,7 +1785,7 @@ function PromptResourceList(props: {
               )
             },
             [
-              h("span", { class: "truncate text-sm font-medium" }, `${mode}.md`),
+              h("span", { class: "truncate text-sm font-medium" }, promptModeLabel(mode)),
               h("span", { class: clsx("truncate text-xs", props.mode === mode ? "text-white/70 dark:text-neutral-500" : "text-neutral-500 dark:text-neutral-500") }, promptModeSummary(mode))
             ]
           )
@@ -1994,8 +1994,8 @@ function buildConfigDetailMetrics(
 ): DetailMetric[] {
   return [
     { label: "대상", value: "<repo-root>/.wt/config/local.toml" },
-    { label: "Sections", value: configSummary(draft) },
-    { label: "Candidate", value: bodySummary(candidate) },
+    { label: "섹션", value: configSummary(draft) },
+    { label: "초안", value: bodySummary(candidate) },
     { label: "검증", value: configValidationSummary(plan, planStatus) },
     { label: "해시", value: plan?.fingerprint.hash.slice(0, 12) || "baseline" }
   ];
@@ -2010,9 +2010,9 @@ function buildProfileDetailMetrics(
 ): DetailMetric[] {
   return [
     { label: "대상", value: profileDisplayPath(profile) },
-    { label: "Profile", value: profile.trim() || "없음" },
-    { label: "Sections", value: profileSummary(draft) },
-    { label: "Candidate", value: bodySummary(candidate) },
+    { label: "프로필", value: profile.trim() || "없음" },
+    { label: "섹션", value: profileSummary(draft) },
+    { label: "초안", value: bodySummary(candidate) },
     { label: "검증", value: configValidationSummary(plan, planStatus) },
     { label: "해시", value: plan?.fingerprint.hash.slice(0, 12) || "baseline" }
   ];
@@ -2027,16 +2027,16 @@ function buildWorkflowDetailMetrics(
   if (!workflow) {
     return [
       { label: "대상", value: "<repo-root>/.wt/execution/workflows/<id>.toml" },
-      { label: "Workflows", value: `${total.toLocaleString("ko-KR")}개` },
+      { label: "워크플로우", value: `${total.toLocaleString("ko-KR")}개` },
       { label: "상태", value: "선택 대기" }
     ];
   }
   return [
     { label: "대상", value: workflow.path },
-    { label: "Mode", value: workflow.mode },
-    { label: "Policy", value: `${workflow.policy.pull_request} / ${workflow.policy.landing}` },
-    { label: "Tasks", value: `${workflow.tasks.length.toLocaleString("ko-KR")}개` },
-    { label: "Updated", value: workflow.updated_at },
+    { label: "모드", value: workflow.mode },
+    { label: "정책", value: `${workflow.policy.pull_request} / ${workflow.policy.landing}` },
+    { label: "작업", value: `${workflow.tasks.length.toLocaleString("ko-KR")}개` },
+    { label: "수정", value: workflow.updated_at },
     { label: "검증", value: configValidationSummary(plan, planStatus) }
   ];
 }
@@ -2050,8 +2050,8 @@ function buildPromptDetailMetrics(
 ): DetailMetric[] {
   return [
     { label: "대상", value: promptDisplayPath(profile, mode) },
-    { label: "Profile", value: profile.trim() || "없음" },
-    { label: "Mode", value: mode },
+    { label: "프로필", value: profile.trim() || "없음" },
+    { label: "모드", value: mode },
     { label: "Markdown", value: bodySummary(candidate) },
     { label: "검증", value: promptValidationSummary(plan, planStatus) },
     { label: "해시", value: plan?.fingerprint.hash.slice(0, 12) || "baseline" }
@@ -2069,7 +2069,7 @@ function configValidationSummary(plan: PersonalConfigPlanResponse | null, planSt
     return "Plan 갱신 중";
   }
   if (planStatus === "stale" || plan?.baseline_stale) {
-    return "Stale";
+    return "최신 아님";
   }
   if (!plan) {
     return "Plan 대기";
@@ -2082,7 +2082,7 @@ function promptValidationSummary(plan: ProfilePromptPlanResponse | null, planSta
     return "Plan 갱신 중";
   }
   if (planStatus === "stale" || plan?.baseline_stale) {
-    return "Stale";
+    return "최신 아님";
   }
   return plan ? "검증 없음" : "Plan 대기";
 }
@@ -2095,7 +2095,7 @@ function validationSummary(plan: PlanResponse | null, draftIssues: string[], pla
     return "Plan 갱신 중";
   }
   if (planStatus === "stale") {
-    return "Stale";
+    return "최신 아님";
   }
   if (!plan) {
     return "Plan 대기";
@@ -2108,7 +2108,7 @@ function configPlanSummaryLabel(planStatus: PlanStatus, plan: PersonalConfigPlan
     return "Plan 갱신 중";
   }
   if (planStatus === "stale" || plan?.baseline_stale) {
-    return "Stale";
+    return "최신 아님";
   }
   return plan && plan.validation_errors.length === 0 ? "유효한 Diff" : "Plan 대기";
 }
@@ -2118,7 +2118,7 @@ function promptPlanSummaryLabel(planStatus: PlanStatus, plan: ProfilePromptPlanR
     return "Plan 갱신 중";
   }
   if (planStatus === "stale" || plan?.baseline_stale) {
-    return "Stale";
+    return "최신 아님";
   }
   return plan ? "유효한 Diff" : "Plan 대기";
 }
@@ -2135,7 +2135,7 @@ function planSummaryLabel(planStatus: PlanStatus, plan: PlanResponse | null) {
     return "Plan 갱신 중";
   }
   if (planStatus === "stale") {
-    return "Stale";
+    return "최신 아님";
   }
   return plan?.valid ? "유효한 Diff" : "Plan 대기";
 }
@@ -2144,7 +2144,7 @@ function workflowSummaryLabel(loading: boolean, workflow: WorkflowDetail | null)
   if (loading) {
     return "읽는 중";
   }
-  return workflow ? "Loaded" : "선택 대기";
+  return workflow ? "로드됨" : "선택 대기";
 }
 
 function formatKoreanMtime(mtimeNs?: string | null) {
@@ -2166,10 +2166,10 @@ function formatKoreanMtime(mtimeNs?: string | null) {
 
 function operationLabel(operation: PreviewPlan["operation"]) {
   if (operation === "config") {
-    return "config";
+    return "설정";
   }
   if (operation === "prompt") {
-    return "prompt";
+    return "프롬프트";
   }
   return operation === "create" ? "생성" : "수정";
 }
@@ -2271,7 +2271,7 @@ function validateDraft(mode: Mode, draft: EditorDraft) {
   }
   const titleLength = draft.title.trim().length;
   if (titleLength === 0 || titleLength > 120) {
-    issues.push("Title은 1~120자여야 합니다.");
+    issues.push("제목은 1~120자여야 합니다.");
   }
   return issues;
 }
@@ -2294,7 +2294,7 @@ function planRequestSignature(mode: Mode, path: string, draft: EditorDraft) {
 
 function statusDescriptor(planStatus: PlanStatus, plan: PlanResponse | null) {
   if (planStatus === "stale") {
-    return { label: "Stale (재plan 필요)", tone: "amber" as const };
+    return { label: "최신 아님 (재plan 필요)", tone: "amber" as const };
   }
   if (planStatus === "planning") {
     return { label: "Plan 갱신 중", tone: "blue" as const, pulse: true };
@@ -2307,7 +2307,7 @@ function statusDescriptor(planStatus: PlanStatus, plan: PlanResponse | null) {
 
 function configStatusDescriptor(planStatus: PlanStatus, plan: PersonalConfigPlanResponse | null) {
   if (planStatus === "stale" || plan?.baseline_stale) {
-    return { label: "Stale (재plan 필요)", tone: "amber" as const };
+    return { label: "최신 아님 (재plan 필요)", tone: "amber" as const };
   }
   if (planStatus === "planning") {
     return { label: "Plan 갱신 중", tone: "blue" as const, pulse: true };
@@ -2320,7 +2320,7 @@ function configStatusDescriptor(planStatus: PlanStatus, plan: PersonalConfigPlan
 
 function promptStatusDescriptor(planStatus: PlanStatus, plan: ProfilePromptPlanResponse | null) {
   if (planStatus === "stale" || plan?.baseline_stale) {
-    return { label: "Stale (재plan 필요)", tone: "amber" as const };
+    return { label: "최신 아님 (재plan 필요)", tone: "amber" as const };
   }
   if (planStatus === "planning") {
     return { label: "Plan 갱신 중", tone: "blue" as const, pulse: true };
@@ -2337,10 +2337,10 @@ function workflowEditStatusDescriptor(
   plan: WorkflowPlanResponse | null
 ) {
   if (loading) {
-    return { label: "Workflow 읽는 중", tone: "blue" as const, pulse: true };
+    return { label: "워크플로우 읽는 중", tone: "blue" as const, pulse: true };
   }
   if (planStatus === "stale" || plan?.baseline_stale) {
-    return { label: "Stale (재plan 필요)", tone: "amber" as const };
+    return { label: "최신 아님 (재plan 필요)", tone: "amber" as const };
   }
   if (planStatus === "planning") {
     return { label: "Plan 갱신 중", tone: "blue" as const, pulse: true };
@@ -2421,21 +2421,6 @@ function promptDisplayPath(profile: string, mode: PromptMode) {
 
 function profileDisplayPath(profile: string) {
   return `<repo-root>/.wt/config/profiles/${profile.trim() || "<name>"}/profile.toml`;
-}
-
-function promptModeSummary(mode: PromptMode) {
-  switch (mode) {
-    case "workflow":
-      return "workflow task scope";
-    case "issue":
-      return "issue worktree scope";
-    case "branch":
-      return "branch worktree scope";
-    case "pr":
-      return "pull request scope";
-    case "common":
-      return "shared scope";
-  }
 }
 
 function workflowSwatch(color?: string | null) {
