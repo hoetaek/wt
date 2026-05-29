@@ -197,6 +197,20 @@ fn render_spec_requirements() -> String {
 fn render_spec_design() -> String {
     "## 결정사항\n\n\
 - \n\n\
+## 원칙 (Principles)\n\n\
+- \n\n\
+## 결정 동인 (Decision drivers)\n\n\
+- \n\n\
+## 선택지 (Viable options)\n\n\
+- 선택지 A: \n\
+  - 장점: \n\
+  - 단점: \n\
+- 선택지 B: \n\
+  - 장점: \n\
+  - 단점: \n\n\
+## 반대 논거 (Steelman antithesis)\n\n\
+- 가장 강한 반대: \n\
+- 답변: \n\n\
 ## 영향받는 컴포넌트\n\n\
 - \n\n\
 ## 제약\n\n\

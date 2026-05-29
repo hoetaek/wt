@@ -180,10 +180,16 @@ schema contract이므로 영어로 유지하지만, 값과 body template은 한�
 `planning/specs/<slug>/01-intent.md`는 raw user wording, interpreted intent, and promotion note를
 preserve한다. 이 파일은 later agent가 "사용자가 실제로 무엇을 요청했는지"와 "coordinator가
 어떻게 해석했는지"를 구분할 수 있게 해야 한다.
+Intent는 core noun과 topology도 기록할 수 있다. Core noun은 사용자가 실제로 바꾸려는 대상
+(`idea`, `spec`, `task`, `workflow`, command, UI 등)이고, topology는 독립적으로 성공/실패할 수
+있는 top-level outcome, surface, integration, deliverable 목록이다. Deferred topology item은
+삭제하지 않고 왜 이번 prep에서 제외했는지 적는다.
 
 `planning/specs/<slug>/02-unknowns.md`는 domain concepts, standards/conventions, external facts,
 internal facts를 구분하고 각 항목을 `blocking now` 또는 `useful later`로 표시한다. Evidence
-gathering은 이 unknown list를 agenda로 삼는다.
+gathering은 이 unknown list를 agenda로 삼는다. Gate 1-5 prep에서는 intent, topology, success,
+constraints, output form 중 현재 가장 약한 clarity row를 표시해서 다음 질문이나 evidence pass가
+그 gap을 줄이도록 한다.
 
 `planning/specs/<slug>/03-context.md`는 verified facts, inventoried user/team material, flagged
 assumptions, references/options/tradeoffs를 담는다. 이 파일은 결정문이 아니라 downstream gates가
@@ -214,9 +220,10 @@ WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>
 ```
 
 `planning/specs/<slug>/07-design.md`는 결정사항, 영향받는 컴포넌트, 제약을 적는다.
-Brownfield work에서는 새 design 전에 Static Model section(Purpose, Components, Business
-Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw code dump가
-아니라 intent와 component responsibility 중심으로 설명한다.
+Gate 7 design은 principles, decision drivers, viable options, steelman antithesis를 durable
+rationale로 남긴다. Brownfield work에서는 새 design 전에 Static Model section(Purpose,
+Components, Business Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw
+code dump가 아니라 intent와 component responsibility 중심으로 설명한다.
 
 `planning/specs/<slug>/08-tasks.md`는 작업 목록 section 아래에 sequenced atomic unit을 checkbox item으로 나열한다. 각 item은
 dependency를 적고, dependency가 없는 item은 parallel 가능하다고 표시할 수 있다.
@@ -224,7 +231,9 @@ dependency를 적고, dependency가 없는 item은 parallel 가능하다고 표�
 `planning/specs/<slug>/09-execution.md`는 `08-tasks.md`에서 드러난 slice graph를 어떤 execution shape로
 실행할지와 그 이유, `wt-work` target, TaskDocument path, optional saved Workflow TOML path,
 PR/landing policy, acceptance checks를 prose로 기록하는 lazy prep/execution artifact다. 실제
-saved execution plan은 계속 `<repo-root>/.wt/execution/workflows/<id>.toml`에 있고,
+handoff에는 file path, module/symbol, issue/task id, acceptance criteria, numbered implementation
+step, command/config transcript, representative example/mock data, named output artifact, or
+user-accepted residual risk 같은 concrete execution signal이 있어야 한다. Saved execution plan은 계속 `<repo-root>/.wt/execution/workflows/<id>.toml`에 있고,
 `09-execution.md`는 executable Workflow TOML이 아니다.
 
 Canonical `08-tasks.md` slice graph → execution decision mapping:

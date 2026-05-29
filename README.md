@@ -126,6 +126,11 @@ install the `wt` binary, run `wt init`, write `.wt.toml`, configure providers,
 or create personal `wt` task/workflow state. Internal repo-only skills such as
 `consistency` live outside the installable `skills/` pack.
 
+Some `wt-ready` preparation patterns are adapted from Gajae-Code's
+[deep-interview](https://github.com/Yeachan-Heo/gajae-code/tree/main/packages/coding-agent/src/defaults/gjc/skills/deep-interview)
+and [ralplan](https://github.com/Yeachan-Heo/gajae-code/tree/main/packages/coding-agent/src/defaults/gjc/skills/ralplan)
+skills for `wt`'s harness-first model.
+
 ## Requirements
 
 Required:

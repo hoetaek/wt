@@ -143,11 +143,38 @@ intent: what to learn in Learn, what cheap example to validate in Example, what
 design/tasks/handoff to architect in Architect, and what to review or learn in
 Feedback. This is orientation, not a fixed plan.
 
+Before Gate 2, run a lightweight topology confirmation when the request has
+more than one possible outcome. Name the top-level outcomes, surfaces,
+integrations, or deliverables that can succeed or fail independently, then ask
+whether any should be added, removed, merged, split, or explicitly deferred.
+Store the confirmed topology in the idea/spec note. Do not let the most
+described component stand in for quieter sibling components.
+
+During Gates 1-5, keep a compact clarity ledger instead of asking questions in
+conversation order:
+
+- intent: desired effect and core noun are stable
+- topology: independent outcomes/components are named
+- success: completion can be observed
+- constraints: non-goals, boundaries, and preserved behavior are clear
+- output form: idea, spec, TaskDocument, workflow, prototype, docs-only, or
+  mixed handoff is explicit
+
+Target the weakest ledger row with the next question. Say why that row is the
+current bottleneck before asking. If the core noun changes across answers
+(`idea`, `spec`, `task`, `workflow`, `decision`, etc.), pause feature questions
+and ask which noun is the actual object of the work and which are supporting
+views or artifacts.
+
 Gate transitions require explicit user approval. The agent may propose that
 unknowns are surfaced, context is adequate, requirements are settled, a
 wireframe has passed, or design is ready for tasking, but the user decides when
 to move to the next gate. For tiny work, gates may collapse into one file, but
 the collapse must be stated instead of silently skipping the check.
+
+If the user wants to proceed while any Gate 1-5 ledger row is still weak, state
+the remaining risk and the cheapest next question or artifact that would reduce
+it. Continue only after the user accepts that risk or chooses the next gate.
 
 ## Questions
 
@@ -538,6 +565,15 @@ idea file existing first.
 - Turn the passed concrete case into reusable decisions, affected
   components, state and data contracts, interaction rules, responsive rules,
   visual system rules when relevant, and constraints.
+- Include the Gate 7 RALPLAN-DR sections as durable design rationale:
+  - **원칙 (Principles)**: 3-5 design rules this choice must respect.
+  - **결정 동인 (Decision drivers)**: top 3 forces that selected the option.
+  - **선택지 (Viable options)**: at least two real options with bounded pros/cons
+    when they exist; otherwise record why rejected alternatives are invalid.
+  - **반대 논거 (Steelman antithesis)**: the strongest argument against the
+    chosen option, with the answer.
+  These are artifact-quality rules, not an automatic Planner/Architect/Critic
+  loop.
 - For brownfield work, optionally include a Static Model (Purpose, Components,
   Business Rules) and a Dynamic Model (workflow / behavior) section before the
   new design.
@@ -674,6 +710,15 @@ makes a file authoritative.
 - Scale and variation questions: how the design handles larger data, responsive
   breakpoints, empty/error/conflict states, and cases not present in the
   approved wireframe.
+- Whether principles, drivers, options, and steelman antithesis line up. A
+  design that names drivers but chooses an option for unrelated reasons should
+  return to revision.
+- For high-risk or non-obvious designs, whether to request a critic pass using
+  `references/design-critic.md`. The reviewer can be a human, another agent, or
+  a subagent; do not create an automatic consensus loop. Treat security,
+  migration, public CLI/config breakage, data loss, irreversible operations, and
+  wide cross-module changes as critic-pass triggers unless the user explicitly
+  accepts skipping review.
 
 `08-tasks.md`:
 
@@ -695,6 +740,10 @@ makes a file authoritative.
   there before recording the choice.
 - Whether `mode = none` is genuinely the right call (one direct slice, or a
   mixed-lifecycle mix) and not just an escape from picking.
+- Concrete execution signal: at least one file path, module/symbol, issue/task
+  id, acceptance criteria, numbered implementation step, command/config
+  transcript, representative example/mock data, named output artifact, or
+  user-accepted residual risk must be present before handoff.
 - Risks to surface when execution starts, including dirty-worktree pitfalls
   and shared-base assumptions.
 

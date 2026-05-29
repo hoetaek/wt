@@ -40,6 +40,21 @@ in Learn, what cheap example to validate in Example, what design/tasks/handoff
 to architect in Architect, and what to review or learn in Feedback.
 Keep it as orientation, not a fixed plan.
 
+Gates 1-5 use a lightweight clarity ledger to keep preparation focused:
+
+```text
+Intent      Is the desired effect and core noun stable?
+Topology    What independent outcomes/components are in scope or deferred?
+Success     How will we observe that the work is done?
+Constraints What boundaries, non-goals, and preserved behaviors matter?
+Output form What artifact or lifecycle should this produce?
+```
+
+Ask the next question against the weakest ledger row, not against the next
+topic that happens to come to mind. If the user accepts moving forward while a
+row is still weak, record the residual risk and the cheapest follow-up that
+would reduce it.
+
 Kiro's spec-driven workflow maps to
 `04+05-requirements.md -> 06-wireframe.md -> 07-design.md -> 08-tasks.md`.
 Existing scaffolded specs may collapse requirements and wireframe into
@@ -71,6 +86,12 @@ Gate to next step:
 - The current one-sentence intent states what the user appears to want after
   available interview/context, with uncertain parts marked as assumptions or
   questions.
+- The core noun is named. If the wording alternates between idea, spec, task,
+  workflow, decision, UI, command, or another object, the intent names which
+  one is the real object of work and which are supporting artifacts.
+- When the request has multiple possible outcomes, a compact topology lists the
+  top-level components, surfaces, integrations, or deliverables that can
+  succeed or fail independently, including explicitly deferred items.
 - The idea is allowed to die, split, or be rewritten.
 - It is clear whether the user already has enough context to state purpose and
   success criteria, or whether references/benchmarks are needed first.
@@ -79,6 +100,8 @@ Return here when:
 
 - The request is only a symptom, preference, or implementation hunch.
 - Multiple unrelated ideas are mixed together.
+- One described component is crowding out quieter sibling components.
+- The core noun keeps changing across answers.
 
 ## 2. Unknown surfacing (Learn)
 
@@ -100,6 +123,8 @@ Gate to next step:
   unresolved) are identified.
 - The list becomes the agenda for the next exploration or evidence-gathering
   pass.
+- The weakest clarity ledger row is named so the next question or evidence pass
+  targets the highest-leverage gap.
 
 Return here when:
 
@@ -129,6 +154,11 @@ Gate to next step:
 - The discovery set is bounded enough for the current decision.
 - 2-4 plausible directions or frames are named.
 - Each direction has a tradeoff or reason to accept/reject.
+- Brownfield facts that are cheap to verify are checked before asking the user
+  to decide from memory, and confirmation questions cite the relevant local
+  evidence.
+- The context confirms or revises the Gate 1 topology and core noun instead of
+  silently changing them.
 - The user/coordinator can now state clearer purpose/success criteria or choose
   the next exploration question.
 
@@ -151,6 +181,8 @@ Gate to next step:
 - Success criteria describe why the work matters, not just what artifact to
   create.
 - Success can plausibly be observed.
+- The success criteria cover every active topology component, or the missing
+  component is explicitly deferred.
 
 Return here when:
 
@@ -178,6 +210,8 @@ Gate to next step:
   handoff.
 - Open questions are either resolved, recorded as assumptions, or turned into a
   HITL/spike slice.
+- Remaining weak clarity ledger rows are either resolved or carried forward as
+  visible risk before Gate 6, not hidden inside the design.
 
 Return here when:
 
@@ -264,7 +298,10 @@ Artifact: `planning/specs/<slug>/07-design.md`.
 Purpose: generalize the passed concrete case into implementation-facing design
 rules: component boundaries, state model, command/config shape, data contracts,
 interaction rules, responsive rules, visual system rules when relevant, and
-rejected alternatives.
+rejected alternatives. Gate 7 borrows RALPLAN-DR as an artifact shape, not as an
+automatic multi-agent loop: the design records principles, decision drivers,
+viable options, and the strongest antithesis so later review can audit why the
+choice was made.
 
 Gate to next step:
 
@@ -272,10 +309,18 @@ Gate to next step:
 - The design names affected components and boundaries.
 - The design explains how the approved concrete case generalizes to realistic
   data volume, responsive breakpoints, states, and edge cases.
-- At least one rejected alternative or simpler option is recorded when the
-  choice is non-obvious.
+- Principles (3-5) name the design rules this choice must respect.
+- Decision drivers (top 3) name the forces that actually selected the chosen
+  option.
+- Viable options include at least two options with bounded pros/cons when two
+  real options exist. If only one viable option remains, the design records why
+  the rejected alternatives are invalid for this work.
+- The strongest argument against the chosen option is steelmanned and answered.
 - Brownfield assumptions are checked against local code or docs where cheap.
 - The design explains intent and responsibility, not raw code dumps.
+- For high-risk or non-obvious designs, a critic pass is prepared or requested
+  using `references/design-critic.md`; the reviewer may be a human, another
+  agent, or a subagent. This is a review surface, not a required automatic loop.
 
 Return here when:
 
@@ -289,6 +334,8 @@ Return here when:
   whole system instead of extracting general rules.
 - The design cannot generalize without inventing missing cases; return to Gate
   6 and add another concrete case.
+- The design has only one asserted solution and no drivers, alternatives, or
+  steelman antithesis to explain why that solution should survive review.
 
 ## 8. Task graph (Architect)
 
@@ -333,11 +380,17 @@ Gate to next step:
 - PR/landing policy source is recorded.
 - The work has enough context for an agent to start without rediscovering the
   basics.
+- At least one concrete execution signal is present: file path, module/symbol,
+  issue or task id, acceptance criteria, numbered implementation steps,
+  expected command/config transcript, representative example/mock data, named
+  output artifact, or a user-accepted residual risk recorded in the handoff.
 
 Return here when:
 
 - The next command is ambiguous.
 - Required expected duration, policy, or acceptance checks are missing.
+- The handoff asks an agent to "improve", "build", "fix this", or otherwise
+  execute without a concrete signal or explicit accepted risk.
 
 ## 10. Review / sync record (Feedback material)
 
