@@ -1235,6 +1235,7 @@ cli = "none"
 
         let mut runner = MockRunner::new();
         runner.add_response("", true); // checked_out_path
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true); // fetch
         runner.add_response("", false); // local branch exists
         runner.add_response("", false); // remote branch exists
@@ -2199,6 +2200,7 @@ landing = "auto"
             ),
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true);
         runner.add_response("", false);
         runner.add_response("", false);
