@@ -27,13 +27,12 @@ Feedback:   10 Review / sync record
        -> 11 Retrospect
 ```
 
-For `wt-ready`, Learn is either inherited from `wt-idea` or reconstructed
-when the user enters prep directly. `wt-ready` mainly owns Example and the
-Architect preparation gates: purpose, requirements, wireframe, design, task
+`wt-ready` owns Learn when needed, and may stop there with a kill-able idea
+under `planning/ideas/`. When the user commits to prep, `wt-ready` continues
+through Example and Architect: purpose, requirements, wireframe, design, task
 graph, and handoff. Later `wt-work` and `wt-land` continue Architect by
-creating, checking, and integrating the result. Feedback is owned by
-`wt-land`, using review evidence and spec drift captured during
-coordination.
+creating, checking, and integrating the result. Feedback is owned by `wt-land`,
+using review evidence and spec drift captured during coordination.
 
 Once Gate 1 has a current one-sentence intent, show the user a compact LEAF
 route preview. Phrase each phase as a question about that intent: what to learn
@@ -60,8 +59,7 @@ planning/ideas/<slug>.{md,toml}
 
 ## 1. Intent (Learn)
 
-Owner: `wt-idea`, or the first minutes of `wt-ready` when the user skips idea
-capture.
+Owner: `wt-ready`.
 
 Artifact: `planning/ideas/<slug>.{md,toml}` when the thought is exploratory; otherwise
 `planning/specs/<slug>/01-intent.md` or a short intent note in the TaskDocument body.
@@ -84,7 +82,7 @@ Return here when:
 
 ## 2. Unknown surfacing (Learn)
 
-Owner: `wt-idea`, or `wt-ready` when entered directly without prior idea capture.
+Owner: `wt-ready`.
 
 Artifact: idea body section, or `planning/specs/<slug>/02-unknowns.md`, listing unknowns
 by category — domain concepts, standards/conventions, external facts, internal
@@ -113,8 +111,7 @@ Return here when:
 
 ## 3. Context / reference exploration (Learn)
 
-Owner: `wt-idea` for exploratory research, `wt-ready` when reference gathering
-is needed before committed prep.
+Owner: `wt-ready`.
 
 Artifact: idea body sections for references/options/tradeoffs, or
 `planning/specs/<slug>/03-context.md`.
@@ -143,7 +140,7 @@ Return here when:
 
 ## 4. Purpose / success criteria (Example)
 
-Owner: `wt-idea` for exploration, `wt-ready` for committed prep.
+Owner: `wt-ready`.
 
 Artifact: idea body, then `planning/specs/<slug>/04+05-requirements.md`
 or collapsed `04+05+06-requirements.md` user story and problem context.

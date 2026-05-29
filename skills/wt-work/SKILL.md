@@ -18,8 +18,7 @@ workflow-linked distinction, and pass vs cleanup boundaries: see
 
 | Responsibility | Owner |
 |---|---|
-| idea capture | `wt-idea` |
-| requirements/design/tasks/TaskDocument/workflow preparation | `wt-ready` |
+| idea capture and requirements/design/tasks/TaskDocument/workflow preparation | `wt-ready` |
 | launch, inspect, feedback, spec sync, review, workflow pass | this skill |
 | land / merge / cleanup with `wt done` | `wt-land` |
 

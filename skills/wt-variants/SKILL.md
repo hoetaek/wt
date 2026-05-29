@@ -29,7 +29,7 @@ variant instructions live in `<repo-root>/.wt/config/profiles/<name>/profile.tom
 
 | Phase | Where |
 |---|---|
-| problem still vague | `wt-idea` |
+| problem still vague | `wt-ready` idea capture |
 | prepare variants + matrix workflow | this skill |
 | launch, monitor, PR review, bot feedback, complete | `wt-work` |
 | land selected branch | `wt-land` |

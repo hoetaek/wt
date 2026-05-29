@@ -1,13 +1,17 @@
 ---
 name: wt-ready
-description: "Use before wt-work to make unclear wt work launch-ready: gather evidence, split slices, choose execution shape/policy, and prepare TaskDocuments or workflow handoff."
+description: "Use before wt-work, or for vague future wt work, to capture exploratory ideas, gather evidence, promote committed work to specs, split slices, choose execution shape/policy, and prepare TaskDocuments or workflow handoff."
 ---
 
 # WT Ready
 
-Use this skill to prepare wt work before execution. Stop when the work is
-ready for `wt-work`: the scope is clear, evidence is gathered, slices are
-ordered, and the task/workflow handoff is explicit.
+Use this skill for wt preparation before execution. It has two valid stopping
+points:
+
+- Exploratory idea captured or updated under `planning/ideas/` when the user is
+  not ready to commit to a spec, TaskDocument, or workflow.
+- Launch-ready work for `wt-work`: scope clear, evidence gathered, slices
+  ordered, and task/workflow handoff explicit.
 
 Do not launch workspaces from this skill. Use `wt-work` after preparation and
 while work is running, then `wt-land` after review passes.
@@ -34,14 +38,55 @@ If the repo policy says the current branch is planning-only, limit direct work
 there to reading, reference gathering, experiments, and TaskDocument/workflow
 preparation. Implementation belongs in a wt task/workflow branch.
 
+## Idea Boundary
+
+An idea is exploration. It is allowed to die.
+
+- Use `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}` when the user is still
+  exploring future work and should not commit to a spec, TaskDocument, or
+  workflow yet.
+- The idea body is scratch surface, not a contract. It may be deleted,
+  rewritten, split, or archived without any state transition that other
+  components observe.
+- No downstream consumer depends on an idea file continuing to exist. Removing
+  one is not breakage.
+- If the user asks only to capture, compare, enrich, defer, or review ideas,
+  stop at the idea file. Do not create specs, TaskDocuments, workflows, or
+  branches.
+
+Capture enough that a later prep pass can continue without rediscovering the
+basics:
+
+- raw user wording, preserving phrasing when useful
+- purpose and success criteria when visible
+- local code/docs/state context and related ideas/tasks/workflows/specs
+- possible frames or solution directions with tradeoffs
+- assumptions, risks, non-goals, and open questions
+- recommendation: enrich more, promote to spec, defer, archive, or split
+
+Use these idea statuses when writing TOML or a status line in Markdown:
+
+- `captured`: raw idea saved with minimal context.
+- `enriched`: meaningful context, references, or alternatives were gathered.
+- `ready_for_prep`: enough information exists to promote into spec prep without
+  rediscovering raw intent, plausible frames, tradeoffs, and the next question.
+- `archived`: intentionally not pursuing now.
+
+To seed a Markdown idea, run `wt scaffold <slug> --idea`. Use lowercase ASCII
+kebab-case slugs. Prefer Markdown for loose notes; use TOML only when simple
+top-level fields plus a `body` string help. If an idea already exists at either
+extension, update that file instead of creating a duplicate.
+
+End an idea-only pass with the idea path, status, evidence checked, related
+artifacts found, why it is or is not ready for prep, and the missing LEAF gate
+when it is not ready.
+
 ## Gather Evidence
 
-If intent and unknowns are not yet surfaced (e.g., the user skipped
-`wt-idea` and entered ready directly), run a brief Unknown Surfacing pass
-before evidence gathering. Use the four categories from `wt-idea` — domain
-concepts, standards/conventions, external facts, internal facts — and mark
-each unknown `blocking now` or `useful later`. The list becomes the agenda
-below.
+If intent and unknowns are not yet surfaced, run a brief Unknown Surfacing pass
+before evidence gathering. Use four categories — domain concepts,
+standards/conventions, external facts, internal facts — and mark each unknown
+`blocking now` or `useful later`. The list becomes the agenda below.
 
 Work **inside-out**: ask the user direct clarifying questions and inventory
 user/team-held materials (prior decisions, notes, related artifacts, contacts)
@@ -73,8 +118,8 @@ ride along as facts into the next gate.
 When intent is still soft, use bounded context/reference exploration before
 forcing purpose or requirements. Gather enough local or external examples to
 name 2-4 plausible frames, record why each fits or fails, and then either:
-continue to purpose/success criteria, return to `wt-idea`, or ask one HITL
-question that chooses the next exploration direction.
+continue to purpose/success criteria, stop with/update an idea file, or ask one
+HITL question that chooses the next exploration direction.
 
 ## LEAF Work
 
@@ -85,9 +130,9 @@ where the work currently sits in `references/leaf-work.md`: Learn
 sequence as a waterfall; use it as a set of gates that prevent skipping from
 vague intent straight to runnable work.
 
-If a user enters `wt-ready` directly with implementation-shaped wording,
-reconstruct the missing intent, purpose/success criteria, and output
-form first. If Learn is incomplete, gather unknowns and context before Example.
+If a user enters with implementation-shaped wording, reconstruct the missing
+intent, purpose/success criteria, and output form first. If Learn is incomplete,
+gather unknowns and context before Example.
 If Example is incomplete, stop at requirements or wireframe instead of design.
 If the Architect gates are incomplete, stop at design, task graph, or execution
 handoff instead of fabricating a TaskDocument.
@@ -384,7 +429,7 @@ bring it all to ready unless the user explicitly defers a specific item.
 
 Prepared wt work uses three canonical locations under the planning/execution buckets:
 
-- `planning/ideas/<slug>.{md,toml}` — kill-able exploration captured by `wt-idea`. Free-form
+- `planning/ideas/<slug>.{md,toml}` — kill-able exploration captured by `wt-ready`. Free-form
   Markdown or TOML. May be deleted at any time. No commitment.
 - `planning/specs/<slug>/` — committed prep artifact. Holds numbered LEAF files:
   `01-intent.md`, `02-unknowns.md`, `03-context.md`,
@@ -430,8 +475,8 @@ idea file existing first.
 
 - Preserve the user's raw wording and the coordinator's interpreted intent as
   separate text.
-- Record whether this spec was promoted from an idea path or entered
-  `wt-ready` directly.
+- Record whether this spec was promoted from an idea path or entered prep
+  directly.
 
 `02-unknowns.md`:
 
@@ -664,6 +709,8 @@ drift is the cheapest defect to fix during grilling.
 
 End with one of these concrete outputs:
 
+- idea captured/updated at `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}`
+  when the user is still exploring
 - spec deliverables prepared (or promoted from `planning/ideas/`) at
   `<repo-root>/.wt/planning/specs/<slug>/`, recording the chosen execution shape
 - existing TaskDocuments/workflow ready, with the exact `wt-work` target

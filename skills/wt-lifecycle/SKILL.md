@@ -24,17 +24,15 @@ that preparation model.
 
 Apply these skills in order:
 
-1. Prepare the idea boundary with `wt-idea` when the user is still exploring
-   and should not commit to a task, spec, TaskDocument, or workflow yet.
-2. Prepare launchable work with `wt-ready` when the work is unclear or not
-   launch-ready. Let `wt-ready` settle purpose, requirements,
-   examples/wireframes, design, task graph, workflow policy, TaskDocuments, and
-   launch target.
-3. Execute and coordinate with `wt-work`: launch the prepared task or workflow,
+1. Prepare unclear work with `wt-ready`. When the user is still exploring,
+   `wt-ready` captures or updates a kill-able idea and stops. When the user is
+   ready to commit, it settles purpose, requirements, examples/wireframes,
+   design, task graph, workflow policy, TaskDocuments, and launch target.
+2. Execute and coordinate with `wt-work`: launch the prepared task or workflow,
    capture the inspect target, monitor the run, inspect agent state, review
    code, run checks, sync the living spec, and send focused feedback until the
    work is acceptable.
-4. Land, discard, and settle the harness with `wt-land` after review passes:
+3. Land, discard, and settle the harness with `wt-land` after review passes:
    respect workflow landing policy, perform any applicable pass step, land
    branches in the right order, prove ancestry or discard intent, clean up with
    `wt done`, and record keep/problem/try lessons, action candidates,

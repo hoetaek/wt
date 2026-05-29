@@ -65,7 +65,6 @@ This repository also ships an installable Agent Skills pack for the `wt`
 lifecycle. The pack contains:
 
 - `wt-welcome`
-- `wt-idea`
 - `wt-ready`
 - `wt-work`
 - `wt-land`
@@ -86,7 +85,6 @@ For a non-interactive Codex global install, pass explicit skill names:
 ```bash
 npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/skills \
   --skill wt-welcome \
-  --skill wt-idea \
   --skill wt-ready \
   --skill wt-work \
   --skill wt-land \
@@ -95,12 +93,11 @@ npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/skills \
   -g -a codex --copy -y
 ```
 
-From a local clone of this repository, use `.` as the source:
+From a local clone of this repository, use `./skills` as the source:
 
 ```bash
-npx --yes skills@latest add . \
+npx --yes skills@latest add ./skills \
   --skill wt-welcome \
-  --skill wt-idea \
   --skill wt-ready \
   --skill wt-work \
   --skill wt-land \
@@ -110,12 +107,12 @@ npx --yes skills@latest add . \
 ```
 
 For a project-local Codex install, run the same command from the project that
-should receive the skills, point `add` at this repository clone, and omit `-g`:
+should receive the skills, point `add` at this repository clone's `skills/`
+directory, and omit `-g`:
 
 ```bash
-npx --yes skills@latest add /path/to/wt \
+npx --yes skills@latest add /path/to/wt/skills \
   --skill wt-welcome \
-  --skill wt-idea \
   --skill wt-ready \
   --skill wt-work \
   --skill wt-land \
@@ -126,7 +123,8 @@ npx --yes skills@latest add /path/to/wt \
 
 Installing these skills only installs Agent Skills playbooks. It does not
 install the `wt` binary, run `wt init`, write `.wt.toml`, configure providers,
-or create personal `wt` task/workflow state.
+or create personal `wt` task/workflow state. Internal repo-only skills such as
+`consistency` live outside the installable `skills/` pack.
 
 ## Requirements
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "WT Ready"
-  short_description: "Prepare wt work before launching"
-  default_prompt: "Use $wt-ready to apply LEAF: learn missing context, validate a cheap example, architect design/tasks/handoff, and create TaskDocuments or workflow for $wt-work."
+  short_description: "Capture ideas and prepare wt work"
+  default_prompt: "Use $wt-ready to apply LEAF: capture or enrich exploratory ideas, learn missing context, validate a cheap example, architect design/tasks/handoff, and create TaskDocuments or workflow for $wt-work."

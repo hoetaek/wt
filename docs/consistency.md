@@ -154,10 +154,10 @@ them as canonical state. The canonical replacements are
 ### Idea And Spec Prep
 
 Idea는 kill-able exploration이고 Spec은 실행하기로 결정한 작업의 prep artifact다.
-`wt-idea`는 `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}`에 쓴다. Format은 자유로운
-Markdown이거나 TOML body일 수 있다. Idea는 committed-work status가 없고, 언제든 삭제하거나
-다시 쓸 수 있다. Idea 삭제나 재작성은 다른 component가 관찰해야 하는 state transition이
-아니다.
+`wt-ready`는 사용자가 아직 실행에 commit하지 않은 탐색을
+`<repo-root>/.wt/planning/ideas/<slug>.{md,toml}`에 쓸 수 있다. Format은 자유로운 Markdown이거나
+TOML body일 수 있다. Idea는 committed-work status가 없고, 언제든 삭제하거나 다시 쓸 수 있다.
+Idea 삭제나 재작성은 다른 component가 관찰해야 하는 state transition이 아니다.
 
 `wt-ready`가 idea를 받고 사용자가 실행에 commit하면 idea는 spec으로 promotion된다.
 Promotion은 `planning/ideas/<slug>.{md,toml}`을 제거하고 numbered LEAF artifact를
