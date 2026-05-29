@@ -161,6 +161,25 @@ duration, risk, and prior timing evidence. A useful default:
 - 20-60m work: watch every 20s, heartbeat every 5-10m.
 - 1h+ work: watch every 30-60s, heartbeat every 10-30m.
 
+`wt agent watch` observes the worker's runtime state; it does not tell you a
+report arrived. The Agent Completion Report lands in the coordinator inbox via
+`wt task report`. Once the coordinator session identity is set (Launch ->
+Coordinator Context), observe that inbox for the incoming report without
+claiming it:
+
+```bash
+wt msg watch --timeout <seconds>
+```
+
+Omitting `--agent` resolves the inbox from `WT_AGENT_ID`, so the watch follows
+the coordinator id bound earlier. This is observation only (default timeout
+300s): it does not claim, move, or acknowledge the report, the wt-managed inbox
+hook still delivers it on the coordinator's next turn, and
+`wt inspect <task-run-id>` renders the recorded report. Use `wt agent watch` for
+worker runtime state and `wt msg watch` for report arrival; they answer
+different questions. Use `wt msg list --agent <coordinator-id>` for a snapshot
+instead of a wait.
+
 If status is `running`, let the agent work unless clearly stuck. If status is
 `needs_input`, Steer. If status is `idle`, inspect the worktree instead of
 polling forever.
