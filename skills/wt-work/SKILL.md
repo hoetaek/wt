@@ -116,7 +116,7 @@ If inbox reports or review feedback will be used, set the coordinator session
 after identifying the coordinator id from `wt inspect`:
 
 ```bash
-wt session whoami
+wt session show
 eval "$(wt session set coord-<work-slug>)"
 echo "${WT_AGENT_ID:-}"
 ```
