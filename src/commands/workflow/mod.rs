@@ -232,8 +232,8 @@ fn require_coordinator_session_for_workflow_run() -> Result<()> {
     bail!(
         "wt workflow run requires a coordinator session.\n\
          Set WT_AGENT_ID in this shell first, for example:\n\n\
-             eval \"$(wt session set coordinator)\"\n\n\
-         You can pick any semantic name (coordinator, lead-claude, wt-fix-foo, ...)."
+             eval \"$(wt session set coord-<work-slug>)\"\n\n\
+         Pick a semantic one-segment name for this work, such as coord-review-routing or coord-release-prep."
     )
 }
 

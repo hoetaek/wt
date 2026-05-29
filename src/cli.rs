@@ -418,7 +418,7 @@ pub enum Commands {
 pub enum SessionCommand {
     /// Write a session identity anchor and print shell exports
     #[command(
-        long_about = "Write a session identity anchor for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set my-coord)\"`, so the current shell gets WT_AGENT_ID immediately while later wt invocations from the same anchor can resolve the identity anchor."
+        long_about = "Write a session identity anchor for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set coord-review-routing)\"`, so the current shell gets WT_AGENT_ID immediately while later wt invocations from the same anchor can resolve the identity anchor."
     )]
     Set {
         /// Agent id as NAME or agents/NAME

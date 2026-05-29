@@ -136,9 +136,13 @@ Return the branch through the canonical inbox route first. For workflow-linked
 TaskRuns, prefer review feedback because the conflict blocks landing:
 
 ```bash
-eval "$(wt session set <coordinator-agent-id>)"
+eval "$(wt session set coord-<work-slug>)"
 wt task review <task-run-id> --block "Landing blocked: <branch> conflicts with <integration-branch> after <event>. Update the task branch in its worktree, resolve conflicts, rerun checks, push, and report."
 ```
+
+Use the same semantic coordinator id used during `wt-work`, such as
+`coord-review-routing` or `coord-release-prep`. Do not use a generic
+`coordinator` id for unrelated runs.
 
 If the message is not review feedback, use an explicit TaskRun-scoped inbox
 message:
