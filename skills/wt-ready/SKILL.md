@@ -223,7 +223,8 @@ to `02-unknowns.md` / `03-context.md` instead of letting design discover the
 structure late.
 
 Run cheap iterations before expensive generalization. Gate 6 validates a
-concrete case; Gate 7 generalizes the case into reusable design rules.
+concrete case and locks the contract that case instantiates; Gate 7 consumes
+that contract and generalizes it into reusable design rules.
 
 Wireframe does not mean UI only. Use the artifact form that fits the output:
 
@@ -243,10 +244,23 @@ Wireframe does not mean UI only. Use the artifact form that fits the output:
    - Docs/report: outline with placeholder evidence, claims, and reader path.
    - API/data: representative request/response examples and state table.
 
+Every placeholder or mock value hides a contract. Gate 6 therefore produces
+two paired outputs: the concrete instance being walked through, and the
+contract that says what each placeholder commits to. For each placeholder,
+name the contract it instantiates and the variation point it leaves open:
+what can vary, along which axis, and within what range. Unaccounted
+placeholders mean the wireframe validated only one example, not the reusable
+contract that design can safely consume.
+
 Write `06-wireframe.md` for one compact artifact or `06-wireframe/` when there
 are several screens, flows, examples, or transcripts. For tiny work, the
 wireframe can collapse into `04+05+06-requirements.md`, but say that it is a
-collapsed wireframe and still check the representative examples/states.
+collapsed wireframe and still check the representative examples/states. This
+collapse is a wt-ready tiny-work/scaffold convenience, not permission to hide
+the Gate 5 -> Gate 6 produce/consume boundary. If the wireframe contains
+meaningful placeholders, mock values, or variation points, either split out
+`06-wireframe.md` or include an explicit Gate 6 subsection in
+`04+05+06-requirements.md` with the instance, contracts, and variation points.
 
 The gate passes only when the user can walk through the text-first structure and
 confirm that it fits. If an artifact-specific wireframe is needed, that concrete
@@ -255,9 +269,12 @@ boundaries, state model, command/config shape, data contracts, interaction
 rules, or visual system rules.
 
 Loops are expected. If the visual mockup exposes missing data or context, return
-to Learn. If it exposes missing behavior, return to requirements. If design
-cannot generalize the case without inventing rules, return to Gate 6 and add a
-better concrete case.
+to Learn. If it exposes missing behavior, return to requirements. If the
+approved instance and a requirement conflict, use Gate 4 Purpose / success
+criteria as the arbiter: requirements are proxies for purpose, not the final
+authority. Fix whichever one fails the purpose, then resume. If design cannot
+generalize the case without inventing rules, return to Gate 6 and add a better
+concrete case.
 
 For user-facing, ambiguous, or high-risk flows, add a cold reader check. Show
 only the wireframe, mock data, labels, and visible sequence to a blind reader.
@@ -538,12 +555,19 @@ idea file existing first.
   similar concerns when they apply.
 - Regression-sensitive behavior is stated explicitly:
   `WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>`.
+- Use the collapsed `04+05+06-requirements.md` form only for tiny prep or
+  scaffolded starter specs. A collapsed file must still make the Gate 6
+  instance, placeholder contracts, and variation points explicit when they
+  exist; otherwise split the wireframe into `06-wireframe.md`.
 
 `06-wireframe.md` or `06-wireframe/`:
 
 - Validate a concrete case before design. Start by grouping requirements into
   pages, flows, states, commands, or document sections, then create a
   text-first wireframe with realistic mock data or representative examples.
+- Record the paired Gate 6 outputs: the concrete instance and the contract it
+  instantiates. For every placeholder or mock value, name the contract it must
+  obey and the variation point it leaves open: axis, range, and limits.
 - Record the context adequacy check: which unknowns were resolved, which facts
   or examples from `03-context.md` support the structure, and which states are
   intentionally deferred.
@@ -562,6 +586,9 @@ idea file existing first.
 
 - Start from the passed wireframe case or explicitly note that the wireframe was
   collapsed for tiny work.
+- Consume the Gate 6 contract, placeholder decisions, and variation points as
+  inputs. Design must not rediscover the artifact shape that the wireframe was
+  supposed to lock.
 - Turn the passed concrete case into reusable decisions, affected
   components, state and data contracts, interaction rules, responsive rules,
   visual system rules when relevant, and constraints.
@@ -679,6 +706,8 @@ makes a file authoritative.
   commands, or document sections before drawing.
 - Whether the text-first wireframe uses representative data, examples, states,
   or command transcripts instead of abstract placeholders.
+- Whether every placeholder or mock value has a named contract and variation
+  point, or is explicitly resolved into a real constraint before design.
 - Whether the intended user/operator can walk through the flow and find the
   expected outcome.
 - Whether a blind reader, seeing only the wireframe and mock data, can infer the
@@ -691,11 +720,16 @@ makes a file authoritative.
 - Which empty/error/edge/loading/conflict states change structure and therefore
   must appear before design.
 - Whether the wireframe reveals missing requirements or wrong assumptions.
+- When the wireframe conflicts with a requirement, whether Gate 4 Purpose /
+  success criteria shows the requirement should change, the instance should
+  change, or the work should return to Learn.
 
 `07-design.md`:
 
 - Whether it builds on a passed wireframe instead of doing hidden wireframe
   discovery inside design.
+- Whether it consumes the Gate 6 contract and variation points instead of
+  inventing new placeholder meaning or artifact shape.
 - Whether it generalizes the approved concrete case instead of treating one
   mock screen, example, or happy path as the whole system.
 - Trade-offs and rejected alternatives. "Why not the simpler shape?" If no

@@ -58,7 +58,10 @@ would reduce it.
 Kiro's spec-driven workflow maps to
 `04+05-requirements.md -> 06-wireframe.md -> 07-design.md -> 08-tasks.md`.
 Existing scaffolded specs may collapse requirements and wireframe into
-`04+05+06-requirements.md` for tiny work.
+`04+05+06-requirements.md` for tiny work, but the collapse is only a
+wt-ready scaffold/tiny-work convenience. It must still make the Gate 6
+instance, placeholder contracts, and variation points explicit when they
+exist; otherwise split out `06-wireframe.md`.
 AI-DLC maps more broadly to `Inception -> Construction -> Operations`. For wt,
 the operational mapping is:
 
@@ -243,7 +246,10 @@ not the generalized system.
 Purpose: validate concrete structure, workflow, and visual judgment before
 design generalizes. The wireframe is not the generalized system; it is a check
 that the unknowns/context gathered so far are sufficient to model the work with
-representative data and states.
+representative data and states. Gate 6 produces two paired outputs: the
+concrete instance being walked through, and the contract that each placeholder
+or mock value instantiates. Variation points must be positive axes of change:
+what varies, along which axis, within what range, and with what limits.
 
 Entry condition:
 
@@ -259,6 +265,8 @@ Gate to next step:
 
 - The text-first wireframe uses realistic mock data or representative examples,
   not empty placeholders that hide structure.
+- Every placeholder or mock value has a named contract and variation point, or
+  has been resolved into a real constraint before design starts.
 - Requirements are grouped into the page, flow, state, command, or document
   buckets the concrete case needs.
 - The operator/user can walk through the intended flow in text-first form.
@@ -287,6 +295,9 @@ Return here when:
 - The visual mockup exposes missing context or data; return to Learn.
 - The concrete case exposes missing behavior or acceptance criteria; return to
   Gate 5 Requirements.
+- The approved instance conflicts with a requirement; use Gate 4 Purpose /
+  success criteria as the arbiter, then fix whichever of the instance or
+  requirement fails the purpose.
 
 ## 7. Design (Architect)
 
@@ -295,17 +306,19 @@ invalidate assumptions.
 
 Artifact: `planning/specs/<slug>/07-design.md`.
 
-Purpose: generalize the passed concrete case into implementation-facing design
-rules: component boundaries, state model, command/config shape, data contracts,
-interaction rules, responsive rules, visual system rules when relevant, and
-rejected alternatives. Gate 7 borrows RALPLAN-DR as an artifact shape, not as an
-automatic multi-agent loop: the design records principles, decision drivers,
-viable options, and the strongest antithesis so later review can audit why the
-choice was made.
+Purpose: consume the Gate 6 instance, contracts, and variation points, then
+generalize them into implementation-facing design rules: component boundaries,
+state model, command/config shape, data contracts, interaction rules,
+responsive rules, visual system rules when relevant, and rejected alternatives.
+Gate 7 borrows RALPLAN-DR as an artifact shape, not as an automatic multi-agent
+loop: the design records principles, decision drivers, viable options, and the
+strongest antithesis so later review can audit why the choice was made.
 
 Gate to next step:
 
 - The wireframe was confirmed or intentionally collapsed for tiny work.
+- The Gate 6 contract and variation points are consumed as inputs; design does
+  not rediscover the artifact shape that the wireframe was supposed to lock.
 - The design names affected components and boundaries.
 - The design explains how the approved concrete case generalizes to realistic
   data volume, responsive breakpoints, states, and edge cases.
