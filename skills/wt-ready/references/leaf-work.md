@@ -12,35 +12,34 @@ different kind of uncertainty before the work becomes runnable.
 
 ```text
 Learn:       1 Intent
-       -> 2 Unknown surfacing
-       -> 3 Context / reference exploration
+       -> 2 Unknowns & Context
 
-Example:     4 Purpose / success criteria
-       -> 5 Requirements / principles
-       -> 6 Wireframe with mock data
+Example:     3 Criteria
+       -> 4 Wireframe with mock data
 
-Architect:   7 Design
-       -> 8 Task graph
-       -> 9 Execution handoff
+Architect:   5 Design
+       -> 5.5 Critic pass (optional)
+       -> 6 Task graph
+       -> 7 Execution handoff
 
-Feedback:   10 Review / sync record
-       -> 11 Retrospect
+Feedback:    8 Review / sync record
+       -> 9 Retrospect
 ```
 
-`wt-ready` owns Learn when needed, and may stop there with a kill-able idea
-under `planning/ideas/`. When the user commits to prep, `wt-ready` continues
-through Example and Architect: purpose, requirements, wireframe, design, task
-graph, and handoff. Later `wt-work` and `wt-land` continue Architect by
-creating, checking, and integrating the result. Feedback is owned by `wt-land`,
-using review evidence and spec drift captured during coordination.
+`wt-ready` owns Learn, Example, and Architect until the handoff is runnable.
+Later `wt-work` and `wt-land` continue the loop by creating, checking,
+integrating, and retrospecting the result. In generic LEAF work, Gate 7 may be
+the artifact itself; in `wt-ready`, Gate 7 is deliberately narrower: it prepares
+the runnable handoff because the implementation result is produced after
+`wt-work`.
 
 Once Gate 1 has a current one-sentence intent, show the user a compact LEAF
 route preview. Phrase each phase as a question about that intent: what to learn
 in Learn, what cheap example to validate in Example, what design/tasks/handoff
-to architect in Architect, and what to review or learn in Feedback.
-Keep it as orientation, not a fixed plan.
+to architect in Architect, and what to review or learn in Feedback. Keep it as
+orientation, not a fixed plan.
 
-Gates 1-5 use a lightweight clarity ledger to keep preparation focused:
+Gates 1-3 use a lightweight clarity ledger to keep preparation focused:
 
 ```text
 Intent      Is the desired effect and core noun stable?
@@ -55,43 +54,72 @@ topic that happens to come to mind. If the user accepts moving forward while a
 row is still weak, record the residual risk and the cheapest follow-up that
 would reduce it.
 
-Kiro's spec-driven workflow maps to
-`02-Example/04+05-requirements.md -> 02-Example/06-wireframe.md ->
-03-Architect/07-design.md -> 03-Architect/08-tasks.md`.
-New wt specs keep Gate 5 criteria and Gate 6 instance/contract separate. Treat
-pre-split `04+05+06-requirements.md` files as legacy/starter context and split
-them before launch-ready handoff.
-AI-DLC maps more broadly to `Inception -> Construction -> Operations`. For wt,
-the operational mapping is:
+The middle engine maps to:
+
+```text
+02-Example/03-criteria.md
+-> 02-Example/04-wireframe.md or 02-Example/04-wireframe/
+-> 03-Architect/05-design.md
+-> 03-Architect/06-tasks.md
+```
+
+New wt specs keep Criteria, Wireframe, and Design separate. Treat pre-9-gate
+files such as `04+05-requirements.md`, `04+05+06-requirements.md`,
+`06-wireframe.md`, `07-design.md`, and `08-tasks.md` as legacy/starter context
+and normalize them before launch-ready handoff.
+
+Operational mapping for wt:
 
 ```text
 planning/ideas/<slug>.{md,toml}
 -> planning/specs/<slug>/
+   00-status.md
    01-Learn/
      01-intent.md
      02-unknowns.md
-     03-context.md
+     02-references/?
    02-Example/
-     04+05-requirements.md
-     06-wireframe.md
+     03-criteria.md
+     04-wireframe.md or 04-wireframe/
    03-Architect/
-     07-design.md
-     08-tasks.md
-     09-execution.md?
+     05-design.md
+     06-tasks.md
+     07-execution.md?
    04-Feedback/
-     10-review.md?
-     11-retrospect.md?
+     08-review.md?
+     09-retrospect.md?
 -> execution/tasks/<slug>.toml and/or execution/workflows/<id>.toml
 -> execution/task-runs/<id>.toml
 -> review, land, retrospect
 ```
 
+## 0. Status Dashboard
+
+Owner: `wt-ready`, then whichever lifecycle skill changes gate state.
+
+Artifact: `planning/specs/<slug>/00-status.md`.
+
+Purpose: make a durable spec resumable. It is an index, not the source of
+truth; gate files remain authoritative.
+
+Update when:
+
+- a gate starts, becomes ready for approval, or is approved;
+- work returns to an earlier gate;
+- a gate is blocked/deferred;
+- the next action changes materially.
+
+Use progress values `0`, `25`, `50`, `75`, `100` and state values
+`not-started`, `active`, `needs-approval`, `approved`. Treat returns as log
+events, not a gate state. Put blocked/deferred reasons in `Next / Waiting on`.
+
 ## 1. Intent (Learn)
 
 Owner: `wt-ready`.
 
-Artifact: `planning/ideas/<slug>.{md,toml}` when the thought is exploratory; otherwise
-`planning/specs/<slug>/01-Learn/01-intent.md` or a short intent note in the TaskDocument body.
+Artifact: `planning/ideas/<slug>.{md,toml}` when the thought is exploratory;
+otherwise `planning/specs/<slug>/01-Learn/01-intent.md` or a short intent note
+in the TaskDocument body.
 
 Gate to next step:
 
@@ -107,8 +135,8 @@ Gate to next step:
   top-level components, surfaces, integrations, or deliverables that can
   succeed or fail independently, including explicitly deferred items.
 - The idea is allowed to die, split, or be rewritten.
-- It is clear whether the user already has enough context to state purpose and
-  success criteria, or whether references/benchmarks are needed first.
+- It is clear whether the user already has enough context to state criteria or
+  whether references/benchmarks are needed first.
 
 Return here when:
 
@@ -117,100 +145,57 @@ Return here when:
 - One described component is crowding out quieter sibling components.
 - The core noun keeps changing across answers.
 
-## 2. Unknown surfacing (Learn)
+## 2. Unknowns & Context (Learn)
 
-Owner: `wt-ready`.
+Owner: `wt-ready`, with later lifecycle skills returning here when a missed
+unknown appears.
 
-Artifact: idea body section, or `planning/specs/<slug>/01-Learn/02-unknowns.md`, listing unknowns
-by category — domain concepts, standards/conventions, external facts, internal
-facts — with each item marked `blocking now` or `useful later`.
+Artifact: idea body section, or `planning/specs/<slug>/01-Learn/02-unknowns.md`.
+Use `01-Learn/02-references/` only when bulky source material would drown the
+working file; summarize the useful answer back in `02-unknowns.md`.
 
-Purpose: name what is missing before researching. Without this gate, context
-exploration becomes reactive and the same kinds of research keep surfacing
-mid-work as unplanned detours.
+Purpose: name what is missing, then answer those entries in the same working
+file. Unknown surfacing and context/reference exploration are one gate because
+the natural loop is question -> source/ask -> update the same entry.
 
 Gate to next step:
 
-- Unknowns are grouped by category, not dumped as one flat list.
+- Unknowns are grouped by domain concepts, standards/conventions, external
+  facts, and internal facts.
 - Each unknown is marked `blocking now` vs `useful later`.
-- The most expensive unknowns (the ones that would unravel later work if
-  unresolved) are identified.
-- The list becomes the agenda for the next exploration or evidence-gathering
-  pass.
-- The weakest clarity ledger row is named so the next question or evidence pass
-  targets the highest-leverage gap.
-
-Return here when:
-
-- A new unknown surfaces mid-work and is researched on the spot — surfacing
-  was incomplete. Log it under `planning/specs/<slug>/04-Feedback/10-review.md` so
-  `wt-land` can diagnose which category was missed next time.
-- Repeated unplanned research detours start interrupting drafting or
-  implementation.
-
-## 3. Context / reference exploration (Learn)
-
-Owner: `wt-ready`.
-
-Artifact: idea body sections for references/options/tradeoffs, or
-`planning/specs/<slug>/01-Learn/03-context.md`.
-
-Purpose: use the Unknown surfacing list as the research agenda, then sharpen
-intent before forcing purpose, requirements, or output form. This is where
-contextual research, reference benchmarking, prior art, related tasks, product
-examples, and possible solution frames belong when the user cannot yet picture
-the desired result.
-
-Gate to next step:
-
-- Blocking unknowns from gate 2 are resolved, explicitly deferred, or turned
-  into HITL/spike work.
-- The discovery set is bounded enough for the current decision.
-- 2-4 plausible directions or frames are named.
-- Each direction has a tradeoff or reason to accept/reject.
-- Brownfield facts that are cheap to verify are checked before asking the user
-  to decide from memory, and confirmation questions cite the relevant local
-  evidence.
+- The most expensive unknowns are identified.
+- Blocking unknowns have verified answers, explicit assumptions, owner/user
+  questions, or a reason they are deferred.
+- The fact/assumption boundary is visible.
+- References, options, tradeoffs, and candidate frames are bounded enough for
+  the current decision.
 - The context confirms or revises the Gate 1 topology and core noun instead of
   silently changing them.
-- The user/coordinator can now state clearer purpose/success criteria or choose
-  the next exploration question.
 
 Return here when:
 
-- The purpose feels invented from the first idea instead of discovered.
+- A new unknown surfaces mid-work and is researched on the spot. Log it under
+  `planning/specs/<slug>/04-Feedback/08-review.md` so `wt-land` can diagnose
+  which category was missed next time.
+- Repeated unplanned research detours start interrupting drafting or
+  implementation.
 - The user needs examples before they can say what they want.
-- There are too many possible product/document/workflow shapes.
 
-## 4. Purpose / success criteria (Example)
+## 3. Criteria (Example)
 
 Owner: `wt-ready`.
 
-Artifact: idea body, then `planning/specs/<slug>/02-Example/04+05-requirements.md`
-user story and problem context.
+Artifact: idea body, then `planning/specs/<slug>/02-Example/03-criteria.md`.
+
+Purpose: combine purpose and requirements because both are pre-instance
+judgment: the intended effect and the checks that make that effect observable.
 
 Gate to next step:
 
-- The desired user, developer, or maintainer effect is stated in one sentence.
-- Success criteria describe why the work matters, not just what artifact to
-  create.
-- Success can plausibly be observed.
-- The success criteria cover every active topology component, or the missing
+- Purpose is one sentence and describes the desired effect, not only the
+  artifact shape.
+- Success criteria cover every active topology component, or the missing
   component is explicitly deferred.
-
-Return here when:
-
-- The implementation is named but the benefit is unclear.
-- A task would need the agent to invent product intent.
-
-## 5. Requirements / principles (Example)
-
-Owner: `wt-ready`.
-
-Artifact: `planning/specs/<slug>/02-Example/04+05-requirements.md`.
-
-Gate to next step:
-
 - Functional behavior is written as observable statements, preferably EARS:
   `WHEN <condition> THE SYSTEM SHALL <behavior>`.
 - Regression-sensitive behavior is explicit:
@@ -221,10 +206,8 @@ Gate to next step:
 - The output form is explicit: docs-only change, implementation PR, prototype,
   spike, direct local edit, TaskDocument, saved Workflow, or mixed-lifecycle
   handoff.
-- Open questions are either resolved, recorded as assumptions, or turned into a
-  HITL/spike slice.
-- Remaining weak clarity ledger rows are either resolved or carried forward as
-  visible risk before Gate 6, not hidden inside the design.
+- Remaining weak clarity ledger rows are carried forward as visible risk, not
+  hidden inside the design.
 
 Return here when:
 
@@ -234,41 +217,21 @@ Return here when:
   prototype, docs change, or implementation PR is the right next artifact.
 - Acceptance checks cannot be stated.
 
-## 6. Wireframe with mock data (Example)
+## 4. Wireframe with mock data (Example)
 
-Owner: `wt-ready`, with `wt-work` updating it when execution findings
-show that the validated structure was wrong.
+Owner: `wt-ready`, with `wt-work` updating it when execution findings show that
+the validated structure was wrong.
 
-Artifact: `planning/specs/<slug>/02-Example/06-wireframe.md` for one compact
-artifact, or `02-Example/06-wireframe/` for several screens/flows/examples.
-Gate 6 is the cheap-iteration gate before expensive generalization. It validates
-a concrete case by grouping requirements into pages, flows, states, commands,
-or document sections; walking a representative journey; then drawing a
-text-first wireframe by default: ASCII layout, command transcript, sequence
-sketch, table/state matrix, or outline with placeholder evidence. After that
-passes, add the artifact-specific shape when needed: HTML for web, generated
-TOML example, TaskDocument/workflow flow,
-API request/response examples, or realistic state table. For visual outputs,
-this may include visual treatment for the concrete case; it is still a case,
-not the generalized system.
+Artifact: `planning/specs/<slug>/02-Example/04-wireframe.md` for one compact
+artifact, or `02-Example/04-wireframe/` for several screens/flows/examples.
 
 Purpose: validate concrete structure, workflow, and visual judgment before
 design generalizes. The wireframe is not the generalized system; it is a check
 that the unknowns/context gathered so far are sufficient to model the work with
-representative data and states. Gate 6 produces two paired outputs: the
-concrete instance being walked through, and the contract that each placeholder
-or mock value instantiates. Variation points must be positive axes of change:
-what varies, along which axis, within what range, and with what limits.
-
-Entry condition:
-
-- Wireframe-relevant unknowns have been surfaced and either resolved,
-  explicitly deferred, or turned into HITL/spike work.
-- `01-Learn/03-context.md` has enough verified facts, representative examples,
-  current behavior, user/team material, constraints, and assumptions to build a
-  realistic text-first artifact.
-- Mock data or representative examples exist. If they do not, return to Unknown
-  surfacing / Context exploration before drawing the structure.
+representative data and states. Gate 4 produces two paired outputs: the
+concrete instance being walked through, and the contract each placeholder or
+mock value instantiates. Variation points must be positive axes of change: what
+varies, along which axis, within what range, and with what limits.
 
 Gate to next step:
 
@@ -285,8 +248,6 @@ Gate to next step:
 - Any needed artifact-specific wireframe also passes after the text-first pass.
 - Empty, error, edge, loading, conflict, or migration states that affect
   structure are represented or explicitly deferred.
-- The wireframe reveals whether the requirements are complete enough for
-  design.
 - The user confirms the structure fits before design starts.
 - Any visual treatment is approved as a concrete case; reusable component,
   token, responsive, interaction, and state rules are deferred to design.
@@ -297,52 +258,40 @@ Return here when:
 - A missing example, state, workflow step, or constraint could change the
   information architecture or command/config shape.
 - The user cannot walk through the flow with the current mock data.
-- A cold reader infers the wrong actor, purpose, next action, outcome, or state
-  from the wireframe alone.
-- An artifact-specific wireframe was started before the text-first structure
-  passed.
-- The visual mockup exposes missing context or data; return to Learn.
+- A cold reader infers the wrong actor, purpose, next action, outcome, or state.
 - The concrete case exposes missing behavior or acceptance criteria; return to
-  Gate 5 Requirements.
-- The approved instance conflicts with a requirement; use Gate 4 Purpose /
-  success criteria as the arbiter, then fix whichever of the instance or
-  requirement fails the purpose.
+  Gate 3 Criteria.
+- The approved instance conflicts with criteria; use Gate 3 purpose as the
+  arbiter, then fix whichever of the instance or criteria fails the purpose.
 
-## 7. Design (Architect)
+## 5. Design (Architect)
 
-Owner: `wt-ready`, with `wt-work` updating it when execution findings
-invalidate assumptions.
+Owner: `wt-ready`, with `wt-work` updating it when execution findings invalidate
+assumptions.
 
-Artifact: `planning/specs/<slug>/03-Architect/07-design.md`.
+Artifact: `planning/specs/<slug>/03-Architect/05-design.md`.
 
-Purpose: consume the Gate 6 instance, contracts, and variation points, then
+Purpose: consume the Gate 4 instance, contracts, and variation points, then
 generalize them into implementation-facing design rules: component boundaries,
 state model, command/config shape, data contracts, interaction rules,
 responsive rules, visual system rules when relevant, and rejected alternatives.
-Gate 7 borrows RALPLAN-DR as an artifact shape, not as an automatic multi-agent
-loop: the design records principles, decision drivers, viable options, and the
-strongest antithesis so later review can audit why the choice was made.
+Gate 5 borrows RALPLAN-DR as an artifact shape, not as an automatic multi-agent
+loop.
 
 Gate to next step:
 
 - The wireframe was confirmed, even if the artifact is brief for tiny work.
-- The Gate 6 contract and variation points are consumed as inputs; design does
+- The Gate 4 contract and variation points are consumed as inputs; design does
   not rediscover the artifact shape that the wireframe was supposed to lock.
 - The design names affected components and boundaries.
 - The design explains how the approved concrete case generalizes to realistic
   data volume, responsive breakpoints, states, and edge cases.
-- Principles (3-5) name the design rules this choice must respect.
-- Decision drivers (top 3) name the forces that actually selected the chosen
-  option.
-- Viable options include at least two options with bounded pros/cons when two
-  real options exist. If only one viable option remains, the design records why
-  the rejected alternatives are invalid for this work.
-- The strongest argument against the chosen option is steelmanned and answered.
+- Principles, decision drivers, viable options, and steelman antithesis explain
+  why the chosen option should survive review.
 - Brownfield assumptions are checked against local code or docs where cheap.
 - The design explains intent and responsibility, not raw code dumps.
 - For high-risk or non-obvious designs, a critic pass is prepared or requested
-  using `references/design-critic.md`; the reviewer may be a human, another
-  agent, or a subagent. This is a review surface, not a required automatic loop.
+  using `references/design-critic.md`.
 
 Return here when:
 
@@ -355,16 +304,26 @@ Return here when:
 - The design treats one approved mock screen, example, or happy path as the
   whole system instead of extracting general rules.
 - The design cannot generalize without inventing missing cases; return to Gate
-  6 and add another concrete case.
-- The design has only one asserted solution and no drivers, alternatives, or
-  steelman antithesis to explain why that solution should survive review.
+  4 and add another concrete case.
 
-## 8. Task graph (Architect)
+## 5.5 Design Critic Pass (optional)
+
+Owner: `wt-ready`, only when risk triggers fire.
+
+Artifact: review note in the conversation, in `03-Architect/05-design.md`, or in
+a short adjacent note if a durable record is needed.
+
+Use `references/design-critic.md` when the design involves security, migration,
+public CLI/config/state shape, cross-module coupling, new user-facing terms,
+large UI/workflow behavior shifts, or one asserted option with weak
+alternatives. Verdicts are `APPROVE`, `ITERATE`, or `REJECT`.
+
+## 6. Task graph (Architect)
 
 Owner: `wt-ready`.
 
-Artifact: `planning/specs/<slug>/03-Architect/08-tasks.md`, optional
-`03-Architect/09-execution.md`, TaskDocuments, and saved Workflow TOML when
+Artifact: `planning/specs/<slug>/03-Architect/06-tasks.md`, optional
+`03-Architect/07-execution.md`, TaskDocuments, and saved Workflow TOML when
 needed.
 
 Gate to next step:
@@ -386,16 +345,12 @@ Return here when:
 - A slice is too large to review or too small to justify its own branch.
 - The proposed stack is only a packaging choice, not a dependency claim.
 
-## 9. Execution handoff (Architect)
+## 7. Execution handoff (Architect)
 
 Owner: `wt-ready` prepares; `wt-work` launches.
 
-Artifact: `03-Architect/09-execution.md`, TaskDocument body `계획 (Planning)` section,
-optional Workflow policy snapshot, and exact `wt-work` target.
-
-In generic LEAF work, Gate 9 is the result or execution artifact itself. In
-`wt-ready`, Gate 9 is deliberately narrower: it prepares the runnable handoff
-because the actual implementation result is produced after `wt-work`.
+Artifact: `03-Architect/07-execution.md`, TaskDocument body `계획 (Planning)`
+section, optional Workflow policy snapshot, and exact `wt-work` target.
 
 Gate to next step:
 
@@ -415,14 +370,14 @@ Return here when:
 - The handoff asks an agent to "improve", "build", "fix this", or otherwise
   execute without a concrete signal or explicit accepted risk.
 
-## 10. Review / sync record (Feedback material)
+## 8. Review / sync record (Feedback material)
 
 Owner: `wt-work` records the evidence while doing Architect execution;
 `wt-land` consumes it as Feedback material.
 
-Artifact: reviewed diff/check evidence, updated `03-Architect/07-design.md`,
-`03-Architect/08-tasks.md`, `03-Architect/09-execution.md`, and
-`04-Feedback/10-review.md` when execution reality changes the plan.
+Artifact: reviewed diff/check evidence, updated `03-Architect/05-design.md`,
+`03-Architect/06-tasks.md`, `03-Architect/07-execution.md`, and
+`04-Feedback/08-review.md` when execution reality changes the plan.
 
 Gate to next step:
 
@@ -430,22 +385,22 @@ Gate to next step:
   report.
 - Checks are scaled to risk and recorded.
 - Spec drift is fixed in the spec instead of being left as a stale artifact.
-- Unplanned research is logged to `04-Feedback/10-review.md` so the
-  retrospective can diagnose which Unknown surfacing category was missed.
+- Unplanned research is logged to `04-Feedback/08-review.md` so the
+  retrospective can diagnose which Unknowns & Context category was missed.
 - Workflow-linked runs are completed only after review passes.
 
 Return here when:
 
-- Implementation reveals a requirement or design assumption was wrong.
+- Implementation reveals a criterion or design assumption was wrong.
 - The diff is too broad for the prepared task and needs re-slicing.
 
-## 11. Retrospect (Feedback)
+## 9. Retrospect (Feedback)
 
 Owner: `wt-land` after landing or explicit discard.
 
-Artifact: `planning/specs/<slug>/04-Feedback/11-retrospect.md` for spec-backed work, or
-`<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` for cross-work or
-spec-less retrospectives.
+Artifact: `planning/specs/<slug>/04-Feedback/09-retrospect.md` for spec-backed
+work, or `<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` for
+cross-work or spec-less retrospectives.
 
 Gate to future work:
 
@@ -454,11 +409,10 @@ Gate to future work:
   skill/docs changes.
 - Harness tuning names the exact file and section to update when the lesson
   should permanently change agent behavior.
-- When `04-Feedback/10-review.md` records mid-process discoveries for this run,
-  each discovery is classified against the Unknown surfacing categories (domain
-  / standards / external / internal). The category that was missed becomes
-  either a `try` item or a `harness_tuning` entry for the next run's surfacing
-  pass.
+- When `04-Feedback/08-review.md` records mid-process discoveries for this run,
+  each discovery is classified against the Unknowns & Context categories
+  (domain / standards / external / internal). The missed category becomes a
+  `try` item or a `harness_tuning` entry for the next run's surfacing pass.
 
 Return here when:
 
@@ -471,19 +425,19 @@ When a step is missing, produce the artifact for that step instead of pretending
 the work is ready for the next one. Examples:
 
 - Missing purpose/success criteria: capture or enrich an idea.
-- Missing unknown list: surface domain, standards/conventions, external, and
-  internal unknowns before researching.
+- Missing unknown/context list: surface domain, standards/conventions, external,
+  and internal unknowns before researching.
 - Missing examples or direction: use the unknowns list to run bounded
   discovery/reference benchmarking.
 - Missing observable behavior or output form: write or grill
-  `02-Example/04+05-requirements.md`.
+  `02-Example/03-criteria.md`.
 - Missing mock data, workflow, states, or constraints for structure: return to
-  `01-Learn/02-unknowns.md` / `01-Learn/03-context.md`.
+  `01-Learn/02-unknowns.md`.
 - Missing structure validation: write or grill the text-first
-  `02-Example/06-wireframe.md` before design; add an artifact-specific wireframe only when
-  needed.
-- Missing ownership/boundary decision: write or grill `03-Architect/07-design.md`.
-- Missing dependency graph: write or grill `03-Architect/08-tasks.md` /
-  `03-Architect/09-execution.md`.
+  `02-Example/04-wireframe.md` before design; add an artifact-specific
+  wireframe only when needed.
+- Missing ownership/boundary decision: write or grill `03-Architect/05-design.md`.
+- Missing dependency graph: write or grill `03-Architect/06-tasks.md` /
+  `03-Architect/07-execution.md`.
 - Missing reviewable size: split the task graph.
 - Missing execution target: stop with unresolved `wt-work` handoff.
