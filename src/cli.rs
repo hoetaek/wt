@@ -189,7 +189,7 @@ pub enum Commands {
         /// Create <repo-root>/.wt/execution/workflows/<feature>.toml
         #[arg(long)]
         workflow: bool,
-        /// Create <repo-root>/.wt/planning/specs/<feature>/04-Feedback/11-retrospect.md
+        /// Create <repo-root>/.wt/planning/specs/<feature>/04-Feedback/09-retrospect.md
         #[arg(long)]
         retrospect: bool,
         /// Create all scaffold document kinds

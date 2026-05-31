@@ -60,7 +60,7 @@ fn execute(ctx: &Ctx, feature: &str, flags: ScaffoldFlags) -> Result<ScaffoldRep
             .map(|path| ctx.storage_root.display_path(path))
             .collect::<Vec<_>>();
         bail!(
-            "Legacy unnumbered spec files already exist; rename or remove them before creating numbered work-sequence spec files:\n{}",
+            "Legacy spec files from an older numbering already exist; rename or remove them before creating nine-gate spec files:\n{}",
             conflicts.join("\n")
         );
     }
@@ -197,11 +197,22 @@ fn legacy_spec_conflicts(ctx: &Ctx, slug: &str, kinds: &[DocKind]) -> Vec<PathBu
 
     let spec_dir = ctx.storage_root.specs_dir().join(slug);
     [
+        // Unnumbered pre-work-sequence files.
         "requirements.md",
         "design.md",
         "tasks.md",
         "workflow.md",
         "mid-process-discoveries.md",
+        // Pre-9-gate numbered files (older work-sequence numbering).
+        "01-Learn/03-context.md",
+        "02-Example/04+05-requirements.md",
+        "02-Example/04+05+06-requirements.md",
+        "02-Example/06-wireframe.md",
+        "03-Architect/07-design.md",
+        "03-Architect/08-tasks.md",
+        "03-Architect/09-execution.md",
+        "04-Feedback/10-review.md",
+        "04-Feedback/11-retrospect.md",
     ]
     .into_iter()
     .map(|name| spec_dir.join(name))
@@ -373,33 +384,37 @@ mod tests {
         assert_eq!(
             relative_files(&ctx),
             vec![
+                "planning/specs/foo/00-status.md".to_string(),
                 "planning/specs/foo/01-Learn/01-intent.md".to_string(),
                 "planning/specs/foo/01-Learn/02-unknowns.md".to_string(),
-                "planning/specs/foo/01-Learn/03-context.md".to_string(),
-                "planning/specs/foo/02-Example/04+05-requirements.md".to_string(),
-                "planning/specs/foo/02-Example/06-wireframe.md".to_string(),
-                "planning/specs/foo/03-Architect/07-design.md".to_string(),
-                "planning/specs/foo/03-Architect/08-tasks.md".to_string()
+                "planning/specs/foo/02-Example/03-criteria.md".to_string(),
+                "planning/specs/foo/02-Example/04-wireframe.md".to_string(),
+                "planning/specs/foo/03-Architect/05-design.md".to_string(),
+                "planning/specs/foo/03-Architect/06-tasks.md".to_string()
             ]
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("01-Learn/01-intent.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("00-status.md")).unwrap(),
             DocKind::Spec.render("foo")[0].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("02-Example/04+05-requirements.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("01-Learn/01-intent.md")).unwrap(),
+            DocKind::Spec.render("foo")[1].1
+        );
+        assert_eq!(
+            fs::read_to_string(spec_dir.join("02-Example/03-criteria.md")).unwrap(),
             DocKind::Spec.render("foo")[3].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("02-Example/06-wireframe.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("02-Example/04-wireframe.md")).unwrap(),
             DocKind::Spec.render("foo")[4].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("03-Architect/07-design.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("03-Architect/05-design.md")).unwrap(),
             DocKind::Spec.render("foo")[5].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("03-Architect/08-tasks.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("03-Architect/06-tasks.md")).unwrap(),
             DocKind::Spec.render("foo")[6].1
         );
     }
@@ -415,7 +430,7 @@ mod tests {
         let err = run(&ctx, "foo", flags(&[DocKind::Spec])).unwrap_err();
 
         assert!(
-            format!("{err:#}").contains("Legacy unnumbered spec files already exist"),
+            format!("{err:#}").contains("Legacy spec files from an older numbering already exist"),
             "{err:#}"
         );
         assert!(!spec_dir.join("01-Learn/01-intent.md").exists());
@@ -430,13 +445,13 @@ mod tests {
 
         assert_eq!(
             relative_files(&ctx),
-            vec!["planning/specs/foo/04-Feedback/11-retrospect.md".to_string()]
+            vec!["planning/specs/foo/04-Feedback/09-retrospect.md".to_string()]
         );
         assert_eq!(
             fs::read_to_string(
                 ctx.storage_root
                     .specs_dir()
-                    .join("foo/04-Feedback/11-retrospect.md")
+                    .join("foo/04-Feedback/09-retrospect.md")
             )
             .unwrap(),
             DocKind::Retrospect.render("foo")[0].1
@@ -464,14 +479,14 @@ mod tests {
                 "execution/tasks/foo.toml".to_string(),
                 "execution/workflows/foo.toml".to_string(),
                 "planning/ideas/foo.md".to_string(),
+                "planning/specs/foo/00-status.md".to_string(),
                 "planning/specs/foo/01-Learn/01-intent.md".to_string(),
                 "planning/specs/foo/01-Learn/02-unknowns.md".to_string(),
-                "planning/specs/foo/01-Learn/03-context.md".to_string(),
-                "planning/specs/foo/02-Example/04+05-requirements.md".to_string(),
-                "planning/specs/foo/02-Example/06-wireframe.md".to_string(),
-                "planning/specs/foo/03-Architect/07-design.md".to_string(),
-                "planning/specs/foo/03-Architect/08-tasks.md".to_string(),
-                "planning/specs/foo/04-Feedback/11-retrospect.md".to_string()
+                "planning/specs/foo/02-Example/03-criteria.md".to_string(),
+                "planning/specs/foo/02-Example/04-wireframe.md".to_string(),
+                "planning/specs/foo/03-Architect/05-design.md".to_string(),
+                "planning/specs/foo/03-Architect/06-tasks.md".to_string(),
+                "planning/specs/foo/04-Feedback/09-retrospect.md".to_string()
             ]
         );
     }
@@ -489,7 +504,7 @@ mod tests {
             relative_files(&ctx),
             vec![
                 "planning/ideas/foo.md".to_string(),
-                "planning/specs/foo/04-Feedback/11-retrospect.md".to_string()
+                "planning/specs/foo/04-Feedback/09-retrospect.md".to_string()
             ]
         );
     }
@@ -545,7 +560,7 @@ mod tests {
         assert_eq!(json["feature"], "foo");
         assert_eq!(
             json["created"].as_array().unwrap()[0],
-            "<repo-root>/.wt/planning/specs/foo/04-Feedback/11-retrospect.md"
+            "<repo-root>/.wt/planning/specs/foo/04-Feedback/09-retrospect.md"
         );
         assert!(json["skipped"].as_array().unwrap().is_empty());
     }

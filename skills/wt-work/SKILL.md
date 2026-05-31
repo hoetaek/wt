@@ -257,16 +257,16 @@ message. Do not drip one message per finding.
 If implementation and spec disagree, update the living spec instead of letting
 them drift. Common files:
 
-- `03-Architect/07-design.md` when a design assumption changed.
-- `03-Architect/08-tasks.md` when a slice was too broad, too narrow, or misordered.
-- `03-Architect/09-execution.md` when execution shape or rationale changed.
-- `04-Feedback/10-review.md` for review evidence and mid-process discoveries.
+- `03-Architect/05-design.md` when a design assumption changed.
+- `03-Architect/06-tasks.md` when a slice was too broad, too narrow, or misordered.
+- `03-Architect/07-execution.md` when execution shape or rationale changed.
+- `04-Feedback/08-review.md` for review evidence and mid-process discoveries.
 
 Do not silently rewrite approved purpose/requirements in
-`02-Example/04+05-requirements.md`; surface that change to the user.
+`02-Example/03-criteria.md`; surface that change to the user.
 
 If unplanned research happened during execution, record it in
-`04-Feedback/10-review.md` under `## Mid-process discoveries` with a category:
+`04-Feedback/08-review.md` under `## Mid-process discoveries` with a category:
 `domain`, `standards`, `external`, or `internal`. `wt-land` uses this to improve
 future unknown surfacing.
 

@@ -46,13 +46,13 @@ impl DocKind {
             Self::Spec => {
                 let dir = storage.specs_dir().join(slug);
                 vec![
+                    dir.join("00-status.md"),
                     dir.join("01-Learn/01-intent.md"),
                     dir.join("01-Learn/02-unknowns.md"),
-                    dir.join("01-Learn/03-context.md"),
-                    dir.join("02-Example/04+05-requirements.md"),
-                    dir.join("02-Example/06-wireframe.md"),
-                    dir.join("03-Architect/07-design.md"),
-                    dir.join("03-Architect/08-tasks.md"),
+                    dir.join("02-Example/03-criteria.md"),
+                    dir.join("02-Example/04-wireframe.md"),
+                    dir.join("03-Architect/05-design.md"),
+                    dir.join("03-Architect/06-tasks.md"),
                 ]
             }
             Self::Task => vec![storage.tasks_dir().join(format!("{slug}.toml"))],
@@ -61,7 +61,7 @@ impl DocKind {
                 storage
                     .specs_dir()
                     .join(slug)
-                    .join("04-Feedback/11-retrospect.md"),
+                    .join("04-Feedback/09-retrospect.md"),
             ],
         }
     }
@@ -74,6 +74,10 @@ impl DocKind {
             )],
             Self::Spec => vec![
                 (
+                    PathBuf::from(format!("planning/specs/{slug}/00-status.md")),
+                    render_spec_status(slug),
+                ),
+                (
                     PathBuf::from(format!("planning/specs/{slug}/01-Learn/01-intent.md")),
                     render_spec_intent(slug),
                 ),
@@ -82,25 +86,19 @@ impl DocKind {
                     render_spec_unknowns(),
                 ),
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/01-Learn/03-context.md")),
-                    render_spec_context(),
+                    PathBuf::from(format!("planning/specs/{slug}/02-Example/03-criteria.md")),
+                    render_spec_criteria(),
                 ),
                 (
-                    PathBuf::from(format!(
-                        "planning/specs/{slug}/02-Example/04+05-requirements.md"
-                    )),
-                    render_spec_requirements(),
-                ),
-                (
-                    PathBuf::from(format!("planning/specs/{slug}/02-Example/06-wireframe.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/02-Example/04-wireframe.md")),
                     render_spec_wireframe(),
                 ),
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/03-Architect/07-design.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/03-Architect/05-design.md")),
                     render_spec_design(),
                 ),
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/03-Architect/08-tasks.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/03-Architect/06-tasks.md")),
                     render_spec_tasks(),
                 ),
             ],
@@ -114,7 +112,7 @@ impl DocKind {
             )],
             Self::Retrospect => vec![(
                 PathBuf::from(format!(
-                    "planning/specs/{slug}/04-Feedback/11-retrospect.md"
+                    "planning/specs/{slug}/04-Feedback/09-retrospect.md"
                 )),
                 render_retrospect(slug),
             )],
@@ -154,6 +152,34 @@ fn render_idea(slug: &str) -> String {
     )
 }
 
+fn render_spec_status(slug: &str) -> String {
+    format!(
+        "# {slug} — Status\n\n\
+## 현재 상태\n\
+- 현재 phase / gate: \n\
+- 첫 미충족 gate: \n\
+- 다음 액션: \n\
+- 최근 return: \n\
+- return 횟수: 0\n\n\
+## Gate 진행\n\n\
+progress: 0 / 25 / 50 / 75 / 100, state: not-started / active / needs-approval / approved\n\n\
+| Gate | progress | state |\n\
+|---|---|---|\n\
+| 0 Status | 25 | active |\n\
+| 1 Intent | 0 | not-started |\n\
+| 2 Unknowns & Context | 0 | not-started |\n\
+| 3 Criteria | 0 | not-started |\n\
+| 4 Wireframe | 0 | not-started |\n\
+| 5 Design | 0 | not-started |\n\
+| 6 Tasks | 0 | not-started |\n\
+| 7 Execution | 0 | not-started |\n\
+| 8 Review | 0 | not-started |\n\
+| 9 Retrospect | 0 | not-started |\n\n\
+## Return Log\n\
+- \n"
+    )
+}
+
 fn render_spec_intent(slug: &str) -> String {
     format!(
         "# {slug}\n\n\
@@ -174,12 +200,8 @@ fn render_spec_unknowns() -> String {
 ## External facts\n\n\
 - [useful later] \n\n\
 ## Internal facts\n\n\
-- [blocking now] \n"
-        .to_string()
-}
-
-fn render_spec_context() -> String {
-    "## Verified facts\n\n\
+- [blocking now] \n\n\
+## Verified facts\n\n\
 - \n\n\
 ## Inventoried materials\n\n\
 - \n\n\
@@ -190,7 +212,7 @@ fn render_spec_context() -> String {
         .to_string()
 }
 
-fn render_spec_requirements() -> String {
+fn render_spec_criteria() -> String {
     "사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.\n\n\
 ## 목적 / 성공 기준\n\n\
 - \n\n\
@@ -319,20 +341,19 @@ mod tests {
         assert_eq!(
             DocKind::Spec.paths(&storage, "foo"),
             vec![
+                dir.path().join(".wt/planning/specs/foo/00-status.md"),
                 dir.path()
                     .join(".wt/planning/specs/foo/01-Learn/01-intent.md"),
                 dir.path()
                     .join(".wt/planning/specs/foo/01-Learn/02-unknowns.md"),
                 dir.path()
-                    .join(".wt/planning/specs/foo/01-Learn/03-context.md"),
+                    .join(".wt/planning/specs/foo/02-Example/03-criteria.md"),
                 dir.path()
-                    .join(".wt/planning/specs/foo/02-Example/04+05-requirements.md"),
+                    .join(".wt/planning/specs/foo/02-Example/04-wireframe.md"),
                 dir.path()
-                    .join(".wt/planning/specs/foo/02-Example/06-wireframe.md"),
+                    .join(".wt/planning/specs/foo/03-Architect/05-design.md"),
                 dir.path()
-                    .join(".wt/planning/specs/foo/03-Architect/07-design.md"),
-                dir.path()
-                    .join(".wt/planning/specs/foo/03-Architect/08-tasks.md")
+                    .join(".wt/planning/specs/foo/03-Architect/06-tasks.md")
             ]
         );
         assert_eq!(
@@ -347,7 +368,7 @@ mod tests {
             DocKind::Retrospect.paths(&storage, "foo"),
             vec![
                 dir.path()
-                    .join(".wt/planning/specs/foo/04-Feedback/11-retrospect.md")
+                    .join(".wt/planning/specs/foo/04-Feedback/09-retrospect.md")
             ]
         );
     }
@@ -377,22 +398,26 @@ mod tests {
     fn spec_render_includes_tasks_skeleton() {
         let spec = DocKind::Spec.render("foo");
         assert_eq!(spec.len(), 7);
+        assert_eq!(spec[0].0, PathBuf::from("planning/specs/foo/00-status.md"));
         assert_eq!(
-            spec[0].0,
+            spec[1].0,
             PathBuf::from("planning/specs/foo/01-Learn/01-intent.md")
         );
         assert_eq!(
             spec[3].0,
-            PathBuf::from("planning/specs/foo/02-Example/04+05-requirements.md")
+            PathBuf::from("planning/specs/foo/02-Example/03-criteria.md")
         );
         assert_eq!(
             spec[4].0,
-            PathBuf::from("planning/specs/foo/02-Example/06-wireframe.md")
+            PathBuf::from("planning/specs/foo/02-Example/04-wireframe.md")
         );
         assert_eq!(
             spec[6].0,
-            PathBuf::from("planning/specs/foo/03-Architect/08-tasks.md")
+            PathBuf::from("planning/specs/foo/03-Architect/06-tasks.md")
         );
+        assert!(spec[0].1.contains("## Gate 진행"));
+        assert!(spec[2].1.contains("## Domain concepts"));
+        assert!(spec[2].1.contains("## Verified facts"));
         assert!(spec[3].1.contains("## 목적 / 성공 기준"));
         assert!(spec[3].1.contains("## 원칙 / 제약"));
         assert!(spec[4].1.contains("## Placeholder contracts"));

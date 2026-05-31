@@ -8,6 +8,16 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Changed the spec work-sequence layout to the nine-gate LEAF model: folded
+  context into `01-Learn/02-unknowns.md`, added the `00-status.md` dashboard, and
+  renumbered downstream gate files to `02-Example/03-criteria.md`,
+  `02-Example/04-wireframe.md`, `03-Architect/05-design.md`,
+  `03-Architect/06-tasks.md`, `03-Architect/07-execution.md`,
+  `04-Feedback/08-review.md`, and `04-Feedback/09-retrospect.md`. `wt scaffold
+  --spec` now seeds this layout and rejects pre-9-gate files, `wt ui` retrospect
+  scanning reads `09-retrospect.md`, and `docs/consistency.md` plus the wt skill
+  pack follow the same numbering.
+
 ## 0.43.0 - 2026-05-28
 
 - Changed remaining agent runtime state to live under the owning

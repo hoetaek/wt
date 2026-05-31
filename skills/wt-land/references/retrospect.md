@@ -18,7 +18,7 @@ at an earlier gate and the blocker itself is worth preserving.
 - At the end of a `wt-lifecycle` loop, even when a phase blocked progress, if the
   blocker is a reusable lesson for the next cycle.
 - When the user explicitly says "retrospect" or "retrospective 작성".
-- When the user references `planning/specs/<slug>/04-Feedback/11-retrospect.md` or
+- When the user references `planning/specs/<slug>/04-Feedback/09-retrospect.md` or
   cross-work `<repo-root>/.wt/planning/retrospectives/`.
 
 Write a timing entry for every closed work item, even when no broader
@@ -51,7 +51,7 @@ lifecycle skill.
   clear enough to act on.
 - Prefer one closed work item or blocked gate lesson per file. If one run
   produced unrelated lessons, keep the spec-backed work item lesson in
-  `04-Feedback/11-retrospect.md` and promote cross-work lessons to
+  `04-Feedback/09-retrospect.md` and promote cross-work lessons to
   `<repo-root>/.wt/planning/retrospectives/` only when they are not owned by
   a single spec.
 
@@ -73,7 +73,7 @@ where the format supports it.
 ## Place and Name
 
 - Default path for spec-backed work:
-  `<repo-root>/.wt/planning/specs/<slug>/04-Feedback/11-retrospect.md`.
+  `<repo-root>/.wt/planning/specs/<slug>/04-Feedback/09-retrospect.md`.
 - Cross-work/spec-less fallback path:
   `<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml`.
 - Slug is the work item's canonical short name (branch, PR title topic, or the
@@ -84,7 +84,7 @@ where the format supports it.
 
 ## Format
 
-For spec-backed work, use Markdown in `04-Feedback/11-retrospect.md` with these sections:
+For spec-backed work, use Markdown in `04-Feedback/09-retrospect.md` with these sections:
 
 ```markdown
 # <title>
@@ -169,7 +169,7 @@ next_adjustment = ""
 [evidence]
 key_observations = ["..."]       # concrete facts established during the loop
 commands_that_proved_things = ["..."]
-experiments = ["<repo-root>/.wt/planning/specs/<slug>/04-Feedback/10-review.md"]
+experiments = ["<repo-root>/.wt/planning/specs/<slug>/04-Feedback/08-review.md"]
 prs = ["#<n>", ...]              # optional
 
 [keep]
@@ -212,8 +212,8 @@ Read enough local evidence to avoid inventing timing:
 
 - TaskDocument `계획 (Planning)` for expected duration, estimate basis, size
   class, execution shape, and acceptance checks
-- `03-Architect/09-execution.md` for launch shape and risks
-- `04-Feedback/10-review.md` for review findings, mid-process discoveries, and coordinator
+- `03-Architect/07-execution.md` for launch shape and risks
+- `04-Feedback/08-review.md` for review findings, mid-process discoveries, and coordinator
   observations
 - TaskRun, workflow row, branch, worktree, and agent ids from `wt inspect`
 - inbox reports and message ids used during coordination
@@ -243,7 +243,7 @@ result teaches anything about future estimates or watch cadence:
 ```
 
 This file is a rolling calibration note, not a replacement for per-work
-`04-Feedback/11-retrospect.md`. Keep it small enough for `wt-ready` and `wt-work` to
+`04-Feedback/09-retrospect.md`. Keep it small enough for `wt-ready` and `wt-work` to
 read quickly. Recommended columns:
 
 ```text
@@ -305,7 +305,7 @@ When the finished work item had specs,
 `<repo-root>/.wt/planning/specs/<slug>/` may contain numbered LEAF
 files from `wt-ready`. Cite them in `evidence` or in the `rationale` of a
 `[[harness_tuning]]` entry when the lesson points at the spec template itself
-(e.g. "the EARS statement in 02-Example/04+05-requirements.md proved ambiguous; tighten
+(e.g. "the EARS statement in 02-Example/03-criteria.md proved ambiguous; tighten
 the wt-ready template").
 
 ## Process
@@ -322,7 +322,7 @@ the wt-ready template").
    specific kind is still useful, and fill `context.blocked_gate` with the
    LEAF gate name.
 4. Diagnose Unknown surfacing misses, if the spec has them:
-   - If `<repo-root>/.wt/planning/specs/<slug>/04-Feedback/10-review.md` has a
+   - If `<repo-root>/.wt/planning/specs/<slug>/04-Feedback/08-review.md` has a
      `## Mid-process discoveries` section, read it. Each entry is a research
      step that happened mid-work instead of at the Unknown surfacing gate.
    - Classify each discovery against the four surfacing categories: `domain`,
@@ -332,7 +332,7 @@ the wt-ready template").
      category to the surfacing checklist for this kind of work") or, when
      the lesson belongs in a skill body, as a `[[harness_tuning]]` entry
      pointing at the relevant SKILL.md section.
-5. Draft `04-Feedback/11-retrospect.md` under the spec for spec-backed work. Draft TOML
+5. Draft `04-Feedback/09-retrospect.md` under the spec for spec-backed work. Draft TOML
    directly under
    `<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` only for
    cross-work/spec-less retrospectives. Skip optional sections that have no
