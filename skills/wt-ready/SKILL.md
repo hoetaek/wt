@@ -123,12 +123,20 @@ HITL question that chooses the next exploration direction.
 
 ## LEAF Work
 
-Before promoting an idea, writing specs, or preparing TaskDocuments, identify
-where the work currently sits in `references/leaf-work.md`: Learn
-(intent/context), Example (purpose/requirements/wireframe), Architect
-(design/tasks/handoff), or Feedback (review/retrospect). Do not treat the
-sequence as a waterfall; use it as a set of gates that prevent skipping from
-vague intent straight to runnable work.
+Leaf before tree: validate one cheap, inspectable instance before growing it
+into the whole artifact or runnable work. Before promoting an idea, writing
+specs, or preparing TaskDocuments, identify the earliest missing LEAF gate:
+
+- Learn: 1 Intent, 2 Unknowns, 3 Context
+- Example: 4 Purpose, 5 Requirements, 6 Wireframe
+- Architect: 7 Design, 8 Tasks, 9 Execution handoff
+- Feedback: 10 Review/sync, 11 Retrospect
+
+Use `references/leaf-work.md` for wt-specific gate details and artifacts.
+Do not treat the sequence as a waterfall. Gates loop: when a downstream gate
+overturns an assumption or surfaces a new unknown, return to `02-unknowns.md`
+and `03-context.md`, update the affected later files, and record the discovery
+in `10-review.md` when execution/review evidence caused it.
 
 If a user enters with implementation-shaped wording, reconstruct the missing
 intent, purpose/success criteria, and output form first. If Learn is incomplete,
@@ -169,12 +177,31 @@ views or artifacts.
 Gate transitions require explicit user approval. The agent may propose that
 unknowns are surfaced, context is adequate, requirements are settled, a
 wireframe has passed, or design is ready for tasking, but the user decides when
-to move to the next gate. For tiny work, gates may collapse into one file, but
-the collapse must be stated instead of silently skipping the check.
+to move to the next gate. For tiny wt work, gate artifacts may be brief, but the
+Gate 5 -> Gate 6 and Gate 6 -> Gate 7 file boundaries stay separate.
 
 If the user wants to proceed while any Gate 1-5 ledger row is still weak, state
 the remaining risk and the cheapest next question or artifact that would reduce
 it. Continue only after the user accepts that risk or chooses the next gate.
+
+The middle gates are a produce -> consume engine:
+
+- Gate 4 Purpose is the arbiter: the desired effect judges requirements and the
+  concrete instance.
+- Gate 5 Requirements is the test: write observable criteria before the answer
+  exists.
+- Gate 6 Wireframe is the instance plus contract: one concrete case with mock
+  data, declared placeholder contracts, and explicit variation points.
+- Gate 7 Design is the generator: it consumes the Gate 6 contract and defines
+  behavior across the full variation range, including empty, overflow, edge,
+  timing, and failure cases.
+
+Never hide disagreement across a produce/consume edge. `04+05-requirements.md`
+is the common merge; `04+05+06` and `06+07` are not new canonical wt forms.
+New specs use `04+05-requirements.md` for criteria and `06-wireframe.md` /
+`06-wireframe/` for the concrete instance and contract. If inherited work still
+has `04+05+06-requirements.md`, treat it as a pre-split legacy/starter artifact
+and split out Gate 6 before relying on the wireframe as passed.
 
 ## Questions
 
@@ -186,9 +213,9 @@ focused question at a time and include your recommended answer.
 Resolve terminology as you go. If the user uses a term that conflicts with the
 repo docs or code, point to the conflict and propose the canonical term.
 
-When authoring a spec file (`04+05-requirements.md`,
-`04+05+06-requirements.md`, `06-wireframe.md`, `07-design.md`, `08-tasks.md`,
-`09-execution.md`), use the **Grill The Spec** cycle instead.
+When authoring a spec file (`04+05-requirements.md`, `06-wireframe.md`,
+`07-design.md`, `08-tasks.md`, `09-execution.md`), use the **Grill The Spec**
+cycle instead.
 
 ## Set Output Form
 
@@ -197,9 +224,8 @@ artifact this preparation should produce. This is part of requirements, not a
 separate gate. Do it before wireframe, design, and task graph work so an
 implementation PR is not assumed by default.
 
-Record the output form in `04+05-requirements.md`, collapsed
-`04+05+06-requirements.md`, TaskDocument `계획 (Planning)` section, or
-`09-execution.md` rationale:
+Record the output form in `04+05-requirements.md`, TaskDocument
+`계획 (Planning)` section, or `09-execution.md` rationale:
 
 - docs-only change
 - implementation PR
@@ -253,14 +279,10 @@ placeholders mean the wireframe validated only one example, not the reusable
 contract that design can safely consume.
 
 Write `06-wireframe.md` for one compact artifact or `06-wireframe/` when there
-are several screens, flows, examples, or transcripts. For tiny work, the
-wireframe can collapse into `04+05+06-requirements.md`, but say that it is a
-collapsed wireframe and still check the representative examples/states. This
-collapse is a wt-ready tiny-work/scaffold convenience, not permission to hide
-the Gate 5 -> Gate 6 produce/consume boundary. If the wireframe contains
-meaningful placeholders, mock values, or variation points, either split out
-`06-wireframe.md` or include an explicit Gate 6 subsection in
-`04+05+06-requirements.md` with the instance, contracts, and variation points.
+are several screens, flows, examples, or transcripts. Do not merge Gate 5's
+test with Gate 6's answer. If inherited work still keeps wireframe material in
+`04+05+06-requirements.md`, split the concrete instance, contracts, variation
+points, and walkthrough result into `06-wireframe.md` before design consumes it.
 
 The gate passes only when the user can walk through the text-first structure and
 confirm that it fits. If an artifact-specific wireframe is needed, that concrete
@@ -471,24 +493,27 @@ spec genuinely cannot be authored until an upstream has partially landed.
 When asked "anything still not ready?", enumerate everything in-flight and
 bring it all to ready unless the user explicitly defers a specific item.
 
+Generic leaf-work projects store persistent files under phase folders
+(`01-Learn/`, `02-Example/`, `03-Architect/`, `04-Feedback/`). wt intentionally
+uses its `.wt` personal-state buckets instead; keep that repo contract.
 Prepared wt work uses three canonical locations under the planning/execution buckets:
 
 - `planning/ideas/<slug>.{md,toml}` — kill-able exploration captured by `wt-ready`. Free-form
   Markdown or TOML. May be deleted at any time. No commitment.
 - `planning/specs/<slug>/` — committed prep artifact. Holds numbered LEAF files:
   `01-intent.md`, `02-unknowns.md`, `03-context.md`,
-  `04+05-requirements.md` or collapsed `04+05+06-requirements.md`,
-  optional `06-wireframe.md` / `06-wireframe/`, `07-design.md`, `08-tasks.md`,
-  lazy `09-execution.md`, lazy `10-review.md`, and lazy `11-retrospect.md`.
+  `04+05-requirements.md`, `06-wireframe.md` / `06-wireframe/`,
+  `07-design.md`, `08-tasks.md`, lazy `09-execution.md`, lazy `10-review.md`,
+  and lazy `11-retrospect.md`.
   This is the canonical location for prep work that has been promoted past
   exploration and for spec-backed review/retrospect records.
 - `execution/tasks/<slug>.toml` — TaskDocument, the launch unit. Schema unchanged. The body
   may reference `planning/specs/<slug>/` files by relative path.
 
-The wt CLI does not parse or manage `planning/specs/` as executable state. It can *seed*
-the six prep files (`01` through `08`) via `wt scaffold <slug> --spec`; after
-that, spec authoring stays a human/AI artifact. TaskDocument and TaskRun models
-are unchanged.
+The wt CLI does not parse or manage `planning/specs/` as executable state. It
+can *seed* the prep files (`01` through `08`) via `wt scaffold <slug> --spec`;
+after that, spec authoring stays a human/AI artifact. TaskDocument and TaskRun
+models are unchanged.
 
 ### Promotion (idea → spec)
 
@@ -498,12 +523,8 @@ existing idea file is promoted, not copied:
 - `rm <repo-root>/.wt/planning/ideas/<slug>.{md,toml}` — the visible commit gate
   that distinguishes exploration from committed prep.
 - `wt scaffold <slug> --spec` — seeds `01-intent.md`, `02-unknowns.md`,
-  `03-context.md`, `04+05+06-requirements.md`, `07-design.md`, and
-  `08-tasks.md`.
-- If the work needs an explicit wireframe gate, create `06-wireframe.md` or
-  `06-wireframe/` by hand and treat the scaffolded `04+05+06-requirements.md`
-  as a collapsed legacy/starter form rather than proof that the wireframe
-  check passed.
+  `03-context.md`, `04+05-requirements.md`, `06-wireframe.md`, `07-design.md`,
+  and `08-tasks.md`.
 - If a mode decision is recorded at prep time, create `09-execution.md` by
   hand. Scaffold intentionally does not make `09-execution.md` — it is a
   decision and handoff artifact, not a blank prep skeleton.
@@ -536,7 +557,7 @@ idea file existing first.
 - Do not record final design decisions here unless the decision has already
   been approved downstream.
 
-`04+05-requirements.md` or collapsed `04+05+06-requirements.md`:
+`04+05-requirements.md`:
 
 - First line is the user story in Korean:
   `사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.`
@@ -555,10 +576,9 @@ idea file existing first.
   similar concerns when they apply.
 - Regression-sensitive behavior is stated explicitly:
   `WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>`.
-- Use the collapsed `04+05+06-requirements.md` form only for tiny prep or
-  scaffolded starter specs. A collapsed file must still make the Gate 6
-  instance, placeholder contracts, and variation points explicit when they
-  exist; otherwise split the wireframe into `06-wireframe.md`.
+- If inherited work still has `04+05+06-requirements.md`, treat it as
+  pre-split legacy context. Move criteria into `04+05-requirements.md` and Gate
+  6 material into `06-wireframe.md` before launch-ready handoff.
 
 `06-wireframe.md` or `06-wireframe/`:
 
@@ -584,8 +604,8 @@ idea file existing first.
 
 `07-design.md`:
 
-- Start from the passed wireframe case or explicitly note that the wireframe was
-  collapsed for tiny work.
+- Start from the passed wireframe case or explicitly note the brief Gate 6
+  artifact that was accepted for tiny work.
 - Consume the Gate 6 contract, placeholder decisions, and variation points as
   inputs. Design must not rediscover the artifact shape that the wireframe was
   supposed to lock.
@@ -681,7 +701,7 @@ makes a file authoritative.
 
 ### File-specific grill foci
 
-`04+05-requirements.md` or collapsed `04+05+06-requirements.md`:
+`04+05-requirements.md`:
 
 - Whether the purpose/success criteria explain the desired effect rather than
   only naming an artifact to produce.
@@ -788,8 +808,6 @@ project glossary), call it out immediately and propose the canonical term.
 This is part of step 3 (Revise), called out separately because terminology
 drift is the cheapest defect to fix during grilling.
 
-
-
 End with one of these concrete outputs:
 
 - idea captured/updated at `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}`
@@ -806,14 +824,19 @@ file paths unless they are necessary for the task.
 
 Report:
 
+- the four LEAF route questions after a current one-sentence intent is
+  available
 - current phase/gate and the first missing gate, if any
+- why the next move belongs to Learn, Example, Architect, or Feedback
 - evidence checked
 - selected approach and rejected alternatives
+- proposed next artifact to create or revise
 - output form
 - wireframe/context adequacy status, including mock data or representative
   examples used
 - slice list with dependencies and chosen execution shape
 - expected duration per slice, with estimate basis and suggested watch cadence
+- review checks that prove the next pass is useful
 - PR/landing policy source: `[workflow]` config, CLI/workflow override, or
   explicit user answer
 - exact next command or target for `wt-work`

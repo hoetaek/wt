@@ -83,7 +83,8 @@ Canonical personal storage layout:
 │   │       ├── 01-intent.md
 │   │       ├── 02-unknowns.md
 │   │       ├── 03-context.md
-│   │       ├── 04+05+06-requirements.md
+│   │       ├── 04+05-requirements.md
+│   │       ├── 06-wireframe.md           # or 06-wireframe/ when several cases
 │   │       ├── 07-design.md
 │   │       ├── 08-tasks.md
 │   │       ├── 09-execution.md    # lazy, when launch handoff exists
@@ -168,7 +169,7 @@ commit gate다. `wt` state tree를 읽는 사람은 `planning/ideas/` 아래의 
 
 TaskDocument는 계속 `<repo-root>/.wt/execution/tasks/<slug>.toml`에 있는 launch unit이다. 그
 body는 `planning/specs/<slug>/` relative path를 참조할 수 있지만 TaskDocument schema는 바뀌지
-않는다. Spec은 intent, unknowns, context, requirements, design, tasks, execution handoff,
+않는다. Spec은 intent, unknowns, context, requirements, wireframe, design, tasks, execution handoff,
 review/sync, retrospect를 담는 긴 human/AI artifact이고, TaskDocument는 `wt run task`와
 `wt workflow`가 소비하는 실행 단위다. Spec 없이 TaskDocument TOML만 있는 pre-redesign task도
 valid local task로 남는다.
@@ -195,8 +196,18 @@ constraints, output form 중 현재 가장 약한 clarity row를 표시해서 �
 assumptions, references/options/tradeoffs를 담는다. 이 파일은 결정문이 아니라 downstream gates가
 의존할 수 있는 fact inventory다.
 
-`planning/specs/<slug>/04+05+06-requirements.md`는 purpose/success criteria, requirements/principles,
-output concept을 한 파일에 합친다. 첫 줄은 한국어 사용자 스토리 line으로 시작한다.
+LEAF의 middle gates는 produce/consume boundary를 가진다. Gate 4 Purpose와 Gate 5
+Requirements는 추상 criteria이고 함께 `04+05-requirements.md`로 합칠 수 있다. Gate 6
+Wireframe은 criteria가 통과해야 하는 concrete instance와 contract이므로, 의미 있는 mock data,
+placeholder, variation point, structure decision이 있으면 `06-wireframe.md` 또는
+`06-wireframe/`로 분리한다.
+
+`wt scaffold <slug> --spec`은 새 spec에 `04+05-requirements.md`와 `06-wireframe.md`를
+separate files로 seed한다. 기존 `04+05+06-requirements.md`는 pre-split legacy/starter artifact로만
+취급한다. 새 spec이나 새 docs는 `04+05+06-requirements.md`를 만들지 않는다.
+
+`planning/specs/<slug>/04+05-requirements.md`는 purpose/success criteria,
+requirements/principles, output form을 담는다. 첫 줄은 한국어 사용자 스토리 line으로 시작한다.
 
 ```text
 사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.
@@ -210,7 +221,7 @@ WHEN <조건> THE SYSTEM SHALL <관찰 가능한 동작>
 GIVEN <전제> WHEN <트리거> THE SYSTEM SHALL <응답>
 ```
 
-`04+05+06-requirements.md`는 목적 / 성공 기준, 원칙 / 제약, 출력 형태, 기능 요구사항(EARS),
+`04+05-requirements.md`는 목적 / 성공 기준, 원칙 / 제약, 출력 형태, 기능 요구사항(EARS),
 비기능 요구사항, 회귀 보존 section을 둔다. 비기능 요구사항은 성능, 보안, 호환성, 또는 해당
 작업에 적용되는 cross-cutting constraint를 명시적으로 이름 붙인다. Regression-sensitive work는
 preserved behavior를 다음 형태로 적는다.
@@ -219,11 +230,22 @@ preserved behavior를 다음 형태로 적는다.
 WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>
 ```
 
+`planning/specs/<slug>/06-wireframe.md` 또는 `06-wireframe/`는 Gate 6의 concrete instance와
+contract를 담는다. 먼저 requirements를 pages, flows, states, commands, document sections 같은
+실제 나타날 bucket으로 묶고, text-first wireframe을 만든다: ASCII layout, command transcript,
+sequence sketch, table/state matrix, 또는 placeholder evidence가 있는 outline. 각 placeholder나
+mock value는 어떤 contract를 instantiates하는지, 무엇이 어떤 axis/range 안에서 변할 수 있는지
+기록한다. User/operator walkthrough가 통과하기 전에는 `07-design.md`가 구조를 일반화하면 안 된다.
+
 `planning/specs/<slug>/07-design.md`는 결정사항, 영향받는 컴포넌트, 제약을 적는다.
-Gate 7 design은 principles, decision drivers, viable options, steelman antithesis를 durable
-rationale로 남긴다. Brownfield work에서는 새 design 전에 Static Model section(Purpose,
-Components, Business Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw
-code dump가 아니라 intent와 component responsibility 중심으로 설명한다.
+Gate 7 design은 Gate 6 contract와 variation points를 input으로 consume하고, concrete instance를
+모든 valid instance를 생성할 수 있는 reusable generator로 일반화한다. Empty, overflow, edge,
+timing, failure case처럼 단일 mock instance가 보여주지 못한 variation range를 다룬다. Design이
+artifact shape, schema, placeholder meaning을 새로 발명해야 한다면 Gate 6으로 돌아간다.
+Gate 7은 principles, decision drivers, viable options, steelman antithesis를 durable rationale로
+남긴다. Brownfield work에서는 새 design 전에 Static Model section(Purpose, Components, Business
+Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw code dump가 아니라
+intent와 component responsibility 중심으로 설명한다.
 
 `planning/specs/<slug>/08-tasks.md`는 작업 목록 section 아래에 sequenced atomic unit을 checkbox item으로 나열한다. 각 item은
 dependency를 적고, dependency가 없는 item은 parallel 가능하다고 표시할 수 있다.

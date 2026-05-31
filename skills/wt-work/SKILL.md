@@ -263,7 +263,7 @@ them drift. Common files:
 - `10-review.md` for review evidence and mid-process discoveries.
 
 Do not silently rewrite approved purpose/requirements in
-`04+05+06-requirements.md`; surface that change to the user.
+`04+05-requirements.md`; surface that change to the user.
 
 If unplanned research happened during execution, record it in
 `10-review.md` under `## Mid-process discoveries` with a category:

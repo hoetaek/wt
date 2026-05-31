@@ -57,18 +57,16 @@ would reduce it.
 
 Kiro's spec-driven workflow maps to
 `04+05-requirements.md -> 06-wireframe.md -> 07-design.md -> 08-tasks.md`.
-Existing scaffolded specs may collapse requirements and wireframe into
-`04+05+06-requirements.md` for tiny work, but the collapse is only a
-wt-ready scaffold/tiny-work convenience. It must still make the Gate 6
-instance, placeholder contracts, and variation points explicit when they
-exist; otherwise split out `06-wireframe.md`.
+New wt specs keep Gate 5 criteria and Gate 6 instance/contract separate. Treat
+pre-split `04+05+06-requirements.md` files as legacy/starter context and split
+them before launch-ready handoff.
 AI-DLC maps more broadly to `Inception -> Construction -> Operations`. For wt,
 the operational mapping is:
 
 ```text
 planning/ideas/<slug>.{md,toml}
 -> planning/specs/<slug>/{01-intent.md,02-unknowns.md,03-context.md,
-   04+05-requirements.md or 04+05+06-requirements.md,06-wireframe.md?,
+   04+05-requirements.md, 06-wireframe.md,
    07-design.md,08-tasks.md,09-execution.md?,10-review.md?,11-retrospect.md?}
 -> execution/tasks/<slug>.toml and/or execution/workflows/<id>.toml
 -> execution/task-runs/<id>.toml
@@ -176,7 +174,7 @@ Return here when:
 Owner: `wt-ready`.
 
 Artifact: idea body, then `planning/specs/<slug>/04+05-requirements.md`
-or collapsed `04+05+06-requirements.md` user story and problem context.
+user story and problem context.
 
 Gate to next step:
 
@@ -196,8 +194,7 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: `planning/specs/<slug>/04+05-requirements.md` or collapsed
-`04+05+06-requirements.md`.
+Artifact: `planning/specs/<slug>/04+05-requirements.md`.
 
 Gate to next step:
 
@@ -229,10 +226,8 @@ Return here when:
 Owner: `wt-ready`, with `wt-work` updating it when execution findings
 show that the validated structure was wrong.
 
-Artifact: `planning/specs/<slug>/06-wireframe.md` for one compact artifact,
-`06-wireframe/` for several screens/flows/examples, or collapsed
-`04+05+06-requirements.md` when the work is tiny and the structural sketch fits
-inside requirements. Gate 6 is the cheap-iteration gate before expensive
+Artifact: `planning/specs/<slug>/06-wireframe.md` for one compact artifact, or
+`06-wireframe/` for several screens/flows/examples. Gate 6 is the cheap-iteration gate before expensive
 generalization. It validates a concrete case by grouping requirements into
 pages, flows, states, commands, or document sections; walking a representative
 journey; then drawing a text-first wireframe by default: ASCII layout, command
@@ -316,7 +311,7 @@ strongest antithesis so later review can audit why the choice was made.
 
 Gate to next step:
 
-- The wireframe was confirmed or intentionally collapsed for tiny work.
+- The wireframe was confirmed, even if the artifact is brief for tiny work.
 - The Gate 6 contract and variation points are consumed as inputs; design does
   not rediscover the artifact shape that the wireframe was supposed to lock.
 - The design names affected components and boundaries.
@@ -465,7 +460,7 @@ the work is ready for the next one. Examples:
 - Missing examples or direction: use the unknowns list to run bounded
   discovery/reference benchmarking.
 - Missing observable behavior or output form: write or grill
-  `04+05-requirements.md` or collapsed `04+05+06-requirements.md`.
+  `04+05-requirements.md`.
 - Missing mock data, workflow, states, or constraints for structure: return to
   `02-unknowns.md` / `03-context.md`.
 - Missing structure validation: write or grill the text-first

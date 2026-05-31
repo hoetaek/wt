@@ -305,7 +305,7 @@ When the finished work item had specs,
 `<repo-root>/.wt/planning/specs/<slug>/` may contain numbered LEAF
 files from `wt-ready`. Cite them in `evidence` or in the `rationale` of a
 `[[harness_tuning]]` entry when the lesson points at the spec template itself
-(e.g. "the EARS statement in 04+05+06-requirements.md proved ambiguous; tighten
+(e.g. "the EARS statement in 04+05-requirements.md proved ambiguous; tighten
 the wt-ready template").
 
 ## Process

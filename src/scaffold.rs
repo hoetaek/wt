@@ -49,7 +49,8 @@ impl DocKind {
                     dir.join("01-intent.md"),
                     dir.join("02-unknowns.md"),
                     dir.join("03-context.md"),
-                    dir.join("04+05+06-requirements.md"),
+                    dir.join("04+05-requirements.md"),
+                    dir.join("06-wireframe.md"),
                     dir.join("07-design.md"),
                     dir.join("08-tasks.md"),
                 ]
@@ -80,8 +81,12 @@ impl DocKind {
                     render_spec_context(),
                 ),
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/04+05+06-requirements.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/04+05-requirements.md")),
                     render_spec_requirements(),
+                ),
+                (
+                    PathBuf::from(format!("planning/specs/{slug}/06-wireframe.md")),
+                    render_spec_wireframe(),
                 ),
                 (
                     PathBuf::from(format!("planning/specs/{slug}/07-design.md")),
@@ -194,6 +199,28 @@ fn render_spec_requirements() -> String {
         .to_string()
 }
 
+fn render_spec_wireframe() -> String {
+    "## Concrete instance\n\n\
+- \n\n\
+## Text-first wireframe\n\n\
+```text\n\
+[ASCII layout / command transcript / sequence sketch / state table]\n\
+```\n\n\
+## Placeholder contracts\n\n\
+- Placeholder: \n\
+  - Contract: \n\
+  - Variation point: axis / range / limits\n\n\
+## Representative states\n\n\
+- Empty: \n\
+- Error: \n\
+- Edge: \n\
+- Loading / timing: \n\n\
+## Walkthrough result\n\n\
+- User/operator confirmed: yes | no | pending\n\
+- Notes: \n"
+        .to_string()
+}
+
 fn render_spec_design() -> String {
     "## 결정사항\n\n\
 - \n\n\
@@ -287,7 +314,8 @@ mod tests {
                 dir.path().join(".wt/planning/specs/foo/02-unknowns.md"),
                 dir.path().join(".wt/planning/specs/foo/03-context.md"),
                 dir.path()
-                    .join(".wt/planning/specs/foo/04+05+06-requirements.md"),
+                    .join(".wt/planning/specs/foo/04+05-requirements.md"),
+                dir.path().join(".wt/planning/specs/foo/06-wireframe.md"),
                 dir.path().join(".wt/planning/specs/foo/07-design.md"),
                 dir.path().join(".wt/planning/specs/foo/08-tasks.md")
             ]
@@ -330,17 +358,22 @@ mod tests {
     #[test]
     fn spec_render_includes_tasks_skeleton() {
         let spec = DocKind::Spec.render("foo");
-        assert_eq!(spec.len(), 6);
+        assert_eq!(spec.len(), 7);
         assert_eq!(spec[0].0, PathBuf::from("planning/specs/foo/01-intent.md"));
         assert_eq!(
             spec[3].0,
-            PathBuf::from("planning/specs/foo/04+05+06-requirements.md")
+            PathBuf::from("planning/specs/foo/04+05-requirements.md")
         );
-        assert_eq!(spec[5].0, PathBuf::from("planning/specs/foo/08-tasks.md"));
+        assert_eq!(
+            spec[4].0,
+            PathBuf::from("planning/specs/foo/06-wireframe.md")
+        );
+        assert_eq!(spec[6].0, PathBuf::from("planning/specs/foo/08-tasks.md"));
         assert!(spec[3].1.contains("## 목적 / 성공 기준"));
         assert!(spec[3].1.contains("## 원칙 / 제약"));
-        assert!(spec[5].1.contains("## 작업 목록"));
-        assert!(spec[5].1.contains("[blocked by:"));
+        assert!(spec[4].1.contains("## Placeholder contracts"));
+        assert!(spec[6].1.contains("## 작업 목록"));
+        assert!(spec[6].1.contains("[blocked by:"));
     }
 
     #[test]

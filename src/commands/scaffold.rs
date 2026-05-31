@@ -376,7 +376,8 @@ mod tests {
                 "planning/specs/foo/01-intent.md".to_string(),
                 "planning/specs/foo/02-unknowns.md".to_string(),
                 "planning/specs/foo/03-context.md".to_string(),
-                "planning/specs/foo/04+05+06-requirements.md".to_string(),
+                "planning/specs/foo/04+05-requirements.md".to_string(),
+                "planning/specs/foo/06-wireframe.md".to_string(),
                 "planning/specs/foo/07-design.md".to_string(),
                 "planning/specs/foo/08-tasks.md".to_string()
             ]
@@ -386,16 +387,20 @@ mod tests {
             DocKind::Spec.render("foo")[0].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("04+05+06-requirements.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("04+05-requirements.md")).unwrap(),
             DocKind::Spec.render("foo")[3].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("07-design.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("06-wireframe.md")).unwrap(),
             DocKind::Spec.render("foo")[4].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("08-tasks.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("07-design.md")).unwrap(),
             DocKind::Spec.render("foo")[5].1
+        );
+        assert_eq!(
+            fs::read_to_string(spec_dir.join("08-tasks.md")).unwrap(),
+            DocKind::Spec.render("foo")[6].1
         );
     }
 
@@ -457,7 +462,8 @@ mod tests {
                 "planning/specs/foo/01-intent.md".to_string(),
                 "planning/specs/foo/02-unknowns.md".to_string(),
                 "planning/specs/foo/03-context.md".to_string(),
-                "planning/specs/foo/04+05+06-requirements.md".to_string(),
+                "planning/specs/foo/04+05-requirements.md".to_string(),
+                "planning/specs/foo/06-wireframe.md".to_string(),
                 "planning/specs/foo/07-design.md".to_string(),
                 "planning/specs/foo/08-tasks.md".to_string(),
                 "planning/specs/foo/11-retrospect.md".to_string()
