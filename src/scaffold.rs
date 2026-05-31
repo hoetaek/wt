@@ -46,18 +46,23 @@ impl DocKind {
             Self::Spec => {
                 let dir = storage.specs_dir().join(slug);
                 vec![
-                    dir.join("01-intent.md"),
-                    dir.join("02-unknowns.md"),
-                    dir.join("03-context.md"),
-                    dir.join("04+05-requirements.md"),
-                    dir.join("06-wireframe.md"),
-                    dir.join("07-design.md"),
-                    dir.join("08-tasks.md"),
+                    dir.join("01-Learn/01-intent.md"),
+                    dir.join("01-Learn/02-unknowns.md"),
+                    dir.join("01-Learn/03-context.md"),
+                    dir.join("02-Example/04+05-requirements.md"),
+                    dir.join("02-Example/06-wireframe.md"),
+                    dir.join("03-Architect/07-design.md"),
+                    dir.join("03-Architect/08-tasks.md"),
                 ]
             }
             Self::Task => vec![storage.tasks_dir().join(format!("{slug}.toml"))],
             Self::Workflow => vec![storage.workflows_dir().join(format!("{slug}.toml"))],
-            Self::Retrospect => vec![storage.specs_dir().join(slug).join("11-retrospect.md")],
+            Self::Retrospect => vec![
+                storage
+                    .specs_dir()
+                    .join(slug)
+                    .join("04-Feedback/11-retrospect.md"),
+            ],
         }
     }
 
@@ -69,31 +74,33 @@ impl DocKind {
             )],
             Self::Spec => vec![
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/01-intent.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/01-Learn/01-intent.md")),
                     render_spec_intent(slug),
                 ),
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/02-unknowns.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/01-Learn/02-unknowns.md")),
                     render_spec_unknowns(),
                 ),
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/03-context.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/01-Learn/03-context.md")),
                     render_spec_context(),
                 ),
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/04+05-requirements.md")),
+                    PathBuf::from(format!(
+                        "planning/specs/{slug}/02-Example/04+05-requirements.md"
+                    )),
                     render_spec_requirements(),
                 ),
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/06-wireframe.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/02-Example/06-wireframe.md")),
                     render_spec_wireframe(),
                 ),
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/07-design.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/03-Architect/07-design.md")),
                     render_spec_design(),
                 ),
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/08-tasks.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/03-Architect/08-tasks.md")),
                     render_spec_tasks(),
                 ),
             ],
@@ -106,7 +113,9 @@ impl DocKind {
                 render_workflow_metadata(&WorkflowMetadata::empty(slug)),
             )],
             Self::Retrospect => vec![(
-                PathBuf::from(format!("planning/specs/{slug}/11-retrospect.md")),
+                PathBuf::from(format!(
+                    "planning/specs/{slug}/04-Feedback/11-retrospect.md"
+                )),
                 render_retrospect(slug),
             )],
         }
@@ -310,14 +319,20 @@ mod tests {
         assert_eq!(
             DocKind::Spec.paths(&storage, "foo"),
             vec![
-                dir.path().join(".wt/planning/specs/foo/01-intent.md"),
-                dir.path().join(".wt/planning/specs/foo/02-unknowns.md"),
-                dir.path().join(".wt/planning/specs/foo/03-context.md"),
                 dir.path()
-                    .join(".wt/planning/specs/foo/04+05-requirements.md"),
-                dir.path().join(".wt/planning/specs/foo/06-wireframe.md"),
-                dir.path().join(".wt/planning/specs/foo/07-design.md"),
-                dir.path().join(".wt/planning/specs/foo/08-tasks.md")
+                    .join(".wt/planning/specs/foo/01-Learn/01-intent.md"),
+                dir.path()
+                    .join(".wt/planning/specs/foo/01-Learn/02-unknowns.md"),
+                dir.path()
+                    .join(".wt/planning/specs/foo/01-Learn/03-context.md"),
+                dir.path()
+                    .join(".wt/planning/specs/foo/02-Example/04+05-requirements.md"),
+                dir.path()
+                    .join(".wt/planning/specs/foo/02-Example/06-wireframe.md"),
+                dir.path()
+                    .join(".wt/planning/specs/foo/03-Architect/07-design.md"),
+                dir.path()
+                    .join(".wt/planning/specs/foo/03-Architect/08-tasks.md")
             ]
         );
         assert_eq!(
@@ -330,7 +345,10 @@ mod tests {
         );
         assert_eq!(
             DocKind::Retrospect.paths(&storage, "foo"),
-            vec![dir.path().join(".wt/planning/specs/foo/11-retrospect.md")]
+            vec![
+                dir.path()
+                    .join(".wt/planning/specs/foo/04-Feedback/11-retrospect.md")
+            ]
         );
     }
 
@@ -359,16 +377,22 @@ mod tests {
     fn spec_render_includes_tasks_skeleton() {
         let spec = DocKind::Spec.render("foo");
         assert_eq!(spec.len(), 7);
-        assert_eq!(spec[0].0, PathBuf::from("planning/specs/foo/01-intent.md"));
+        assert_eq!(
+            spec[0].0,
+            PathBuf::from("planning/specs/foo/01-Learn/01-intent.md")
+        );
         assert_eq!(
             spec[3].0,
-            PathBuf::from("planning/specs/foo/04+05-requirements.md")
+            PathBuf::from("planning/specs/foo/02-Example/04+05-requirements.md")
         );
         assert_eq!(
             spec[4].0,
-            PathBuf::from("planning/specs/foo/06-wireframe.md")
+            PathBuf::from("planning/specs/foo/02-Example/06-wireframe.md")
         );
-        assert_eq!(spec[6].0, PathBuf::from("planning/specs/foo/08-tasks.md"));
+        assert_eq!(
+            spec[6].0,
+            PathBuf::from("planning/specs/foo/03-Architect/08-tasks.md")
+        );
         assert!(spec[3].1.contains("## 목적 / 성공 기준"));
         assert!(spec[3].1.contains("## 원칙 / 제약"));
         assert!(spec[4].1.contains("## Placeholder contracts"));

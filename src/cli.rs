@@ -180,7 +180,7 @@ pub enum Commands {
         /// Create <repo-root>/.wt/planning/ideas/<feature>.md
         #[arg(long)]
         idea: bool,
-        /// Create numbered prep files under <repo-root>/.wt/planning/specs/<feature>/
+        /// Create phase-folder prep files under <repo-root>/.wt/planning/specs/<feature>/
         #[arg(long)]
         spec: bool,
         /// Create <repo-root>/.wt/execution/tasks/<feature>.toml
@@ -189,7 +189,7 @@ pub enum Commands {
         /// Create <repo-root>/.wt/execution/workflows/<feature>.toml
         #[arg(long)]
         workflow: bool,
-        /// Create <repo-root>/.wt/planning/specs/<feature>/11-retrospect.md
+        /// Create <repo-root>/.wt/planning/specs/<feature>/04-Feedback/11-retrospect.md
         #[arg(long)]
         retrospect: bool,
         /// Create all scaffold document kinds

@@ -548,7 +548,7 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
             retrospecs: ctx
                 .storage_root
                 .display_path(&ctx.storage_root.retrospectives_dir())
-                + " + <repo-root>/.wt/planning/specs/*/11-retrospect.md",
+                + " + <repo-root>/.wt/planning/specs/*/04-Feedback/11-retrospect.md",
             config_paths: config_source_paths(&ctx),
         },
         config: config_summary(&ctx),
@@ -1299,7 +1299,7 @@ fn retrospec_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
         {
             let path = entry?.path();
             if path.is_dir() {
-                let retrospec = path.join("11-retrospect.md");
+                let retrospec = path.join("04-Feedback/11-retrospect.md");
                 if retrospec.exists() {
                     paths.push(retrospec);
                 }
@@ -1900,7 +1900,7 @@ fn is_known_state_or_config_path(relative: &str) -> bool {
                 Some("toml" | "md" | "markdown")
             ))
         || (relative.starts_with("<repo-root>/.wt/planning/specs/")
-            && relative.ends_with("/11-retrospect.md"))
+            && relative.ends_with("/04-Feedback/11-retrospect.md"))
         || (relative.starts_with("<repo-root>/.wt/execution/tasks/") && relative.ends_with(".toml"))
         || (relative.starts_with("<repo-root>/.wt/execution/workflows/")
             && relative.ends_with(".toml"))
@@ -2301,7 +2301,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.retrospecs.items[1].path,
-            "<repo-root>/.wt/planning/specs/demo-spec/11-retrospect.md"
+            "<repo-root>/.wt/planning/specs/demo-spec/04-Feedback/11-retrospect.md"
         );
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
@@ -2549,7 +2549,10 @@ mod tests {
     }
 
     fn write_spec_retrospect(root: &Path, spec: &str, content: &str) {
-        let dir = root.join(".wt/planning/specs").join(spec);
+        let dir = root
+            .join(".wt/planning/specs")
+            .join(spec)
+            .join("04-Feedback");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("11-retrospect.md"), content).unwrap();
     }

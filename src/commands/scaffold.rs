@@ -373,33 +373,33 @@ mod tests {
         assert_eq!(
             relative_files(&ctx),
             vec![
-                "planning/specs/foo/01-intent.md".to_string(),
-                "planning/specs/foo/02-unknowns.md".to_string(),
-                "planning/specs/foo/03-context.md".to_string(),
-                "planning/specs/foo/04+05-requirements.md".to_string(),
-                "planning/specs/foo/06-wireframe.md".to_string(),
-                "planning/specs/foo/07-design.md".to_string(),
-                "planning/specs/foo/08-tasks.md".to_string()
+                "planning/specs/foo/01-Learn/01-intent.md".to_string(),
+                "planning/specs/foo/01-Learn/02-unknowns.md".to_string(),
+                "planning/specs/foo/01-Learn/03-context.md".to_string(),
+                "planning/specs/foo/02-Example/04+05-requirements.md".to_string(),
+                "planning/specs/foo/02-Example/06-wireframe.md".to_string(),
+                "planning/specs/foo/03-Architect/07-design.md".to_string(),
+                "planning/specs/foo/03-Architect/08-tasks.md".to_string()
             ]
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("01-intent.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("01-Learn/01-intent.md")).unwrap(),
             DocKind::Spec.render("foo")[0].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("04+05-requirements.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("02-Example/04+05-requirements.md")).unwrap(),
             DocKind::Spec.render("foo")[3].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("06-wireframe.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("02-Example/06-wireframe.md")).unwrap(),
             DocKind::Spec.render("foo")[4].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("07-design.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("03-Architect/07-design.md")).unwrap(),
             DocKind::Spec.render("foo")[5].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("08-tasks.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("03-Architect/08-tasks.md")).unwrap(),
             DocKind::Spec.render("foo")[6].1
         );
     }
@@ -418,7 +418,7 @@ mod tests {
             format!("{err:#}").contains("Legacy unnumbered spec files already exist"),
             "{err:#}"
         );
-        assert!(!spec_dir.join("01-intent.md").exists());
+        assert!(!spec_dir.join("01-Learn/01-intent.md").exists());
     }
 
     #[test]
@@ -430,10 +430,15 @@ mod tests {
 
         assert_eq!(
             relative_files(&ctx),
-            vec!["planning/specs/foo/11-retrospect.md".to_string()]
+            vec!["planning/specs/foo/04-Feedback/11-retrospect.md".to_string()]
         );
         assert_eq!(
-            fs::read_to_string(ctx.storage_root.specs_dir().join("foo/11-retrospect.md")).unwrap(),
+            fs::read_to_string(
+                ctx.storage_root
+                    .specs_dir()
+                    .join("foo/04-Feedback/11-retrospect.md")
+            )
+            .unwrap(),
             DocKind::Retrospect.render("foo")[0].1
         );
     }
@@ -459,14 +464,14 @@ mod tests {
                 "execution/tasks/foo.toml".to_string(),
                 "execution/workflows/foo.toml".to_string(),
                 "planning/ideas/foo.md".to_string(),
-                "planning/specs/foo/01-intent.md".to_string(),
-                "planning/specs/foo/02-unknowns.md".to_string(),
-                "planning/specs/foo/03-context.md".to_string(),
-                "planning/specs/foo/04+05-requirements.md".to_string(),
-                "planning/specs/foo/06-wireframe.md".to_string(),
-                "planning/specs/foo/07-design.md".to_string(),
-                "planning/specs/foo/08-tasks.md".to_string(),
-                "planning/specs/foo/11-retrospect.md".to_string()
+                "planning/specs/foo/01-Learn/01-intent.md".to_string(),
+                "planning/specs/foo/01-Learn/02-unknowns.md".to_string(),
+                "planning/specs/foo/01-Learn/03-context.md".to_string(),
+                "planning/specs/foo/02-Example/04+05-requirements.md".to_string(),
+                "planning/specs/foo/02-Example/06-wireframe.md".to_string(),
+                "planning/specs/foo/03-Architect/07-design.md".to_string(),
+                "planning/specs/foo/03-Architect/08-tasks.md".to_string(),
+                "planning/specs/foo/04-Feedback/11-retrospect.md".to_string()
             ]
         );
     }
@@ -484,7 +489,7 @@ mod tests {
             relative_files(&ctx),
             vec![
                 "planning/ideas/foo.md".to_string(),
-                "planning/specs/foo/11-retrospect.md".to_string()
+                "planning/specs/foo/04-Feedback/11-retrospect.md".to_string()
             ]
         );
     }
@@ -540,7 +545,7 @@ mod tests {
         assert_eq!(json["feature"], "foo");
         assert_eq!(
             json["created"].as_array().unwrap()[0],
-            "<repo-root>/.wt/planning/specs/foo/11-retrospect.md"
+            "<repo-root>/.wt/planning/specs/foo/04-Feedback/11-retrospect.md"
         );
         assert!(json["skipped"].as_array().unwrap().is_empty());
     }

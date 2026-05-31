@@ -134,9 +134,17 @@ specs, or preparing TaskDocuments, identify the earliest missing LEAF gate:
 
 Use `references/leaf-work.md` for wt-specific gate details and artifacts.
 Do not treat the sequence as a waterfall. Gates loop: when a downstream gate
-overturns an assumption or surfaces a new unknown, return to `02-unknowns.md`
-and `03-context.md`, update the affected later files, and record the discovery
-in `10-review.md` when execution/review evidence caused it.
+overturns an assumption or surfaces a new unknown, return to
+`01-Learn/02-unknowns.md` and `01-Learn/03-context.md`, update the affected
+later files, and record the discovery in `04-Feedback/10-review.md` when
+execution/review evidence caused it.
+
+For wt specs, keep the `.wt/planning/specs/<slug>/` personal-state bucket and
+store LEAF artifacts under phase folders inside it: `01-Learn/`,
+`02-Example/`, `03-Architect/`, and `04-Feedback/`. The slug already names the
+work item, so canonical wt files use stable names like `03-Architect/07-design.md`
+and `04-Feedback/11-retrospect.md` instead of leaf-work's generic
+artifact-suffixed forms.
 
 If a user enters with implementation-shaped wording, reconstruct the missing
 intent, purpose/success criteria, and output form first. If Learn is incomplete,
@@ -196,12 +204,14 @@ The middle gates are a produce -> consume engine:
   behavior across the full variation range, including empty, overflow, edge,
   timing, and failure cases.
 
-Never hide disagreement across a produce/consume edge. `04+05-requirements.md`
-is the common merge; `04+05+06` and `06+07` are not new canonical wt forms.
-New specs use `04+05-requirements.md` for criteria and `06-wireframe.md` /
-`06-wireframe/` for the concrete instance and contract. If inherited work still
-has `04+05+06-requirements.md`, treat it as a pre-split legacy/starter artifact
-and split out Gate 6 before relying on the wireframe as passed.
+Never hide disagreement across a produce/consume edge.
+`02-Example/04+05-requirements.md` is the common merge; `04+05+06` and `06+07`
+are not new canonical wt forms. New specs use
+`02-Example/04+05-requirements.md` for criteria and
+`02-Example/06-wireframe.md` / `02-Example/06-wireframe/` for the concrete
+instance and contract. If inherited work still has `04+05+06-requirements.md`,
+treat it as a pre-split legacy/starter artifact and split out Gate 6 before
+relying on the wireframe as passed.
 
 ## Questions
 
@@ -213,9 +223,10 @@ focused question at a time and include your recommended answer.
 Resolve terminology as you go. If the user uses a term that conflicts with the
 repo docs or code, point to the conflict and propose the canonical term.
 
-When authoring a spec file (`04+05-requirements.md`, `06-wireframe.md`,
-`07-design.md`, `08-tasks.md`, `09-execution.md`), use the **Grill The Spec**
-cycle instead.
+When authoring a spec file (`02-Example/04+05-requirements.md`,
+`02-Example/06-wireframe.md`, `03-Architect/07-design.md`,
+`03-Architect/08-tasks.md`, `03-Architect/09-execution.md`), use the
+**Grill The Spec** cycle instead.
 
 ## Set Output Form
 
@@ -224,8 +235,8 @@ artifact this preparation should produce. This is part of requirements, not a
 separate gate. Do it before wireframe, design, and task graph work so an
 implementation PR is not assumed by default.
 
-Record the output form in `04+05-requirements.md`, TaskDocument
-`계획 (Planning)` section, or `09-execution.md` rationale:
+Record the output form in `02-Example/04+05-requirements.md`, TaskDocument
+`계획 (Planning)` section, or `03-Architect/09-execution.md` rationale:
 
 - docs-only change
 - implementation PR
@@ -245,8 +256,8 @@ task unless the dependency is real and review remains safe.
 Before design, confirm the unknowns and context are sufficient to build a
 realistic representative structure. If mock data, representative examples,
 operator workflow, important states, or system constraints are missing, return
-to `02-unknowns.md` / `03-context.md` instead of letting design discover the
-structure late.
+to `01-Learn/02-unknowns.md` / `01-Learn/03-context.md` instead of letting
+design discover the structure late.
 
 Run cheap iterations before expensive generalization. Gate 6 validates a
 concrete case and locks the contract that case instantiates; Gate 7 consumes
@@ -278,15 +289,16 @@ what can vary, along which axis, and within what range. Unaccounted
 placeholders mean the wireframe validated only one example, not the reusable
 contract that design can safely consume.
 
-Write `06-wireframe.md` for one compact artifact or `06-wireframe/` when there
-are several screens, flows, examples, or transcripts. Do not merge Gate 5's
-test with Gate 6's answer. If inherited work still keeps wireframe material in
-`04+05+06-requirements.md`, split the concrete instance, contracts, variation
-points, and walkthrough result into `06-wireframe.md` before design consumes it.
+Write `02-Example/06-wireframe.md` for one compact artifact or
+`02-Example/06-wireframe/` when there are several screens, flows, examples, or
+transcripts. Do not merge Gate 5's test with Gate 6's answer. If inherited work
+still keeps wireframe material in `04+05+06-requirements.md`, split the concrete
+instance, contracts, variation points, and walkthrough result into
+`02-Example/06-wireframe.md` before design consumes it.
 
 The gate passes only when the user can walk through the text-first structure and
 confirm that it fits. If an artifact-specific wireframe is needed, that concrete
-case must also pass before `07-design.md` generalizes it into component
+case must also pass before `03-Architect/07-design.md` generalizes it into component
 boundaries, state model, command/config shape, data contracts, interaction
 rules, or visual system rules.
 
@@ -320,7 +332,7 @@ For each slice, record:
 - expected duration before first coordinator review, such as `20m`, `45m`, or
   `2h`; derive this from similar retrospectives when available, otherwise mark
   it as a conservative planning guess or range
-- estimate basis: previous `11-retrospect.md`, cross-work `timing.md`,
+- estimate basis: previous `04-Feedback/11-retrospect.md`, cross-work `timing.md`,
   `wt agent wait-stats`, user-provided target, or conservative planning guess
 - suggested watch cadence: launch validation and steady heartbeat interval for
   `wt-work`, based on expected duration and prior timing evidence
@@ -378,7 +390,7 @@ Example body order:
 
 ## 필수 준수 (Hard constraints)
 - Design language: Soft Structuralism + Geist + Phosphor Light. 금지: Inter,
-  generic border. 정본: `<spec-path>/07-design.md` "Design language" 절.
+  generic border. 정본: `<spec-path>/03-Architect/07-design.md` "Design language" 절.
 - Security: write 는 `<repo-root>/.wt/execution/tasks/*.toml` 만.
 - 회귀: `wt ui` 손대지 않음. `Cargo.toml` version 변경 금지.
 - Base: develop (master 아님).
@@ -388,7 +400,7 @@ Example body order:
 ```
 
 Background reason: empirically
-(`<repo-root>/.wt/planning/specs/wt-studio-authoring-surface/11-retrospect.md`),
+(`<repo-root>/.wt/planning/specs/wt-studio-authoring-surface/04-Feedback/11-retrospect.md`),
 visual-grade constraints buried in the lower half of a long task body are
 silently dropped by the first agent turn even when the spec file fully states
 them. Top-of-body placement is the cheap structural fix.
@@ -429,17 +441,18 @@ only because they came from the same conversation. A stack is a dependency
 claim. When unsure, explain the dependency assumption and prefer batch or
 separate workflows over a false parent chain.
 
-### Derive workflow mode from `08-tasks.md`
+### Derive workflow mode from `03-Architect/08-tasks.md`
 
-When a spec exists at `<repo-root>/.wt/planning/specs/<slug>/`, derive the execution
-shape from `08-tasks.md`. Read the slice graph (dependencies, parallel groups,
-shared base, lifecycle) and consult the canonical mapping below to pick a
-workflow mode. Then record the choice and the reasoning in
-`planning/specs/<slug>/09-execution.md` (see Spec Deliverables for authoring shape).
+When a spec exists at `<repo-root>/.wt/planning/specs/<slug>/`, derive the
+execution shape from `03-Architect/08-tasks.md`. Read the slice graph
+(dependencies, parallel groups, shared base, lifecycle) and consult the
+canonical mapping below to pick a workflow mode. Then record the choice and the
+reasoning in `planning/specs/<slug>/03-Architect/09-execution.md` (see Spec
+Deliverables for authoring shape).
 
-Canonical `08-tasks.md` → workflow mode mapping:
+Canonical `03-Architect/08-tasks.md` → workflow mode mapping:
 
-| `08-tasks.md` slice graph | Workflow mode |
+| `03-Architect/08-tasks.md` slice graph | Workflow mode |
 |---|---|
 | All sequential, single agent | `single` |
 | All independent, same base | `batch` |
@@ -451,7 +464,7 @@ Then act on the chosen mode:
 
 - `single` / `batch` / `stack` — create the workflow TOML via
   `wt workflow task --mode <mode> ...` at
-  `<repo-root>/.wt/execution/workflows/<id>.toml`. Record its path in `09-execution.md`
+  `<repo-root>/.wt/execution/workflows/<id>.toml`. Record its path in `03-Architect/09-execution.md`
   under "Linked workflow TOML".
 - `matrix` — create the workflow TOML via
   `wt workflow task --mode matrix <task> --profiles <profile-a>,<profile-b> ...`.
@@ -494,21 +507,26 @@ When asked "anything still not ready?", enumerate everything in-flight and
 bring it all to ready unless the user explicitly defers a specific item.
 
 Generic leaf-work projects store persistent files under phase folders
-(`01-Learn/`, `02-Example/`, `03-Architect/`, `04-Feedback/`). wt intentionally
-uses its `.wt` personal-state buckets instead; keep that repo contract.
-Prepared wt work uses three canonical locations under the planning/execution buckets:
+(`01-Learn/`, `02-Example/`, `03-Architect/`, `04-Feedback/`). wt keeps those
+phase folders inside its `.wt` personal-state buckets instead of creating
+repo-root leaf-work folders.
+Prepared wt work uses three canonical locations under the planning/execution
+buckets:
 
-- `planning/ideas/<slug>.{md,toml}` — kill-able exploration captured by `wt-ready`. Free-form
-  Markdown or TOML. May be deleted at any time. No commitment.
+- `planning/ideas/<slug>.{md,toml}` — kill-able exploration captured by
+  `wt-ready`. Free-form Markdown or TOML. May be deleted at any time. No
+  commitment.
 - `planning/specs/<slug>/` — committed prep artifact. Holds numbered LEAF files:
-  `01-intent.md`, `02-unknowns.md`, `03-context.md`,
-  `04+05-requirements.md`, `06-wireframe.md` / `06-wireframe/`,
-  `07-design.md`, `08-tasks.md`, lazy `09-execution.md`, lazy `10-review.md`,
-  and lazy `11-retrospect.md`.
+  `01-Learn/01-intent.md`, `01-Learn/02-unknowns.md`, `01-Learn/03-context.md`,
+  `02-Example/04+05-requirements.md`, `02-Example/06-wireframe.md` /
+  `02-Example/06-wireframe/`, `03-Architect/07-design.md`,
+  `03-Architect/08-tasks.md`, lazy `03-Architect/09-execution.md`, lazy
+  `04-Feedback/10-review.md`, and lazy `04-Feedback/11-retrospect.md`.
   This is the canonical location for prep work that has been promoted past
   exploration and for spec-backed review/retrospect records.
-- `execution/tasks/<slug>.toml` — TaskDocument, the launch unit. Schema unchanged. The body
-  may reference `planning/specs/<slug>/` files by relative path.
+- `execution/tasks/<slug>.toml` — TaskDocument, the launch unit. Schema
+  unchanged. The body may reference `planning/specs/<slug>/` files by relative
+  path.
 
 The wt CLI does not parse or manage `planning/specs/` as executable state. It
 can *seed* the prep files (`01` through `08`) via `wt scaffold <slug> --spec`;
@@ -522,42 +540,43 @@ existing idea file is promoted, not copied:
 
 - `rm <repo-root>/.wt/planning/ideas/<slug>.{md,toml}` — the visible commit gate
   that distinguishes exploration from committed prep.
-- `wt scaffold <slug> --spec` — seeds `01-intent.md`, `02-unknowns.md`,
-  `03-context.md`, `04+05-requirements.md`, `06-wireframe.md`, `07-design.md`,
-  and `08-tasks.md`.
-- If a mode decision is recorded at prep time, create `09-execution.md` by
-  hand. Scaffold intentionally does not make `09-execution.md` — it is a
+- `wt scaffold <slug> --spec` — seeds `01-Learn/01-intent.md`,
+  `01-Learn/02-unknowns.md`, `01-Learn/03-context.md`,
+  `02-Example/04+05-requirements.md`, `02-Example/06-wireframe.md`,
+  `03-Architect/07-design.md`, and `03-Architect/08-tasks.md`.
+- If a mode decision is recorded at prep time, create `03-Architect/09-execution.md` by
+  hand. Scaffold intentionally does not make `03-Architect/09-execution.md` — it is a
   decision and handoff artifact, not a blank prep skeleton.
 
 The deletion plus spec directory creation is the visible commit gate that
 distinguishes exploration from committed prep. Work that the user requests
-directly, without a prior idea, may go straight into `planning/specs/<slug>/` without an
-idea file existing first.
+directly, without a prior idea, may go straight into `planning/specs/<slug>/`
+without an idea file existing first.
 
 ### Authoring conventions
 
-`01-intent.md`:
+`01-Learn/01-intent.md`:
 
 - Preserve the user's raw wording and the coordinator's interpreted intent as
   separate text.
 - Record whether this spec was promoted from an idea path or entered prep
   directly.
 
-`02-unknowns.md`:
+`01-Learn/02-unknowns.md`:
 
 - Group unknowns by domain concepts, standards/conventions, external facts,
   and internal facts.
 - Mark each unknown `blocking now` or `useful later`; blocking unknowns drive
   evidence gathering.
 
-`03-context.md`:
+`01-Learn/03-context.md`:
 
 - Separate verified facts, inventoried materials, flagged assumptions,
   references, options, and tradeoffs.
 - Do not record final design decisions here unless the decision has already
   been approved downstream.
 
-`04+05-requirements.md`:
+`02-Example/04+05-requirements.md`:
 
 - First line is the user story in Korean:
   `사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.`
@@ -577,10 +596,11 @@ idea file existing first.
 - Regression-sensitive behavior is stated explicitly:
   `WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>`.
 - If inherited work still has `04+05+06-requirements.md`, treat it as
-  pre-split legacy context. Move criteria into `04+05-requirements.md` and Gate
-  6 material into `06-wireframe.md` before launch-ready handoff.
+  pre-split legacy context. Move criteria into
+  `02-Example/04+05-requirements.md` and Gate 6 material into
+  `02-Example/06-wireframe.md` before launch-ready handoff.
 
-`06-wireframe.md` or `06-wireframe/`:
+`02-Example/06-wireframe.md` or `02-Example/06-wireframe/`:
 
 - Validate a concrete case before design. Start by grouping requirements into
   pages, flows, states, commands, or document sections, then create a
@@ -589,8 +609,8 @@ idea file existing first.
   instantiates. For every placeholder or mock value, name the contract it must
   obey and the variation point it leaves open: axis, range, and limits.
 - Record the context adequacy check: which unknowns were resolved, which facts
-  or examples from `03-context.md` support the structure, and which states are
-  intentionally deferred.
+  or examples from `01-Learn/03-context.md` support the structure, and which
+  states are intentionally deferred.
 - After the text-first pass, add an artifact-specific form when needed: HTML for
   web, command transcript, generated TOML, TaskDocument/workflow flow, outline
   with placeholder evidence, API examples, or state table. For UI/web work, this
@@ -602,7 +622,7 @@ idea file existing first.
 - For user-facing, ambiguous, or high-risk flows, record what a blind reader
   inferred from the wireframe alone, plus any mismatch against requirements.
 
-`07-design.md`:
+`03-Architect/07-design.md`:
 
 - Start from the passed wireframe case or explicitly note the brief Gate 6
   artifact that was accepted for tiny work.
@@ -625,7 +645,7 @@ idea file existing first.
   Business Rules) and a Dynamic Model (workflow / behavior) section before the
   new design.
 - Prefer intent and component responsibility over raw code dumps.
-- **Embed ASCII diagrams inside `07-design.md`** where the static model, dynamic
+- **Embed ASCII diagrams inside `03-Architect/07-design.md`** where the static model, dynamic
   model, or layered relationship with sibling specs would benefit from a
   structural view. Diagrams that live only in chat evaporate; the durable
   artifact is the spec file. At minimum, when the design has non-trivial
@@ -637,43 +657,45 @@ idea file existing first.
   - **Layered or cross-spec relationships** — how this design depends on or is
     depended on by sibling specs (dependency direction, layer assignment).
 
-`08-tasks.md`:
+`03-Architect/08-tasks.md`:
 
 - Checkbox items, sequenced as atomic units of work.
 - Mark dependencies or parallelism explicitly so downstream steps can pick the
   right execution shape.
 
-`09-execution.md` (LAZY, only when launch handoff exists):
+`03-Architect/09-execution.md` (LAZY, only when launch handoff exists):
 
 - Prose record of the chosen execution shape and the reasoning derived from
-  `08-tasks.md`. wt CLI does not read or write this file; it is for the human
-  and the agent.
+  `03-Architect/08-tasks.md`. wt CLI does not read or write this file; it is for
+  the human and the agent.
 - Recommended sections:
   - **선택한 모드**: one of `single` / `batch` / `stack` / `matrix` / `none`.
-  - **이유**: dependency analysis from `08-tasks.md` (sequential vs independent,
-    shared base, lifecycle, parallel groups).
-  - **슬라이스 → TaskDocument 매핑**: how `08-tasks.md` slices became one or
-    more TaskDocuments (or direct local edits), with paths.
+  - **이유**: dependency analysis from `03-Architect/08-tasks.md` (sequential vs
+    independent, shared base, lifecycle, parallel groups).
+  - **슬라이스 → TaskDocument 매핑**: how `03-Architect/08-tasks.md` slices became
+    one or more TaskDocuments (or direct local edits), with paths.
   - **연결된 workflow TOML**: `<repo-root>/.wt/execution/workflows/<id>.toml` when
     applicable; `none` otherwise.
   - **wt-work target**: exact command or target for execution launch.
   - **시간 가정 / watch cadence**: expected duration, estimate basis, launch
     validation cadence, and steady watch cadence to hand to `wt-work`.
   - **리스크**: anything to watch when execution starts.
-- When mode = `none`, `09-execution.md` may be very brief (one paragraph plus the
-  slice → TaskDocument mapping) or omitted entirely.
+- When mode = `none`, `03-Architect/09-execution.md` may be very brief (one
+  paragraph plus the slice → TaskDocument mapping) or omitted entirely.
 - The executable workflow is still the TOML at
   `<repo-root>/.wt/execution/workflows/<id>.toml`, created via
-  `wt workflow task --mode ...`. `09-execution.md` is prose only and never
-  replaces the TOML.
+  `wt workflow task --mode ...`. `03-Architect/09-execution.md` is prose only
+  and never replaces the TOML.
 
 Spec files are not frozen at handoff. `wt-work` may update
-`07-design.md`, `08-tasks.md`, `09-execution.md`, and `10-review.md` in place
-during execution to reflect findings; treat the spec as a living artifact that
-the running work writes back to. The two-way sync rule applies to
-`09-execution.md` the same way it applies to `07-design.md` / `08-tasks.md` —
-when execution drifts from the chosen mode, update `09-execution.md` rather
-than silently changing the workflow TOML.
+`03-Architect/07-design.md`, `03-Architect/08-tasks.md`,
+`03-Architect/09-execution.md`, and `04-Feedback/10-review.md` in place during
+execution to reflect findings; treat the spec as a living artifact that the
+running work writes back to. The two-way sync rule applies to
+`03-Architect/09-execution.md` the same way it applies to
+`03-Architect/07-design.md` / `03-Architect/08-tasks.md`: when execution drifts
+from the chosen mode, update `03-Architect/09-execution.md` rather than silently
+changing the workflow TOML.
 
 ## Grill The Spec
 
@@ -701,7 +723,7 @@ makes a file authoritative.
 
 ### File-specific grill foci
 
-`04+05-requirements.md`:
+`02-Example/04+05-requirements.md`:
 
 - Whether the purpose/success criteria explain the desired effect rather than
   only naming an artifact to produce.
@@ -718,10 +740,10 @@ makes a file authoritative.
 - Ambiguity inside EARS phrasing: does `WHEN` describe a trigger or a state?
   Is `THE SYSTEM` the CLI, the harness, or the agent?
 
-`06-wireframe.md` / `06-wireframe/`:
+`02-Example/06-wireframe.md` / `02-Example/06-wireframe/`:
 
 - Whether unknowns and context are sufficient to create realistic mock data.
-  If not, return to `02-unknowns.md` / `03-context.md` before design.
+  If not, return to `01-Learn/02-unknowns.md` / `01-Learn/03-context.md` before design.
 - Whether requirements are grouped into concrete pages, flows, states,
   commands, or document sections before drawing.
 - Whether the text-first wireframe uses representative data, examples, states,
@@ -736,7 +758,7 @@ makes a file authoritative.
   (for example HTML for web, generated TOML for config, or API
   request/response examples).
 - For UI/web work, whether the visual treatment is sufficient to judge the
-  concrete case before generalizing a visual system in `07-design.md`.
+  concrete case before generalizing a visual system in `03-Architect/07-design.md`.
 - Which empty/error/edge/loading/conflict states change structure and therefore
   must appear before design.
 - Whether the wireframe reveals missing requirements or wrong assumptions.
@@ -744,7 +766,7 @@ makes a file authoritative.
   success criteria shows the requirement should change, the instance should
   change, or the work should return to Learn.
 
-`07-design.md`:
+`03-Architect/07-design.md`:
 
 - Whether it builds on a passed wireframe instead of doing hidden wireframe
   discovery inside design.
@@ -774,7 +796,7 @@ makes a file authoritative.
   wide cross-module changes as critic-pass triggers unless the user explicitly
   accepts skipping review.
 
-`08-tasks.md`:
+`03-Architect/08-tasks.md`:
 
 - Slice granularity. Is a slice too coarse to review safely, or too fine to
   justify its own branch?
@@ -785,10 +807,11 @@ makes a file authoritative.
 - Whether each slice is independently demoable, and what the acceptance check
   actually proves.
 
-`09-execution.md`:
+`03-Architect/09-execution.md`:
 
 - Mode-choice rationale. Walk the canonical mapping table from **Derive
-  workflow mode from `08-tasks.md`** and ask which row this spec sits on.
+  workflow mode from `03-Architect/08-tasks.md`** and ask which row this spec
+  sits on.
 - Alternatives considered. Could this be `batch` instead of `stack`? `matrix`
   for variant exploration? If the answer is "I didn't consider them", grill
   there before recording the choice.

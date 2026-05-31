@@ -80,16 +80,20 @@ Canonical personal storage layout:
 │   │   └── <slug>.{md,toml}
 │   ├── specs/
 │   │   └── <slug>/
-│   │       ├── 01-intent.md
-│   │       ├── 02-unknowns.md
-│   │       ├── 03-context.md
-│   │       ├── 04+05-requirements.md
-│   │       ├── 06-wireframe.md           # or 06-wireframe/ when several cases
-│   │       ├── 07-design.md
-│   │       ├── 08-tasks.md
-│   │       ├── 09-execution.md    # lazy, when launch handoff exists
-│   │       ├── 10-review.md       # lazy, when review/sync evidence exists
-│   │       └── 11-retrospect.md   # lazy, for spec-backed work retrospectives
+│   │       ├── 01-Learn/
+│   │       │   ├── 01-intent.md
+│   │       │   ├── 02-unknowns.md
+│   │       │   └── 03-context.md
+│   │       ├── 02-Example/
+│   │       │   ├── 04+05-requirements.md
+│   │       │   └── 06-wireframe.md
+│   │       ├── 03-Architect/
+│   │       │   ├── 07-design.md
+│   │       │   ├── 08-tasks.md
+│   │       │   └── 09-execution.md    # lazy, when launch handoff exists
+│   │       └── 04-Feedback/
+│   │           ├── 10-review.md       # lazy, when review/sync evidence exists
+│   │           └── 11-retrospect.md   # lazy, for spec-backed work retrospectives
 │   └── retrospectives/
 │       └── <slug>.md         # cross-work/spec-less retrospectives only
 ├── execution/
@@ -174,11 +178,19 @@ review/sync, retrospect를 담는 긴 human/AI artifact이고, TaskDocument는 `
 `wt workflow`가 소비하는 실행 단위다. Spec 없이 TaskDocument TOML만 있는 pre-redesign task도
 valid local task로 남는다.
 
+Spec 내부의 canonical layout은 LEAF phase folder다. `planning/specs/<slug>/` bucket은
+wt의 personal-state ownership을 유지하고, 그 안에서 `01-Learn/`, `02-Example/`,
+`03-Architect/`, `04-Feedback/`이 사고 과정의 phase를 표현한다. 일반 leaf-work는 여러
+artifact를 담기 위해 `07-design-<artifact>.md`, `09-execution-<artifact>.md`,
+`10-review-<artifact>-vN.md`, `11-retrospect-<topic>.md` 같은 suffix를 권장하지만, wt spec은
+slug 하나가 하나의 work item을 소유하므로 canonical file은 `07-design.md`,
+`09-execution.md`, `10-review.md`, `11-retrospect.md`처럼 deterministic하게 둔다.
+
 `wt scaffold`가 만드는 idea/spec/task/workflow/retrospect template의 사람이 읽는 제목과
 section heading은 한국어를 기본으로 한다. TOML field name(`title`, `branch`, `mode` 등)은
 schema contract이므로 영어로 유지하지만, 값과 body template은 한국어로 읽히게 한다.
 
-`planning/specs/<slug>/01-intent.md`는 raw user wording, interpreted intent, and promotion note를
+`planning/specs/<slug>/01-Learn/01-intent.md`는 raw user wording, interpreted intent, and promotion note를
 preserve한다. 이 파일은 later agent가 "사용자가 실제로 무엇을 요청했는지"와 "coordinator가
 어떻게 해석했는지"를 구분할 수 있게 해야 한다.
 Intent는 core noun과 topology도 기록할 수 있다. Core noun은 사용자가 실제로 바꾸려는 대상
@@ -186,13 +198,13 @@ Intent는 core noun과 topology도 기록할 수 있다. Core noun은 사용자�
 있는 top-level outcome, surface, integration, deliverable 목록이다. Deferred topology item은
 삭제하지 않고 왜 이번 prep에서 제외했는지 적는다.
 
-`planning/specs/<slug>/02-unknowns.md`는 domain concepts, standards/conventions, external facts,
+`planning/specs/<slug>/01-Learn/02-unknowns.md`는 domain concepts, standards/conventions, external facts,
 internal facts를 구분하고 각 항목을 `blocking now` 또는 `useful later`로 표시한다. Evidence
 gathering은 이 unknown list를 agenda로 삼는다. Gate 1-5 prep에서는 intent, topology, success,
 constraints, output form 중 현재 가장 약한 clarity row를 표시해서 다음 질문이나 evidence pass가
 그 gap을 줄이도록 한다.
 
-`planning/specs/<slug>/03-context.md`는 verified facts, inventoried user/team material, flagged
+`planning/specs/<slug>/01-Learn/03-context.md`는 verified facts, inventoried user/team material, flagged
 assumptions, references/options/tradeoffs를 담는다. 이 파일은 결정문이 아니라 downstream gates가
 의존할 수 있는 fact inventory다.
 
@@ -202,11 +214,14 @@ Wireframe은 criteria가 통과해야 하는 concrete instance와 contract이므
 placeholder, variation point, structure decision이 있으면 `06-wireframe.md` 또는
 `06-wireframe/`로 분리한다.
 
-`wt scaffold <slug> --spec`은 새 spec에 `04+05-requirements.md`와 `06-wireframe.md`를
-separate files로 seed한다. 기존 `04+05+06-requirements.md`는 pre-split legacy/starter artifact로만
-취급한다. 새 spec이나 새 docs는 `04+05+06-requirements.md`를 만들지 않는다.
+`wt scaffold <slug> --spec`은 새 spec에 phase folders를 seed한다:
+`01-Learn/01-intent.md`, `01-Learn/02-unknowns.md`, `01-Learn/03-context.md`,
+`02-Example/04+05-requirements.md`, `02-Example/06-wireframe.md`,
+`03-Architect/07-design.md`, `03-Architect/08-tasks.md`. 기존
+`04+05+06-requirements.md`는 pre-split legacy/starter artifact로만 취급한다. 새 spec이나 새
+docs는 `04+05+06-requirements.md`를 만들지 않는다.
 
-`planning/specs/<slug>/04+05-requirements.md`는 purpose/success criteria,
+`planning/specs/<slug>/02-Example/04+05-requirements.md`는 purpose/success criteria,
 requirements/principles, output form을 담는다. 첫 줄은 한국어 사용자 스토리 line으로 시작한다.
 
 ```text
@@ -230,14 +245,15 @@ preserved behavior를 다음 형태로 적는다.
 WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>
 ```
 
-`planning/specs/<slug>/06-wireframe.md` 또는 `06-wireframe/`는 Gate 6의 concrete instance와
-contract를 담는다. 먼저 requirements를 pages, flows, states, commands, document sections 같은
-실제 나타날 bucket으로 묶고, text-first wireframe을 만든다: ASCII layout, command transcript,
-sequence sketch, table/state matrix, 또는 placeholder evidence가 있는 outline. 각 placeholder나
-mock value는 어떤 contract를 instantiates하는지, 무엇이 어떤 axis/range 안에서 변할 수 있는지
-기록한다. User/operator walkthrough가 통과하기 전에는 `07-design.md`가 구조를 일반화하면 안 된다.
+`planning/specs/<slug>/02-Example/06-wireframe.md` 또는 `02-Example/06-wireframe/`는 Gate
+6의 concrete instance와 contract를 담는다. 먼저 requirements를 pages, flows, states,
+commands, document sections 같은 실제 나타날 bucket으로 묶고, text-first wireframe을 만든다:
+ASCII layout, command transcript, sequence sketch, table/state matrix, 또는 placeholder
+evidence가 있는 outline. 각 placeholder나 mock value는 어떤 contract를 instantiates하는지,
+무엇이 어떤 axis/range 안에서 변할 수 있는지 기록한다. User/operator walkthrough가 통과하기
+전에는 `03-Architect/07-design.md`가 구조를 일반화하면 안 된다.
 
-`planning/specs/<slug>/07-design.md`는 결정사항, 영향받는 컴포넌트, 제약을 적는다.
+`planning/specs/<slug>/03-Architect/07-design.md`는 결정사항, 영향받는 컴포넌트, 제약을 적는다.
 Gate 7 design은 Gate 6 contract와 variation points를 input으로 consume하고, concrete instance를
 모든 valid instance를 생성할 수 있는 reusable generator로 일반화한다. Empty, overflow, edge,
 timing, failure case처럼 단일 mock instance가 보여주지 못한 variation range를 다룬다. Design이
@@ -247,16 +263,19 @@ Gate 7은 principles, decision drivers, viable options, steelman antithesis를 d
 Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw code dump가 아니라
 intent와 component responsibility 중심으로 설명한다.
 
-`planning/specs/<slug>/08-tasks.md`는 작업 목록 section 아래에 sequenced atomic unit을 checkbox item으로 나열한다. 각 item은
-dependency를 적고, dependency가 없는 item은 parallel 가능하다고 표시할 수 있다.
+`planning/specs/<slug>/03-Architect/08-tasks.md`는 작업 목록 section 아래에 sequenced
+atomic unit을 checkbox item으로 나열한다. 각 item은 dependency를 적고, dependency가 없는
+item은 parallel 가능하다고 표시할 수 있다.
 
-`planning/specs/<slug>/09-execution.md`는 `08-tasks.md`에서 드러난 slice graph를 어떤 execution shape로
-실행할지와 그 이유, `wt-work` target, TaskDocument path, optional saved Workflow TOML path,
-PR/landing policy, acceptance checks를 prose로 기록하는 lazy prep/execution artifact다. 실제
-handoff에는 file path, module/symbol, issue/task id, acceptance criteria, numbered implementation
-step, command/config transcript, representative example/mock data, named output artifact, or
-user-accepted residual risk 같은 concrete execution signal이 있어야 한다. Saved execution plan은 계속 `<repo-root>/.wt/execution/workflows/<id>.toml`에 있고,
-`09-execution.md`는 executable Workflow TOML이 아니다.
+`planning/specs/<slug>/03-Architect/09-execution.md`는 `03-Architect/08-tasks.md`에서
+드러난 slice graph를 어떤 execution shape로 실행할지와 그 이유, `wt-work` target,
+TaskDocument path, optional saved Workflow TOML path, PR/landing policy, acceptance checks를
+prose로 기록하는 lazy prep/execution artifact다. 실제 handoff에는 file path, module/symbol,
+issue/task id, acceptance criteria, numbered implementation step, command/config transcript,
+representative example/mock data, named output artifact, or user-accepted residual risk 같은
+concrete execution signal이 있어야 한다. Saved execution plan은 계속
+`<repo-root>/.wt/execution/workflows/<id>.toml`에 있고, `03-Architect/09-execution.md`는
+executable Workflow TOML이 아니다.
 
 Canonical `08-tasks.md` slice graph → execution decision mapping:
 
@@ -275,22 +294,23 @@ prep 판단이다. 이 값은 direct `wt run task`로 충분하거나, slice들�
 Spec은 `wt-ready` exit 시점에 frozen되지 않는다. Execution 중 `wt-work` phase에서
 findings가 나오면 design, task list, execution shape rationale을 in place로 업데이트할 수
 있다. 선택한 mode가 더 이상 맞지 않거나 실제 Workflow TOML과 spec이 갈라지면
-`09-execution.md`를 rationale과 함께 업데이트한다. Review/check evidence, spec drift, and
-mid-process discoveries는 `planning/specs/<slug>/10-review.md`에 기록한다. Spec과 implementation이
-drift하면 조용히 갈라지게 두지 말고 spec을 업데이트해 다시 맞춘다.
+`03-Architect/09-execution.md`를 rationale과 함께 업데이트한다. Review/check evidence, spec
+drift, and mid-process discoveries는 `planning/specs/<slug>/04-Feedback/10-review.md`에
+기록한다. Spec과 implementation이 drift하면 조용히 갈라지게 두지 말고 spec을 업데이트해
+다시 맞춘다.
 
-Spec-backed work의 retrospective는 기본적으로 `planning/specs/<slug>/11-retrospect.md`에 둔다.
+Spec-backed work의 retrospective는 기본적으로 `planning/specs/<slug>/04-Feedback/11-retrospect.md`에 둔다.
 `<repo-root>/.wt/planning/retrospectives/`는 여러 work item을 가로지르는 cross-work learning,
 spec이 없는 legacy/direct work, 또는 의도적으로 한 spec에 묶이지 않는 회고의 fallback이다.
 새 per-work retrospective를 전역 `retrospectives/` 아래에 만들지 않는다.
 
-`11-retrospect.md`는 작업별 timing record를 포함한다. 최소한 TaskDocument의 expected
+`04-Feedback/11-retrospect.md`는 작업별 timing record를 포함한다. 최소한 TaskDocument의 expected
 duration, estimate basis, 실제 시작/종료/elapsed, 최초 meaningful signal, 사용한
 `wt agent watch` cadence, `needs_input`/report 전이, 개입 이유, 다음 추정 조정을 적는다.
 Spec-backed workflow는 workflow 전체 요약만 쓰지 말고 task/slice별 timing entry를 둔다.
 Cross-work timing 보정은 `<repo-root>/.wt/planning/retrospectives/timing.md` 같은 rolling
 retrospective에 축약할 수 있지만, 이것은 여러 작업을 가로지르는 학습 기록이지 per-work
-`11-retrospect.md`의 대체물이 아니다. `runtime/agents/<name>/observations/wait-observations.jsonl`과
+`04-Feedback/11-retrospect.md`의 대체물이 아니다. `runtime/agents/<name>/observations/wait-observations.jsonl`과
 `wt agent wait-stats`는 watch heartbeat/timeout 관측 증거로 인용할 수 있으나, 실제 작업
 소요시간의 canonical source로 보지 않는다.
 

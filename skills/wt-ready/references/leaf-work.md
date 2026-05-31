@@ -56,7 +56,8 @@ row is still weak, record the residual risk and the cheapest follow-up that
 would reduce it.
 
 Kiro's spec-driven workflow maps to
-`04+05-requirements.md -> 06-wireframe.md -> 07-design.md -> 08-tasks.md`.
+`02-Example/04+05-requirements.md -> 02-Example/06-wireframe.md ->
+03-Architect/07-design.md -> 03-Architect/08-tasks.md`.
 New wt specs keep Gate 5 criteria and Gate 6 instance/contract separate. Treat
 pre-split `04+05+06-requirements.md` files as legacy/starter context and split
 them before launch-ready handoff.
@@ -65,9 +66,21 @@ the operational mapping is:
 
 ```text
 planning/ideas/<slug>.{md,toml}
--> planning/specs/<slug>/{01-intent.md,02-unknowns.md,03-context.md,
-   04+05-requirements.md, 06-wireframe.md,
-   07-design.md,08-tasks.md,09-execution.md?,10-review.md?,11-retrospect.md?}
+-> planning/specs/<slug>/
+   01-Learn/
+     01-intent.md
+     02-unknowns.md
+     03-context.md
+   02-Example/
+     04+05-requirements.md
+     06-wireframe.md
+   03-Architect/
+     07-design.md
+     08-tasks.md
+     09-execution.md?
+   04-Feedback/
+     10-review.md?
+     11-retrospect.md?
 -> execution/tasks/<slug>.toml and/or execution/workflows/<id>.toml
 -> execution/task-runs/<id>.toml
 -> review, land, retrospect
@@ -78,7 +91,7 @@ planning/ideas/<slug>.{md,toml}
 Owner: `wt-ready`.
 
 Artifact: `planning/ideas/<slug>.{md,toml}` when the thought is exploratory; otherwise
-`planning/specs/<slug>/01-intent.md` or a short intent note in the TaskDocument body.
+`planning/specs/<slug>/01-Learn/01-intent.md` or a short intent note in the TaskDocument body.
 
 Gate to next step:
 
@@ -108,7 +121,7 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: idea body section, or `planning/specs/<slug>/02-unknowns.md`, listing unknowns
+Artifact: idea body section, or `planning/specs/<slug>/01-Learn/02-unknowns.md`, listing unknowns
 by category — domain concepts, standards/conventions, external facts, internal
 facts — with each item marked `blocking now` or `useful later`.
 
@@ -130,7 +143,7 @@ Gate to next step:
 Return here when:
 
 - A new unknown surfaces mid-work and is researched on the spot — surfacing
-  was incomplete. Log it under `planning/specs/<slug>/10-review.md` so
+  was incomplete. Log it under `planning/specs/<slug>/04-Feedback/10-review.md` so
   `wt-land` can diagnose which category was missed next time.
 - Repeated unplanned research detours start interrupting drafting or
   implementation.
@@ -140,7 +153,7 @@ Return here when:
 Owner: `wt-ready`.
 
 Artifact: idea body sections for references/options/tradeoffs, or
-`planning/specs/<slug>/03-context.md`.
+`planning/specs/<slug>/01-Learn/03-context.md`.
 
 Purpose: use the Unknown surfacing list as the research agenda, then sharpen
 intent before forcing purpose, requirements, or output form. This is where
@@ -173,7 +186,7 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: idea body, then `planning/specs/<slug>/04+05-requirements.md`
+Artifact: idea body, then `planning/specs/<slug>/02-Example/04+05-requirements.md`
 user story and problem context.
 
 Gate to next step:
@@ -194,7 +207,7 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: `planning/specs/<slug>/04+05-requirements.md`.
+Artifact: `planning/specs/<slug>/02-Example/04+05-requirements.md`.
 
 Gate to next step:
 
@@ -226,14 +239,15 @@ Return here when:
 Owner: `wt-ready`, with `wt-work` updating it when execution findings
 show that the validated structure was wrong.
 
-Artifact: `planning/specs/<slug>/06-wireframe.md` for one compact artifact, or
-`06-wireframe/` for several screens/flows/examples. Gate 6 is the cheap-iteration gate before expensive
-generalization. It validates a concrete case by grouping requirements into
-pages, flows, states, commands, or document sections; walking a representative
-journey; then drawing a text-first wireframe by default: ASCII layout, command
-transcript, sequence sketch, table/state matrix, or outline with placeholder
-evidence. After that passes, add the artifact-specific shape when needed: HTML
-for web, generated TOML example, TaskDocument/workflow flow,
+Artifact: `planning/specs/<slug>/02-Example/06-wireframe.md` for one compact
+artifact, or `02-Example/06-wireframe/` for several screens/flows/examples.
+Gate 6 is the cheap-iteration gate before expensive generalization. It validates
+a concrete case by grouping requirements into pages, flows, states, commands,
+or document sections; walking a representative journey; then drawing a
+text-first wireframe by default: ASCII layout, command transcript, sequence
+sketch, table/state matrix, or outline with placeholder evidence. After that
+passes, add the artifact-specific shape when needed: HTML for web, generated
+TOML example, TaskDocument/workflow flow,
 API request/response examples, or realistic state table. For visual outputs,
 this may include visual treatment for the concrete case; it is still a case,
 not the generalized system.
@@ -250,8 +264,8 @@ Entry condition:
 
 - Wireframe-relevant unknowns have been surfaced and either resolved,
   explicitly deferred, or turned into HITL/spike work.
-- `03-context.md` has enough verified facts, representative examples, current
-  behavior, user/team material, constraints, and assumptions to build a
+- `01-Learn/03-context.md` has enough verified facts, representative examples,
+  current behavior, user/team material, constraints, and assumptions to build a
   realistic text-first artifact.
 - Mock data or representative examples exist. If they do not, return to Unknown
   surfacing / Context exploration before drawing the structure.
@@ -299,7 +313,7 @@ Return here when:
 Owner: `wt-ready`, with `wt-work` updating it when execution findings
 invalidate assumptions.
 
-Artifact: `planning/specs/<slug>/07-design.md`.
+Artifact: `planning/specs/<slug>/03-Architect/07-design.md`.
 
 Purpose: consume the Gate 6 instance, contracts, and variation points, then
 generalize them into implementation-facing design rules: component boundaries,
@@ -349,8 +363,9 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: `planning/specs/<slug>/08-tasks.md`, optional `09-execution.md`,
-TaskDocuments, and saved Workflow TOML when needed.
+Artifact: `planning/specs/<slug>/03-Architect/08-tasks.md`, optional
+`03-Architect/09-execution.md`, TaskDocuments, and saved Workflow TOML when
+needed.
 
 Gate to next step:
 
@@ -375,7 +390,7 @@ Return here when:
 
 Owner: `wt-ready` prepares; `wt-work` launches.
 
-Artifact: `09-execution.md`, TaskDocument body `계획 (Planning)` section,
+Artifact: `03-Architect/09-execution.md`, TaskDocument body `계획 (Planning)` section,
 optional Workflow policy snapshot, and exact `wt-work` target.
 
 In generic LEAF work, Gate 9 is the result or execution artifact itself. In
@@ -405,9 +420,9 @@ Return here when:
 Owner: `wt-work` records the evidence while doing Architect execution;
 `wt-land` consumes it as Feedback material.
 
-Artifact: reviewed diff/check evidence, updated `07-design.md`,
-`08-tasks.md`, `09-execution.md`, and `10-review.md` when execution reality
-changes the plan.
+Artifact: reviewed diff/check evidence, updated `03-Architect/07-design.md`,
+`03-Architect/08-tasks.md`, `03-Architect/09-execution.md`, and
+`04-Feedback/10-review.md` when execution reality changes the plan.
 
 Gate to next step:
 
@@ -415,7 +430,7 @@ Gate to next step:
   report.
 - Checks are scaled to risk and recorded.
 - Spec drift is fixed in the spec instead of being left as a stale artifact.
-- Unplanned research is logged to `10-review.md` so the
+- Unplanned research is logged to `04-Feedback/10-review.md` so the
   retrospective can diagnose which Unknown surfacing category was missed.
 - Workflow-linked runs are completed only after review passes.
 
@@ -428,7 +443,7 @@ Return here when:
 
 Owner: `wt-land` after landing or explicit discard.
 
-Artifact: `planning/specs/<slug>/11-retrospect.md` for spec-backed work, or
+Artifact: `planning/specs/<slug>/04-Feedback/11-retrospect.md` for spec-backed work, or
 `<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` for cross-work or
 spec-less retrospectives.
 
@@ -439,10 +454,11 @@ Gate to future work:
   skill/docs changes.
 - Harness tuning names the exact file and section to update when the lesson
   should permanently change agent behavior.
-- When `10-review.md` records mid-process discoveries for this run, each discovery is
-  classified against the Unknown surfacing categories (domain / standards /
-  external / internal). The category that was missed becomes either a
-  `try` item or a `harness_tuning` entry for the next run's surfacing pass.
+- When `04-Feedback/10-review.md` records mid-process discoveries for this run,
+  each discovery is classified against the Unknown surfacing categories (domain
+  / standards / external / internal). The category that was missed becomes
+  either a `try` item or a `harness_tuning` entry for the next run's surfacing
+  pass.
 
 Return here when:
 
@@ -460,13 +476,14 @@ the work is ready for the next one. Examples:
 - Missing examples or direction: use the unknowns list to run bounded
   discovery/reference benchmarking.
 - Missing observable behavior or output form: write or grill
-  `04+05-requirements.md`.
+  `02-Example/04+05-requirements.md`.
 - Missing mock data, workflow, states, or constraints for structure: return to
-  `02-unknowns.md` / `03-context.md`.
+  `01-Learn/02-unknowns.md` / `01-Learn/03-context.md`.
 - Missing structure validation: write or grill the text-first
-  `06-wireframe.md` before design; add an artifact-specific wireframe only when
+  `02-Example/06-wireframe.md` before design; add an artifact-specific wireframe only when
   needed.
-- Missing ownership/boundary decision: write or grill `07-design.md`.
-- Missing dependency graph: write or grill `08-tasks.md` / `09-execution.md`.
+- Missing ownership/boundary decision: write or grill `03-Architect/07-design.md`.
+- Missing dependency graph: write or grill `03-Architect/08-tasks.md` /
+  `03-Architect/09-execution.md`.
 - Missing reviewable size: split the task graph.
 - Missing execution target: stop with unresolved `wt-work` handoff.

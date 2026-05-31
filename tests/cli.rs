@@ -4106,12 +4106,12 @@ fn scaffold_supports_json_global_flag() {
     assert_eq!(value["feature"], "demo");
     assert_eq!(
         value["created"][0],
-        "<repo-root>/.wt/planning/specs/demo/11-retrospect.md"
+        "<repo-root>/.wt/planning/specs/demo/04-Feedback/11-retrospect.md"
     );
     assert!(value["skipped"].as_array().unwrap().is_empty());
     assert!(
         temp.path()
-            .join(".wt/planning/specs/demo/11-retrospect.md")
+            .join(".wt/planning/specs/demo/04-Feedback/11-retrospect.md")
             .is_file()
     );
 }
