@@ -6,9 +6,25 @@ use crate::services::cmux::{
 };
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
+use std::time::Duration;
 
 pub const DEFAULT_PAYLOAD_CAP_BYTES: usize = 1024;
 pub(crate) const CODEX_IN_PROMPT_NEWLINE_KEY: &str = "shift-enter";
+
+/// How many times to (re)send the submit Enter to codex. The Enter races
+/// codex's ingestion of the just-delivered multi-line input and can be
+/// swallowed as a newline, leaving the prompt unsent. We re-send only on
+/// positive evidence that the composer still holds the prompt.
+const CODEX_SUBMIT_MAX_ATTEMPTS: usize = 3;
+/// Bottom-of-screen lines to inspect when confirming submission.
+const CODEX_SUBMIT_VERIFY_LINES: usize = 40;
+/// Grace after Enter before reading the screen to confirm submission.
+const CODEX_SUBMIT_VERIFY_GRACE: Duration = Duration::from_millis(400);
+/// Substring codex prints while a turn is in flight.
+const CODEX_WORKING_MARKER: &str = "esc to interrupt";
+/// Cap on the prompt-tail needle used to detect an unsent composer; keeping it
+/// short avoids false negatives from terminal line wrapping.
+const CODEX_SUBMIT_NEEDLE_CAP: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushKind {
@@ -184,8 +200,70 @@ pub(crate) fn submit_codex_prompt(
         }
     }
 
-    let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
-    run_cmux(runner, &enter_args, "send-key")
+    let last_prompt_line = lines
+        .iter()
+        .rev()
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    submit_codex_enter(runner, surface_id, workspace, last_prompt_line)
+}
+
+/// Deliver the submit Enter to codex and confirm it landed.
+///
+/// The Enter races codex's ingestion of the just-delivered multi-line input;
+/// fired with no settle it is swallowed as a newline and the prompt sits unsent
+/// (observed against codex gpt-5.5 in cmux 0.64.x). We settle before each Enter
+/// (the root-cause fix, mirroring the Claude paste path) and, when the workspace
+/// is known, re-send Enter only on positive evidence that the composer still
+/// holds the prompt. Without that evidence — or when the screen cannot be read —
+/// we trust the settled Enter rather than risk submitting an extra empty turn.
+fn submit_codex_enter(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: Option<&str>,
+    last_prompt_line: &str,
+) -> Result<()> {
+    let cmux = CmuxService::new(runner);
+    let needle: String = last_prompt_line
+        .chars()
+        .take(CODEX_SUBMIT_NEEDLE_CAP)
+        .collect();
+    for attempt in 0..CODEX_SUBMIT_MAX_ATTEMPTS {
+        std::thread::sleep(PASTE_SUBMIT_SETTLE);
+        let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
+        run_cmux(runner, &enter_args, "send-key")?;
+
+        // Confirmation needs a workspace to read and a distinctive needle to
+        // look for; without either, trust the settled Enter.
+        let Some(ws) = workspace else {
+            return Ok(());
+        };
+        if needle.is_empty() || attempt + 1 == CODEX_SUBMIT_MAX_ATTEMPTS {
+            return Ok(());
+        }
+
+        std::thread::sleep(CODEX_SUBMIT_VERIFY_GRACE);
+        match cmux.read_screen_lines(surface_id, ws, CODEX_SUBMIT_VERIFY_LINES) {
+            Ok(screen) if codex_prompt_submitted(&screen, &needle) => return Ok(()),
+            Ok(_) => { /* composer still holds the prompt: re-send Enter */ }
+            Err(_) => return Ok(()),
+        }
+    }
+    Ok(())
+}
+
+/// Decide whether a codex prompt was submitted from a bottom-of-screen capture.
+///
+/// A submitted turn shows codex's working marker; otherwise, an accepted prompt
+/// clears the composer so the prompt tail is gone. Only a screen that still
+/// shows the prompt tail with no working marker is treated as unsent.
+fn codex_prompt_submitted(screen: &str, needle: &str) -> bool {
+    let lower = screen.to_ascii_lowercase();
+    if lower.contains(CODEX_WORKING_MARKER) {
+        return true;
+    }
+    !screen.contains(needle)
 }
 
 fn push_pasted_prompt(
@@ -525,8 +603,9 @@ mod tests {
     #[test]
     fn codex_push_in_workspace_passes_workspace_to_send_commands() {
         let mut runner = MockRunner::new();
-        runner.add_response("", true);
-        runner.add_response("", true);
+        runner.add_response("", true); // send hello
+        runner.add_response("", true); // send-key enter
+        runner.add_response("> working (esc to interrupt)", true); // read-screen verify
 
         CmuxPushService::new(&runner)
             .push_to_surface_in_workspace(
@@ -538,7 +617,7 @@ mod tests {
             .unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 2);
+        assert_eq!(calls.len(), 3);
         assert_eq!(
             calls[0].1,
             vec![
@@ -563,6 +642,76 @@ mod tests {
                 "enter"
             ]
         );
+        // Working marker observed -> no extra Enter, just the confirming read.
+        assert_eq!(
+            calls[2].1,
+            vec![
+                "read-screen",
+                "--surface",
+                "surface:4",
+                "--workspace",
+                "workspace:2",
+                "--lines",
+                "40"
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_resends_enter_when_composer_still_holds_prompt() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true); // send "hello"
+        runner.add_response("", true); // shift-enter
+        runner.add_response("", true); // send "world please run it"
+        runner.add_response("", true); // send-key enter (attempt 0)
+        // Composer still shows the prompt tail, no working marker -> not submitted.
+        runner.add_response("  world please run it", true); // read-screen (attempt 0)
+        runner.add_response("", true); // send-key enter (attempt 1, the resend)
+        runner.add_response("running (esc to interrupt)", true); // read-screen (attempt 1)
+
+        CmuxPushService::new(&runner)
+            .push_to_surface_in_workspace(
+                "surface:4",
+                Some("workspace:2"),
+                PushKind::Codex,
+                "hello\nworld please run it",
+            )
+            .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let enter_keys = calls
+            .iter()
+            .filter(|(cmd, args, _)| {
+                cmd == "cmux"
+                    && args.first().is_some_and(|a| a == "send-key")
+                    && args.last().is_some_and(|a| a == "enter")
+            })
+            .count();
+        assert_eq!(enter_keys, 2, "expected one resend after unsent composer");
+        let read_screens = calls
+            .iter()
+            .filter(|(_, args, _)| args.first().is_some_and(|a| a == "read-screen"))
+            .count();
+        assert_eq!(read_screens, 2);
+    }
+
+    #[test]
+    fn codex_submit_detection_uses_working_marker_and_prompt_tail() {
+        // Working marker present -> submitted regardless of tail.
+        assert!(codex_prompt_submitted(
+            "the tail is here\n> working (esc to interrupt)",
+            "the tail is here"
+        ));
+        // No marker and tail gone (composer cleared) -> submitted.
+        assert!(codex_prompt_submitted(
+            "> \n  conversation history",
+            "the tail"
+        ));
+        // No marker and tail still on screen -> not submitted.
+        assert!(!codex_prompt_submitted(
+            "  the tail is here",
+            "the tail is here"
+        ));
     }
 
     #[test]
