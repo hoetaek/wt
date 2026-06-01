@@ -84,7 +84,7 @@ Canonical personal storage layout:
 │   │       ├── 01-Learn/
 │   │       │   ├── 01-intent.md
 │   │       │   ├── 02-unknowns.md
-│   │       │   └── 02-references/      # lazy, when bulky source material exists
+│   │       │   └── 02-references/      # template, always scaffolded; holds bulky source material
 │   │       ├── 02-Example/
 │   │       │   ├── 03-criteria.md
 │   │       │   └── 04-wireframe.md
@@ -214,8 +214,10 @@ constraints, output form 중 현재 가장 약한 clarity row를 표시해서 �
 Gate 2는 unknown surfacing과 context/reference 탐색을 하나의 gate로 합친다. 같은
 `02-unknowns.md`에 verified facts, inventoried user/team material, flagged assumptions,
 references/options/tradeoffs를 함께 적어 각 unknown 항목 옆에서 답을 채운다. 이 파일은 결정문이
-아니라 downstream gates가 의존할 수 있는 fact inventory다. 분량이 큰 원본은
-`01-Learn/02-references/`로 빼고 요약만 `02-unknowns.md`에 남긴다.
+아니라 downstream gates가 의존할 수 있는 fact inventory다. 분량이 큰 원본은 항상 seed되는
+`01-Learn/02-references/`(README 템플릿 포함)로 빼고 요약만 `02-unknowns.md`에 남긴다. 폴더가
+항상 존재하므로 보유 자료를 둘 자리는 빈 게이트에서도 보이며, `02-unknowns.md` 파일명이 unknown만
+받는다는 인상을 슬롯의 존재로 상쇄한다.
 
 LEAF의 middle gates는 produce/consume engine이다. Gate 3 Criteria는 답이 존재하기 전에 의도한
 효과와 관찰 가능한 기준을 적는 arbiter이자 test이고 `03-criteria.md`에 둔다. Gate 4 Wireframe은
@@ -227,8 +229,10 @@ variation range로 일반화하는 generator다. 세 파일(`03-criteria.md`, `0
 
 `wt scaffold <slug> --spec`은 새 spec에 phase folders를 seed한다:
 `00-status.md`, `01-Learn/01-intent.md`, `01-Learn/02-unknowns.md`,
-`02-Example/03-criteria.md`, `02-Example/04-wireframe.md`,
-`03-Architect/05-design.md`, `03-Architect/06-tasks.md`. lazy artifact인
+`01-Learn/02-references/README.md`, `02-Example/03-criteria.md`,
+`02-Example/04-wireframe.md`, `03-Architect/05-design.md`,
+`03-Architect/06-tasks.md`. `02-references/`는 더 이상 lazy가 아니라 항상 README
+템플릿과 함께 seed되는 보관 슬롯이다. lazy artifact인
 `03-Architect/07-execution.md`, `04-Feedback/08-review.md`, `04-Feedback/09-retrospect.md`는
 seed하지 않고 handoff/review/retrospect 시점에 만든다. 이전 numbering(`03-context.md`,
 `04+05-requirements.md`, `04+05+06-requirements.md`, `06-wireframe.md`, `07-design.md`,

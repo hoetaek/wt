@@ -49,6 +49,7 @@ impl DocKind {
                     dir.join("00-status.md"),
                     dir.join("01-Learn/01-intent.md"),
                     dir.join("01-Learn/02-unknowns.md"),
+                    dir.join("01-Learn/02-references/README.md"),
                     dir.join("02-Example/03-criteria.md"),
                     dir.join("02-Example/04-wireframe.md"),
                     dir.join("03-Architect/05-design.md"),
@@ -84,6 +85,12 @@ impl DocKind {
                 (
                     PathBuf::from(format!("planning/specs/{slug}/01-Learn/02-unknowns.md")),
                     render_spec_unknowns(),
+                ),
+                (
+                    PathBuf::from(format!(
+                        "planning/specs/{slug}/01-Learn/02-references/README.md"
+                    )),
+                    render_spec_references_readme(),
                 ),
                 (
                     PathBuf::from(format!("planning/specs/{slug}/02-Example/03-criteria.md")),
@@ -208,6 +215,14 @@ fn render_spec_unknowns() -> String {
 ## Flagged assumptions\n\n\
 - \n\n\
 ## References / options / tradeoffs\n\n\
+- \n"
+        .to_string()
+}
+
+fn render_spec_references_readme() -> String {
+    "# References (② Unknowns & Context)\n\n\
+덩치 큰 원본 자료(긴 문서·로그·스크린샷·외부 캡처 등)를 여기 둔다.\n\
+이 폴더는 보관소일 뿐, 쓸모 있는 답·요약·판단 근거는 `../02-unknowns.md`로 되돌린다.\n\n\
 - \n"
         .to_string()
 }
@@ -347,6 +362,8 @@ mod tests {
                 dir.path()
                     .join(".wt/planning/specs/foo/01-Learn/02-unknowns.md"),
                 dir.path()
+                    .join(".wt/planning/specs/foo/01-Learn/02-references/README.md"),
+                dir.path()
                     .join(".wt/planning/specs/foo/02-Example/03-criteria.md"),
                 dir.path()
                     .join(".wt/planning/specs/foo/02-Example/04-wireframe.md"),
@@ -397,7 +414,7 @@ mod tests {
     #[test]
     fn spec_render_includes_tasks_skeleton() {
         let spec = DocKind::Spec.render("foo");
-        assert_eq!(spec.len(), 7);
+        assert_eq!(spec.len(), 8);
         assert_eq!(spec[0].0, PathBuf::from("planning/specs/foo/00-status.md"));
         assert_eq!(
             spec[1].0,
@@ -405,24 +422,29 @@ mod tests {
         );
         assert_eq!(
             spec[3].0,
-            PathBuf::from("planning/specs/foo/02-Example/03-criteria.md")
+            PathBuf::from("planning/specs/foo/01-Learn/02-references/README.md")
         );
         assert_eq!(
             spec[4].0,
+            PathBuf::from("planning/specs/foo/02-Example/03-criteria.md")
+        );
+        assert_eq!(
+            spec[5].0,
             PathBuf::from("planning/specs/foo/02-Example/04-wireframe.md")
         );
         assert_eq!(
-            spec[6].0,
+            spec[7].0,
             PathBuf::from("planning/specs/foo/03-Architect/06-tasks.md")
         );
         assert!(spec[0].1.contains("## Gate 진행"));
         assert!(spec[2].1.contains("## Domain concepts"));
         assert!(spec[2].1.contains("## Verified facts"));
-        assert!(spec[3].1.contains("## 목적 / 성공 기준"));
-        assert!(spec[3].1.contains("## 원칙 / 제약"));
-        assert!(spec[4].1.contains("## Placeholder contracts"));
-        assert!(spec[6].1.contains("## 작업 목록"));
-        assert!(spec[6].1.contains("[blocked by:"));
+        assert!(spec[3].1.contains("02-unknowns.md"));
+        assert!(spec[4].1.contains("## 목적 / 성공 기준"));
+        assert!(spec[4].1.contains("## 원칙 / 제약"));
+        assert!(spec[5].1.contains("## Placeholder contracts"));
+        assert!(spec[7].1.contains("## 작업 목록"));
+        assert!(spec[7].1.contains("[blocked by:"));
     }
 
     #[test]

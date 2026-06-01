@@ -77,7 +77,7 @@ planning/ideas/<slug>.{md,toml}
    01-Learn/
      01-intent.md
      02-unknowns.md
-     02-references/?
+     02-references/
    02-Example/
      03-criteria.md
      04-wireframe.md or 04-wireframe/
@@ -151,17 +151,36 @@ Owner: `wt-ready`, with later lifecycle skills returning here when a missed
 unknown appears.
 
 Artifact: idea body section, or `planning/specs/<slug>/01-Learn/02-unknowns.md`.
-Use `01-Learn/02-references/` only when bulky source material would drown the
-working file; summarize the useful answer back in `02-unknowns.md`.
+`01-Learn/02-references/` is always scaffolded as a holding slot (with a README
+template); put bulky source material there and summarize the useful answer back
+in `02-unknowns.md`.
 
 Purpose: name what is missing, then answer those entries in the same working
 file. Unknown surfacing and context/reference exploration are one gate because
-the natural loop is question -> source/ask -> update the same entry.
+the natural loop is question -> source/ask -> update the same entry. Keep both
+sides in `02-unknowns.md`: the negative space (what is missing) and the positive
+ground (what is already known or held). The filename says "unknowns", but the
+file is also where verified facts, inventoried user/team material, and prior
+decisions live -- record context that was never a question, not only answers to
+questions.
+
+Resolve each entry in place, using the kinds the template already seeds as
+headings:
+
+- Verified facts: now-known, with a source or direct user basis.
+- Inventoried materials: concrete resources/decisions the user or team already
+  holds (data, prior decisions, contacts, docs) that downstream gates rely on.
+- Flagged assumptions: still treated as true without proof; mark which would
+  unravel later work.
+- References / options / tradeoffs, unresolved: bulky source goes to
+  `02-references/`; unresolved items carry to Gate 3 as explicit assumptions or
+  return here later.
 
 Gate to next step:
 
 - Unknowns are grouped by domain concepts, standards/conventions, external
-  facts, and internal facts.
+  facts, and internal facts (internal facts = what the user/team already holds
+  but has not yet inventoried).
 - Each unknown is marked `blocking now` vs `useful later`.
 - The most expensive unknowns are identified.
 - Blocking unknowns have verified answers, explicit assumptions, owner/user

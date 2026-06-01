@@ -85,8 +85,12 @@ when it is not ready.
 
 If intent and unknowns are not yet surfaced, run a brief Unknown Surfacing pass
 before evidence gathering. Use four categories — domain concepts,
-standards/conventions, external facts, internal facts — and mark each unknown
-`blocking now` or `useful later`. The list becomes the agenda below.
+standards/conventions, external facts, internal facts (what you/the team already
+hold but have not inventoried) — and mark each unknown `blocking now` or
+`useful later`. The list becomes the agenda below. The pass surfaces unknowns,
+but the same `02-unknowns.md` file also holds the positive ground — verified
+facts, inventoried materials, prior decisions — so record what is already known,
+not only what is missing.
 
 Work **inside-out**: ask the user direct clarifying questions and inventory
 user/team-held materials (prior decisions, notes, related artifacts, contacts)
@@ -518,7 +522,8 @@ buckets:
   commitment.
 - `planning/specs/<slug>/` — committed prep artifact. Holds numbered LEAF files:
   `00-status.md`, `01-Learn/01-intent.md`, `01-Learn/02-unknowns.md`,
-  `01-Learn/02-references/` when needed, `02-Example/03-criteria.md`,
+  `01-Learn/02-references/` (always scaffolded as a holding slot),
+  `02-Example/03-criteria.md`,
   `02-Example/04-wireframe.md` / `02-Example/04-wireframe/`,
   `03-Architect/05-design.md`, `03-Architect/06-tasks.md`, lazy
   `03-Architect/07-execution.md`, lazy `04-Feedback/08-review.md`, and lazy
@@ -580,10 +585,12 @@ without an idea file existing first.
   and internal facts.
 - Mark each unknown `blocking now` or `useful later`; blocking unknowns drive
   evidence gathering.
-- Update each entry with verified answers, assumptions, material/conditions,
-  unresolved questions, references, options, and tradeoffs.
-- Put bulky source material in `01-Learn/02-references/`, but summarize the
-  useful answer back in `02-unknowns.md`.
+- Record both sides: unknowns (domain / standards / external / internal) and the
+  positive ground the template seeds as headings — verified facts, inventoried
+  materials, flagged assumptions, references/options/tradeoffs. Resolve each
+  unknown in place.
+- `01-Learn/02-references/` is always scaffolded as a holding slot; put bulky
+  source material there and summarize the useful answer back in `02-unknowns.md`.
 - Do not record final design decisions here unless the decision has already
   been approved downstream.
 

@@ -386,6 +386,7 @@ mod tests {
             vec![
                 "planning/specs/foo/00-status.md".to_string(),
                 "planning/specs/foo/01-Learn/01-intent.md".to_string(),
+                "planning/specs/foo/01-Learn/02-references/README.md".to_string(),
                 "planning/specs/foo/01-Learn/02-unknowns.md".to_string(),
                 "planning/specs/foo/02-Example/03-criteria.md".to_string(),
                 "planning/specs/foo/02-Example/04-wireframe.md".to_string(),
@@ -402,20 +403,24 @@ mod tests {
             DocKind::Spec.render("foo")[1].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("02-Example/03-criteria.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("01-Learn/02-references/README.md")).unwrap(),
             DocKind::Spec.render("foo")[3].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("02-Example/04-wireframe.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("02-Example/03-criteria.md")).unwrap(),
             DocKind::Spec.render("foo")[4].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("03-Architect/05-design.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("02-Example/04-wireframe.md")).unwrap(),
             DocKind::Spec.render("foo")[5].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("03-Architect/06-tasks.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("03-Architect/05-design.md")).unwrap(),
             DocKind::Spec.render("foo")[6].1
+        );
+        assert_eq!(
+            fs::read_to_string(spec_dir.join("03-Architect/06-tasks.md")).unwrap(),
+            DocKind::Spec.render("foo")[7].1
         );
     }
 
@@ -481,6 +486,7 @@ mod tests {
                 "planning/ideas/foo.md".to_string(),
                 "planning/specs/foo/00-status.md".to_string(),
                 "planning/specs/foo/01-Learn/01-intent.md".to_string(),
+                "planning/specs/foo/01-Learn/02-references/README.md".to_string(),
                 "planning/specs/foo/01-Learn/02-unknowns.md".to_string(),
                 "planning/specs/foo/02-Example/03-criteria.md".to_string(),
                 "planning/specs/foo/02-Example/04-wireframe.md".to_string(),
