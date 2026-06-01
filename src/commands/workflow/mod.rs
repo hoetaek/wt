@@ -45,12 +45,14 @@ mod display;
 mod list_command;
 mod repair;
 mod selection;
+mod show_command;
 mod stack_completion;
 
 use display::show_workflow;
 #[cfg(test)]
 use selection::list_runnable_workflow_candidates;
 use selection::resolve_run_workflow_path;
+use show_command::show_workflow_json;
 use stack_completion::pass_workflow;
 
 pub fn archive(ctx: &Ctx, workflow: &str) -> Result<()> {
@@ -194,6 +196,9 @@ pub fn issue(ctx: &Ctx, issues: &[String], options: IssueOptions<'_>) -> Result<
 pub fn show(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
     let path = resolve_read_target(ctx, workflow)?;
     let metadata = workflow_store::read(&path)?;
+    if ctx.is_json() {
+        return show_workflow_json(ctx, &path, &metadata);
+    }
     show_workflow(ctx, &path, &metadata)
 }
 

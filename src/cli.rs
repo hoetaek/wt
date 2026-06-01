@@ -967,6 +967,9 @@ pub enum WorkflowCommand {
         args: Vec<String>,
     },
     /// Show workflow metadata and task statuses
+    #[command(
+        long_about = "Show one saved <repo-root>/.wt/execution/workflows/<id>.toml Workflow file with its prepared policy snapshot and linked TaskRun statuses.\n\nHuman output preserves the compact meta section plus numbered task rows. Use global --json for the one-shot machine-readable observation surface: path, mode, base, title, pull_request, landing, and tasks with order, task, status, branch, parent, and title. This command is read-only and its exit code means command success or failure only."
+    )]
     Show {
         /// Workflow TOML path, shorthand id, or "latest" (default)
         workflow: Option<String>,

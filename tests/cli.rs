@@ -3958,6 +3958,162 @@ run = "run-2026-05-18-001-schema"
 }
 
 #[test]
+fn workflow_show_supports_json_and_reports_task_statuses() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_document(temp.path(), "worker", "feature/worker");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "passed",
+        "2026-05-18-010",
+    );
+    write_task_run_file(
+        temp.path(),
+        "run-worker",
+        "worker",
+        "feature/worker",
+        "running",
+        "2026-05-18-010",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-010",
+        "stack",
+        r#"title = "Workflow JSON"
+"#,
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+
+[[tasks]]
+task = "worker"
+run = "run-worker"
+parent = "feature/api"
+"#,
+    );
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "show",
+            "2026-05-18-010",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("JSON output is supported").not())
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["path"],
+        "<repo-root>/.wt/execution/workflows/2026-05-18-010.toml"
+    );
+    assert_eq!(value["mode"], "stack");
+    assert_eq!(value["base"], "main");
+    assert_eq!(value["title"], "Workflow JSON");
+    assert_eq!(value["pull_request"], "draft");
+    assert_eq!(value["landing"], "manual");
+
+    let tasks = value["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks[0]["order"].as_u64(), Some(1));
+    assert_eq!(tasks[0]["task"], "api");
+    assert_eq!(tasks[0]["status"], "passed");
+    assert_eq!(tasks[0]["branch"], "feature/api");
+    assert!(tasks[0]["parent"].is_null());
+    assert_eq!(tasks[0]["title"], "api");
+    assert_eq!(tasks[1]["order"].as_u64(), Some(2));
+    assert_eq!(tasks[1]["task"], "worker");
+    assert_eq!(tasks[1]["status"], "running");
+    assert_eq!(tasks[1]["branch"], "feature/worker");
+    assert_eq!(tasks[1]["parent"], "feature/api");
+    assert_eq!(tasks[1]["title"], "worker");
+}
+
+#[test]
+fn workflow_show_json_missing_workflow_fails_without_support_error() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "show",
+            "missing",
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("Workflow not found: missing"))
+        .stderr(predicate::str::contains("JSON output is supported").not());
+}
+
+#[test]
+fn workflow_show_without_json_preserves_human_output_shape() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "running",
+        "2026-05-18-011",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-011",
+        "stack",
+        r#"title = "Workflow text"
+"#,
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+parent = "main"
+"#,
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "show",
+            "2026-05-18-011",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Workflow: <repo-root>/.wt/execution/workflows/2026-05-18-011.toml",
+        ))
+        .stdout(predicate::str::contains("Mode: stack"))
+        .stdout(predicate::str::contains("Base: main"))
+        .stdout(predicate::str::contains("Title: Workflow text"))
+        .stdout(predicate::str::contains("Pull request: draft"))
+        .stdout(predicate::str::contains("Landing: manual"))
+        .stdout(predicate::str::contains("Tasks: 1"))
+        .stdout(predicate::str::contains("1. api [running] api"))
+        .stdout(predicate::str::contains(
+            "Task: <repo-root>/.wt/execution/tasks/api.toml",
+        ))
+        .stdout(predicate::str::contains("Branch: feature/api"))
+        .stdout(predicate::str::contains("Parent: main"));
+}
+
+#[test]
 fn workflow_list_empty_inventory_uses_plain_output() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());

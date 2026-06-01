@@ -1565,6 +1565,18 @@ text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계
 값일 뿐이므로 `wt list workflow`, top-level `batch`/`stack` 같은 symmetry
 command를 추가하지 않는다. `wt task list`는 symmetry command가 아니라 별도 TaskDocument
 inventory surface이며 Workflow, TaskRun, branch, worktree 목록 의미를 갖지 않는다.
+
+`wt workflow show <id>`는 한 Workflow file을 읽는 canonical one-shot observation surface다.
+기본 human 출력은 Workflow meta(path, mode, base, title/body/origin, policy, task count)와
+번호 매긴 task row, task file path, branch, parent를 보여준다. `--json`은 같은 대상에 대해
+`path`, `mode`, `base`, `title`, `pull_request`, `landing`, `tasks[]`를 출력하며,
+`tasks[]` 각 record는 `order`, `task`, `status`, `branch`, `parent`, `title`을 가진다.
+`status`는 linked TaskRun의 durable lifecycle 값(`prepared`, `running`, `passed`, `failed`,
+`skipped`)만 사용하고, JSON mode에서 linked TaskRun이나 TaskDocument를 판독할 수 없으면
+가짜 status를 만들지 않고 비0으로 실패한다. 이 명령은 polling이나 gate verdict를 소유하지
+않으므로 exit code는 command 성공/실패만 뜻한다. Workflow 전체 top-level `status`는 만들지
+않고, 전체 terminal 여부와 실패 verdict는 별도 반복 관찰 command가 소유한다.
+
 `wt profile list`는 named profile inventory를 위한 canonical surface이고,
 `<repo-root>/.wt/config/profiles/<name>/profile.toml`을 config/profile loader로 읽어 정렬된 valid
 profile 목록과 함께 invalid profile 레코드를 text warning 또는 JSON
