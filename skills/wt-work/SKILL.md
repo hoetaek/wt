@@ -8,8 +8,11 @@ description: "Use after wt-ready when prepared wt work should be launched or run
 Launch and coordinate prepared wt work. This skill owns active execution from
 pre-launch checks through accepted review/pass handoff.
 
-Do not revise purpose, requirements, design, or task graph here. If the handoff
-is incomplete, return to `wt-ready`.
+Do not do upfront planning here. Purpose and requirements stay in `wt-ready`;
+surface any change to them to the user. Design, task graph, and execution shape
+may be synced to execution reality within the threshold in `Sync The Spec` —
+including revising not-yet-started downstream slices when an earlier slice's work
+forces it. If the handoff is fundamentally incomplete, return to `wt-ready`.
 
 Core loop:
 
@@ -269,6 +272,29 @@ If unplanned research happened during execution, record it in
 `04-Feedback/08-review.md` under `## Mid-process discoveries` with a category:
 `domain`, `standards`, `external`, or `internal`. `wt-land` uses this to improve
 future unknown surfacing.
+
+### Revise Downstream Slices Mid-Stack
+
+Slice-by-slice work is not frozen once launched. While executing one slice, the
+fix for an unexpected problem can change later slices that have not started yet —
+common in a `stack`, where each branch builds on the one before it (slice 2's
+resolution reshapes slices 3 and 4).
+
+Handle it by threshold, not by reflex:
+
+- **Adjust in `wt-work`** when the change is a downstream re-scope: reorder,
+  shrink, split, or refine slices that are not yet running. Update
+  `03-Architect/06-tasks.md` (sequence and scope), `03-Architect/07-execution.md`
+  when the execution shape or rationale moved, and record the trigger in
+  `04-Feedback/08-review.md` under `## Mid-process discoveries` (usually
+  `internal` or `domain`).
+- **Return to `wt-ready`** when the discovery changes purpose or requirements
+  (`02-Example/03-criteria.md`) rather than the task graph. Surface it to the
+  user; do not absorb a requirements change as a quiet task edit.
+
+If a later branch in the stack already exists, re-sequencing or rebasing it is an
+operational change — use the `stack-update` skill to update the ordered stack and
+notify running agents, then continue the loop.
 
 ## 4. Accept
 
