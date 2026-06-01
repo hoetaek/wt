@@ -4114,6 +4114,245 @@ parent = "main"
 }
 
 #[test]
+fn workflow_watch_exits_zero_when_all_terminal_without_failures() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_document(temp.path(), "worker", "feature/worker");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "passed",
+        "2026-05-18-012",
+    );
+    write_task_run_file(
+        temp.path(),
+        "run-worker",
+        "worker",
+        "feature/worker",
+        "skipped",
+        "2026-05-18-012",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-012",
+        "stack",
+        r#"title = "Workflow watch success"
+"#,
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+
+[[tasks]]
+task = "worker"
+run = "run-worker"
+parent = "feature/api"
+"#,
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "watch",
+            "2026-05-18-012",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Workflow watch: 2026-05-18-012"))
+        .stdout(predicate::str::contains("[done] all passed/skipped (2/2)"));
+}
+
+#[test]
+fn workflow_watch_exits_three_when_any_task_failed() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_document(temp.path(), "worker", "feature/worker");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "passed",
+        "2026-05-18-013",
+    );
+    write_task_run_file(
+        temp.path(),
+        "run-worker",
+        "worker",
+        "feature/worker",
+        "failed",
+        "2026-05-18-013",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-013",
+        "stack",
+        "",
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+
+[[tasks]]
+task = "worker"
+run = "run-worker"
+parent = "feature/api"
+"#,
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "watch",
+            "2026-05-18-013",
+        ])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains(
+            "[done] terminal with failure: worker=failed",
+        ));
+}
+
+#[test]
+fn workflow_watch_missing_workflow_exits_unavailable() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "watch",
+            "missing",
+        ])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains("Workflow not found: missing"));
+}
+
+#[test]
+fn workflow_watch_timeout_still_running_exits_zero_without_wait_observations() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "running",
+        "2026-05-18-014",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-014",
+        "stack",
+        "",
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+"#,
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "watch",
+            "2026-05-18-014",
+            "--interval",
+            "1",
+            "--timeout",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Workflow watch timeout after 1s"))
+        .stdout(predicate::str::contains("api=running"));
+
+    assert!(!temp.path().join(".wt/runtime/agents").exists());
+}
+
+#[test]
+fn workflow_watch_json_outputs_final_show_snapshot() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "passed",
+        "2026-05-18-015",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-015",
+        "stack",
+        r#"title = "Workflow watch JSON"
+"#,
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+"#,
+    );
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "watch",
+            "2026-05-18-015",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("JSON output is supported").not())
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["path"],
+        "<repo-root>/.wt/execution/workflows/2026-05-18-015.toml"
+    );
+    assert_eq!(value["title"], "Workflow watch JSON");
+    assert_eq!(value["tasks"][0]["task"], "api");
+    assert_eq!(value["tasks"][0]["status"], "passed");
+}
+
+#[test]
+fn workflow_watch_without_target_noninteractive_requires_guidance() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "workflow", "watch"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "wt workflow watch requires WORKFLOW",
+        ))
+        .stderr(predicate::str::contains(
+            "wt workflow show <workflow> --json",
+        ))
+        .stderr(predicate::str::contains("wt workflow watch <workflow>"))
+        .stderr(predicate::str::contains("wt agent watch <target>"));
+}
+
+#[test]
 fn workflow_list_empty_inventory_uses_plain_output() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -4432,6 +4671,24 @@ fn agent_watch_help_explains_polling_target() {
         .stdout(predicate::str::contains("unchanged running observations"))
         .stdout(predicate::str::contains(
             "Omit TARGET in an interactive terminal",
+        ));
+}
+
+#[test]
+fn workflow_watch_help_explains_durable_workflow_observation() {
+    wt_command()
+        .args(["workflow", "watch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("linked TaskRun is terminal"))
+        .stdout(predicate::str::contains("separate from `wt agent watch`"))
+        .stdout(predicate::str::contains("--interval"))
+        .stdout(predicate::str::contains("--timeout"))
+        .stdout(predicate::str::contains("--heartbeat"))
+        .stdout(predicate::str::contains("exit-code contract"))
+        .stdout(predicate::str::contains("wait-observations.jsonl"))
+        .stdout(predicate::str::contains(
+            "Omit WORKFLOW in an interactive terminal",
         ));
 }
 

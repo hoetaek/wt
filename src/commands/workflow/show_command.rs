@@ -37,7 +37,7 @@ pub(crate) fn show_workflow_json(
     metadata: &WorkflowMetadata,
 ) -> Result<()> {
     let snapshot = collect_workflow_snapshot(ctx, path, metadata)?;
-    write_json(&snapshot)
+    write_workflow_snapshot_json(&snapshot)
 }
 
 pub(crate) fn collect_workflow_snapshot(
@@ -79,7 +79,7 @@ pub(crate) fn collect_workflow_snapshot(
     })
 }
 
-fn write_json(snapshot: &WorkflowShowSnapshot) -> Result<()> {
+pub(super) fn write_workflow_snapshot_json(snapshot: &WorkflowShowSnapshot) -> Result<()> {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     serde_json::to_writer_pretty(&mut handle, snapshot)?;

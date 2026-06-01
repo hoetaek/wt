@@ -47,6 +47,7 @@ mod repair;
 mod selection;
 mod show_command;
 mod stack_completion;
+mod watch_command;
 
 use display::show_workflow;
 #[cfg(test)]
@@ -200,6 +201,16 @@ pub fn show(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
         return show_workflow_json(ctx, &path, &metadata);
     }
     show_workflow(ctx, &path, &metadata)
+}
+
+pub fn watch(
+    ctx: &Ctx,
+    workflow: Option<&str>,
+    interval_secs: u64,
+    timeout_secs: Option<u64>,
+    heartbeat_secs: Option<u64>,
+) -> Result<()> {
+    watch_command::run(ctx, workflow, interval_secs, timeout_secs, heartbeat_secs)
 }
 
 pub fn edit(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {

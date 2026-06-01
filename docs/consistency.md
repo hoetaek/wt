@@ -1869,6 +1869,19 @@ Agent observation exit code는 agent command에만 속한다. `wt agent status`�
 `needs_input`, 3을 `failed`로 유지한다. cmux 자체를 사용할 수 없으면 성공한 `no_session`처럼
 보이지 않도록 실패한다.
 
+`wt workflow watch [<workflow>]`는 Workflow file과 linked TaskRun durable status를 반복 관찰하는
+workflow-level terminal block이다. `wt agent watch`가 한 task agent의 Layer 2 runtime state를
+관찰하는 것과 달리, `wt workflow watch`는 cmux runtime 관찰이나 delivery loop가 아니며 모든 workflow
+task가 terminal(`passed`, `failed`, `skipped`)이 될 때까지 기다린다. 출력은 기본 transition-only이고,
+긴 unchanged 대기는 `--heartbeat <SECONDS>`를 명시해야 반복 출력한다. `--timeout <SECONDS>` 뒤에도
+아직 non-terminal task가 남아 있으면 timeout 메시지와 현재 상태를 출력하고 0으로 종료한다.
+종료 코드는 agent watch 관찰 계약을 workflow durable status에 맞춰 재사용한다: workflow state가
+unavailable이면 1, terminal task 중 `failed`가 하나라도 있으면 3, 그 외 all passed/skipped 또는
+timeout-still-running은 0이다. `--json`은 종료 시 `wt workflow show --json`과 같은 final snapshot
+스키마를 출력한다. 이 command는 `<repo-root>/.wt/runtime/agents/<name>/observations/wait-observations.jsonl`
+에 쓰지 않는다. `<workflow>` 생략은 interactive TTY human mode에서만 selector를 열며, `--json`,
+`--quiet`, non-TTY automation에서는 explicit workflow path나 id를 요구해야 한다.
+
 Agent별 상태 신호 준비도는 `agent status`나 `agent watch`가 고치는 대상이 아니라 관찰의
 신뢰도 조건이다. Claude Code는 cmux의 Claude 통합에서 status/sidebar 신호가 나오고, Codex는
 사용자가 `cmux hooks codex install --yes`를 명시적으로 실행한 뒤에야 `agent.hook.*`와

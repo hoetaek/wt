@@ -974,6 +974,28 @@ pub enum WorkflowCommand {
         /// Workflow TOML path, shorthand id, or "latest" (default)
         workflow: Option<String>,
     },
+    /// Block until every workflow task reaches a terminal state
+    #[command(
+        long_about = "Poll one saved Workflow until every linked TaskRun is terminal: passed, failed, or skipped.\n\nThis is a workflow-level durable terminal block over <repo-root>/.wt/execution/workflows/<id>.toml and linked TaskRuns. It is separate from `wt agent watch`, which observes one task agent's Layer 2 runtime state from cmux. `wt workflow watch` reuses the agent watch exit-code contract for workflow status: 0 for all passed/skipped or timeout while still non-terminal, 1 for unavailable workflow state, and 3 when any terminal task failed. It does not write <repo-root>/.wt/runtime/agents/<agent>/observations/wait-observations.jsonl. Human output is transition-only by default; use --heartbeat for unchanged waiting output. Use global --json to print the final workflow show JSON snapshot on exit. Omit WORKFLOW in an interactive terminal to choose an observable workflow; pass WORKFLOW explicitly for scripts, --json, --quiet, and non-interactive use."
+    )]
+    Watch {
+        /// Workflow TOML path or shorthand id to watch
+        workflow: Option<String>,
+        /// Seconds between workflow observations
+        #[arg(
+            long,
+            default_value_t = 2,
+            value_name = "SECONDS",
+            value_parser = parse_positive_u64
+        )]
+        interval: u64,
+        /// Stop waiting after this many positive seconds
+        #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
+        timeout: Option<u64>,
+        /// Print unchanged workflow observations at this positive-second interval
+        #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
+        heartbeat: Option<u64>,
+    },
     /// Open workflow TOML in the configured editor
     Edit {
         /// Workflow TOML path, shorthand id, or "latest" (default)

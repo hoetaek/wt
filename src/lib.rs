@@ -189,6 +189,14 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             WorkflowCommand::Show { workflow } => {
                 commands::workflow::show(ctx, workflow.as_deref())
             }
+            WorkflowCommand::Watch {
+                workflow,
+                interval,
+                timeout,
+                heartbeat,
+            } => {
+                commands::workflow::watch(ctx, workflow.as_deref(), *interval, *timeout, *heartbeat)
+            }
             WorkflowCommand::Edit { workflow } => {
                 commands::workflow::edit(ctx, workflow.as_deref())
             }
