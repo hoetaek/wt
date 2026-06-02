@@ -1,5 +1,4 @@
 mod agent;
-mod background_tests;
 mod browser;
 mod chrome_devtools;
 mod command;
@@ -14,7 +13,6 @@ mod workspace;
 
 pub(crate) use agent::agent_launch_command;
 use agent::bootstrap_agent;
-use background_tests::run_background_tests;
 use deps::install_deps;
 use env_template::substitute_env;
 use files::{copy_files, link_files};
@@ -172,8 +170,6 @@ pub(crate) fn run_setup_with_workspace_color_kind(
     if let (Some(handle), Some(agent)) = (ws_handle, &config.agent) {
         bootstrap_agent(ctx, handle, agent, modes.setup_mode, &template_vars)?;
     }
-
-    run_background_tests(ctx, config, wt_path)?;
 
     print_summary(ctx, wt_path, names, site.as_ref(), &template_vars);
 

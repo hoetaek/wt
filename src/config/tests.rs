@@ -63,11 +63,6 @@ user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
 
 [agent]
 cli = "claude"
-
-[test]
-commands = [
-{ working_dir = "backend", run = "./vendor/bin/pest", if_exists = "vendor/bin/pest", label = "PHP" },
-]
 "#;
     let config: Config = toml::from_str(toml_str).unwrap();
 
@@ -170,10 +165,6 @@ commands = [
 
     let agent = config.agent.unwrap();
     assert_eq!(agent.cli, AgentCli::Claude);
-
-    let test = config.test.unwrap();
-    assert_eq!(test.commands[0].label.as_deref(), Some("PHP"));
-    assert_eq!(test.commands[0].working_dir.as_deref(), Some("backend"));
 }
 
 #[test]
@@ -183,21 +174,6 @@ fn rejects_unknown_setup_command_field() {
 [setup]
 deps = [
 { cwd = "api", run = "uv sync" },
-]
-"#,
-    )
-    .unwrap_err();
-
-    assert!(err.to_string().contains("unknown field `cwd`"));
-}
-
-#[test]
-fn rejects_unknown_test_command_field() {
-    let err = toml::from_str::<Config>(
-        r#"
-[test]
-commands = [
-{ cwd = "web", run = "npm test" },
 ]
 "#,
     )

@@ -43,7 +43,6 @@ pub struct Config {
     pub editor: EditorConfig,
     pub workspace: Option<WorkspaceConfig>,
     pub agent: Option<AgentConfig>,
-    pub test: Option<TestConfig>,
     pub issues: Option<IssuesConfig>,
 }
 
@@ -682,7 +681,6 @@ pub struct ProfileConfig {
     pub site: Option<SiteConfig>,
     pub workspace: Option<WorkspaceConfig>,
     pub agent: Option<AgentConfig>,
-    pub test: Option<TestConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
@@ -694,7 +692,6 @@ struct ProfileConfigRaw {
     site: Option<SiteConfig>,
     workspace: Option<WorkspaceConfig>,
     agent: Option<AgentConfig>,
-    test: Option<TestConfig>,
 }
 
 impl<'de> Deserialize<'de> for ProfileConfig {
@@ -710,7 +707,6 @@ impl<'de> Deserialize<'de> for ProfileConfig {
             site: raw.site,
             workspace: raw.workspace,
             agent: raw.agent,
-            test: raw.test,
         };
         profile
             .validate()
@@ -726,7 +722,6 @@ impl ProfileConfig {
             || self.site.is_some()
             || self.workspace.is_some()
             || self.agent.is_some()
-            || self.test.is_some()
     }
 
     fn validate(&self) -> anyhow::Result<()> {
@@ -736,7 +731,7 @@ impl ProfileConfig {
 
         if self.name.is_some() && self.has_inline_settings() {
             bail!(
-                "[profile] name cannot be combined with inline [profile.agent], [profile.worktree], [profile.setup], [profile.workspace], [profile.site], or [profile.test] sections"
+                "[profile] name cannot be combined with inline [profile.agent], [profile.worktree], [profile.setup], [profile.workspace], or [profile.site] sections"
             );
         }
 
@@ -750,7 +745,6 @@ impl ProfileConfig {
             site: self.site,
             workspace: self.workspace,
             agent: self.agent,
-            test: self.test,
             ..Config::default()
         }
     }
@@ -829,21 +823,6 @@ pub fn validate_profile_name(name: &str) -> anyhow::Result<()> {
         bail!("Profile name must contain only ASCII letters, digits, '-' or '_': {name}");
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct TestConfig {
-    pub commands: Vec<TestCommand>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct TestCommand {
-    pub working_dir: Option<String>,
-    pub run: String,
-    pub if_exists: Option<String>,
-    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
