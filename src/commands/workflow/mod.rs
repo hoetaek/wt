@@ -798,6 +798,38 @@ cli = "none"
     }
 
     #[test]
+    fn run_workflow_echoes_recorded_coordinator_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new_with_options(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+            crate::context::CtxOptions {
+                launcher_coordinator_id: Some("agents/coord-workflow".into()),
+                ..crate::context::CtxOptions::default()
+            },
+        );
+        let record = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["coordinator echo"]);
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_PASSED,
+            Some("coordinator-echo"),
+        );
+
+        run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
+
+        let steps = ui.steps.lock().unwrap().join("\n");
+        assert!(
+            steps.contains("Workflow coordinator: agents/coord-workflow"),
+            "unexpected workflow output: {steps}"
+        );
+    }
+
+    #[test]
     fn task_prepares_workflow_with_title_body_origin_and_show_displays_it() {
         let dir = tempfile::tempdir().unwrap();
         let ui = Arc::new(MockUi::new());
