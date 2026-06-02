@@ -24,6 +24,21 @@ pub(crate) struct ChromeDevtoolsSession {
     port_guard: TcpListener,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChromeDevtoolsMcpConfig {
+    pub(crate) browser_url: String,
+    pub(crate) claude_config_path: PathBuf,
+}
+
+impl ChromeDevtoolsSession {
+    pub(crate) fn mcp_config(&self) -> ChromeDevtoolsMcpConfig {
+        ChromeDevtoolsMcpConfig {
+            browser_url: self.debug_url.clone(),
+            claude_config_path: self.user_data_dir.join("wt-mcp.json"),
+        }
+    }
+}
+
 pub(super) fn prepare_chrome_devtools_session(
     chrome_devtools: &WorkspaceChromeDevtoolsConfig,
     browser: &WorkspaceBrowserConfig,

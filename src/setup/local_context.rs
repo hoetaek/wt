@@ -48,6 +48,25 @@ pub(super) fn inject_local_context(
     Ok(())
 }
 
+pub(super) fn append_agent_local_context(
+    config: &Config,
+    wt_path: &Path,
+    context: &str,
+) -> Result<()> {
+    let Some(context_file) = local_context_file(config) else {
+        return Ok(());
+    };
+    let context_path = wt_path.join(context_file);
+    if !context_path.exists() {
+        return Ok(());
+    }
+
+    let mut content = fs::read_to_string(&context_path)?;
+    content.push_str(context);
+    fs::write(&context_path, content)?;
+    Ok(())
+}
+
 fn local_context_file(config: &Config) -> Option<&'static str> {
     match config.agent.as_ref().map(|agent| &agent.cli) {
         Some(AgentCli::Codex) => Some("AGENTS.override.md"),
