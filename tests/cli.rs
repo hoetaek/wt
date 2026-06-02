@@ -3711,7 +3711,7 @@ fn msg_uses_git_common_runtime_inbox_from_linked_worktree() {
 }
 
 #[test]
-fn run_workflow_requires_coordinator_session_when_agent_env_unset() {
+fn run_workflow_reaches_workflow_resolution_when_agent_env_unset() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     wt_init_yes(temp.path());
@@ -3726,14 +3726,12 @@ fn run_workflow_requires_coordinator_session_when_agent_env_unset() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "wt workflow run requires a coordinator session.",
-        ))
-        .stderr(predicate::str::contains("eval \"$(wt session set"));
+        .stderr(predicate::str::contains("Workflow not found"))
+        .stderr(predicate::str::contains("wt workflow run requires a coordinator session").not());
 }
 
 #[test]
-fn run_workflow_requires_coordinator_session_when_agent_env_empty() {
+fn run_workflow_reaches_workflow_resolution_when_agent_env_empty() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     wt_init_yes(temp.path());
@@ -3749,10 +3747,8 @@ fn run_workflow_requires_coordinator_session_when_agent_env_empty() {
         .env("WT_AGENT_ID", "")
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "wt workflow run requires a coordinator session.",
-        ))
-        .stderr(predicate::str::contains("eval \"$(wt session set"));
+        .stderr(predicate::str::contains("Workflow not found"))
+        .stderr(predicate::str::contains("wt workflow run requires a coordinator session").not());
 }
 
 #[test]
@@ -3774,6 +3770,55 @@ fn run_workflow_with_agent_env_reaches_workflow_resolution() {
         .failure()
         .stderr(predicate::str::contains("Workflow not found"))
         .stderr(predicate::str::contains("wt workflow run requires a coordinator session").not());
+}
+
+#[test]
+fn run_workflow_without_agent_env_echoes_recorded_coordinator() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    wt_init_yes(temp.path());
+    write_task_document(temp.path(), "echo-task", "echo-task");
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-echo",
+        "echo-task",
+        "echo-task",
+        "passed",
+        "2026-05-18-020",
+        (
+            Some("agents/run-1-echo-task"),
+            Some("agents/coord-recorded"),
+        ),
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-020",
+        "batch",
+        "title = \"Echo workflow\"\n",
+        r#"[[tasks]]
+task = "echo-task"
+run = "run-echo"
+"#,
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "workflow",
+            "2026-05-18-020",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Running workflow: 2026-05-18-020 (batch, 1 tasks)",
+        ))
+        .stdout(predicate::str::contains(
+            "coordinator: agents/coord-recorded",
+        ))
+        .stdout(predicate::str::contains("run preserves the stored route"))
+        .stdout(predicate::str::contains("No prepared or failed tasks"));
 }
 
 #[test]
@@ -4547,13 +4592,16 @@ fn workflow_prepare_accepts_pr_on_non_stack_modes() {
             "single",
             "--pr",
             "draft",
+            "--coordinator",
+            "coord-pr",
             "workflow-docs",
             "--base",
             "main",
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Prepared workflow:"));
+        .stdout(predicate::str::contains("Prepared workflow:"))
+        .stdout(predicate::str::contains("coordinator: agents/coord-pr"));
 
     let workflows = std::fs::read_dir(temp.path().join(".wt/execution/workflows"))
         .unwrap()

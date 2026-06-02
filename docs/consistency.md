@@ -1548,6 +1548,16 @@ rewrite them into the canonical title/body/origin shape instead of preserving
 Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
 두 번째 task source를 만들지 않는다.
+Workflow coordinator는 `wt workflow task`가 Workflow와 linked TaskRun을 준비하는 생성
+시점에 한 번 바인딩된다. 우선순위는 명시 `--coordinator <id>`가 있으면 그것을 쓰고,
+없으면 `WT_AGENT_ID`, current live identity anchor, auto-created identity anchor 순서다.
+`<id>`는 `wt as`와 같은 `NAME` 또는 `agents/NAME` 단일 agent-name segment만 허용한다.
+생성 출력은 항상 저장된 `coordinator: agents/<name>`을 보여주고, auto-created identity
+anchor로 떨어진 경우에만 다른 coordinator로 묶으려면 `--coordinator <id>` 또는
+`WT_AGENT_ID=<id>`로 다시 생성하라는 hint를 보여준다. `wt run workflow`는 이 바인딩을
+다시 결정하지 않고 linked TaskRun의 저장된 `coordinator_id`를 보존한다. legacy 또는
+incomplete TaskRun처럼 `coordinator_id`가 비어 있는 경우에만 현재 actor 우선순위로 누락
+route를 repair하고 그 fallback 사용 사실을 출력한다.
 
 `<repo-root>/.wt/execution/workflows`는 `<repo-root>/.wt/batches`와 `<repo-root>/.wt/stacks`를 대체한다. 이유는 batch와 stack이
 저장소 noun이 아니라 하나의 Workflow 안에서 고르는 execution mode이기 때문이다. 새
@@ -1779,7 +1789,10 @@ transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow�
 task agent에게 전달하는 canonical feedback은
 `wt task review <task-run-id> --accept|--reject|--block "<message>"`이며, 이 명령은
 TaskRun의 `agent_id`로 `task_run:<id>` scope 메시지를 보내고 TaskRun review metadata를
-갱신한다. Late review after pass는 정상 flow다. `--reject`와 `--block`은 passed TaskRun을
+갱신한다. Review를 보내는 actor가 TaskRun의 저장된 `coordinator_id`와 다르면 feedback은
+거부되어야 하며, 교정 경로는 기록된 coordinator로 재실행하는
+`wt as agents/<recorded> -- wt task review <task-run-id> --accept|--reject|--block "<message>"`
+형태다. Late review after pass는 정상 flow다. `--reject`와 `--block`은 passed TaskRun을
 `running`으로 되열고, task agent는 같은 TaskRun route로 다시 `wt task report`를 보낼 수
 있다. `--accept`는 metadata-only이며 running TaskRun을 `passed`로 만들지 않는다. Pull request
 review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한 check를 다시 돌린 뒤

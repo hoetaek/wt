@@ -37,7 +37,6 @@ use crate::workflow::{
     WorkflowTask,
 };
 use anyhow::{Result, bail};
-use std::env;
 use std::path::{Path, PathBuf};
 
 mod archive;
@@ -74,6 +73,7 @@ pub struct TaskOptions<'a> {
     pub mode: WorkflowModeArg,
     pub profile: Option<&'a str>,
     pub profiles: &'a [String],
+    pub coordinator: Option<&'a str>,
     pub title: Option<&'a str>,
     pub body: Option<&'a str>,
     pub body_file: Option<&'a Path>,
@@ -134,6 +134,7 @@ pub fn task(ctx: &Ctx, tasks: &[String], options: TaskOptions<'_>) -> Result<()>
             mode: options.mode,
             profile: options.profile,
             profiles: options.profiles,
+            coordinator: options.coordinator,
             title: options.title,
             body: options.body,
             body_file: options.body_file,
@@ -189,6 +190,7 @@ pub fn issue(ctx: &Ctx, issues: &[String], options: IssueOptions<'_>) -> Result<
             origin_id: options.origin_id,
             base: options.base,
             pr: options.pr,
+            coordinator: None,
         },
         prepared_tasks,
     )
@@ -223,34 +225,14 @@ pub fn repair(ctx: &Ctx, workflow: &str, apply: bool) -> Result<()> {
 }
 
 pub fn run(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
-    require_coordinator_session_for_workflow_run()?;
-    run_after_coordinator_session_check(ctx, workflow, jobs)
+    run_after_workflow_selection(ctx, workflow, jobs)
 }
 
-fn run_after_coordinator_session_check(
-    ctx: &Ctx,
-    workflow: Option<&str>,
-    jobs: usize,
-) -> Result<()> {
+fn run_after_workflow_selection(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
     let Some(path) = resolve_run_workflow_path(ctx, workflow)? else {
         return Ok(());
     };
     workflow_runner::run_workflow(ctx, &path, jobs)
-}
-
-fn require_coordinator_session_for_workflow_run() -> Result<()> {
-    let has_agent_id =
-        env::var_os("WT_AGENT_ID").is_some_and(|value| !value.to_string_lossy().trim().is_empty());
-    if has_agent_id {
-        return Ok(());
-    }
-
-    bail!(
-        "wt workflow run requires a coordinator session.\n\
-         Set WT_AGENT_ID in this shell first, for example:\n\n\
-             eval \"$(wt session set coord-<work-slug>)\"\n\n\
-         Pick a semantic one-segment name for this work, such as coord-review-routing or coord-release-prep."
-    )
 }
 
 pub fn pass(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
@@ -415,6 +397,7 @@ cli = "none"
                 mode,
                 profile,
                 profiles: &[],
+                coordinator: None,
                 title,
                 body: None,
                 body_file: None,
@@ -457,6 +440,7 @@ cli = "none"
                 mode: WorkflowModeArg::Matrix,
                 profile: None,
                 profiles,
+                coordinator: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -644,6 +628,52 @@ cli = "none"
     }
 
     #[test]
+    fn task_explicit_coordinator_overrides_launcher_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new_with_options(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+            crate::context::CtxOptions {
+                launcher_coordinator_id: Some("agents/coord-env".into()),
+                ..crate::context::CtxOptions::default()
+            },
+        );
+
+        super::task(
+            &ctx,
+            &["workflow docs".into()],
+            TaskOptions {
+                mode: WorkflowModeArg::Batch,
+                profile: None,
+                profiles: &[],
+                coordinator: Some("agents/coord-explicit"),
+                title: Some("Workflow explicit"),
+                body: None,
+                body_file: None,
+                origin_provider: None,
+                origin_id: None,
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap();
+
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].run.coordinator_id.as_deref(),
+            Some("agents/coord-explicit")
+        );
+        let output = ui.steps.lock().unwrap().join("\n");
+        assert!(output.contains("coordinator: agents/coord-explicit"));
+        assert!(!output.contains("hint:"));
+    }
+
+    #[test]
     fn task_prepares_workflow_task_runs_with_auto_created_coordinator_when_unset() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
@@ -713,6 +743,7 @@ cli = "none"
                 mode: WorkflowModeArg::Matrix,
                 profile: None,
                 profiles: &["alpha".into(), "beta".into()],
+                coordinator: None,
                 title: Some("Workflow routing"),
                 body: None,
                 body_file: None,
@@ -764,6 +795,7 @@ cli = "none"
                 mode: WorkflowModeArg::Matrix,
                 profile: None,
                 profiles: &["alpha".into()],
+                coordinator: None,
                 title: Some("Workflow routing"),
                 body: None,
                 body_file: None,
@@ -779,7 +811,7 @@ cli = "none"
         rewrite_as_legacy_workflow_route(&ctx, run_id);
         assert!(task_run_record(&ctx, run_id).unwrap().agent_id.is_none());
 
-        run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
+        run_after_workflow_selection(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
 
         let repaired = task_run_record(&ctx, run_id).unwrap();
         assert_eq!(repaired.status, STATUS_RUNNING);
@@ -798,35 +830,62 @@ cli = "none"
     }
 
     #[test]
-    fn run_workflow_echoes_recorded_coordinator_route() {
+    fn workflow_run_preserves_existing_coordinator_when_launcher_differs() {
         let dir = tempfile::tempdir().unwrap();
+        let prepare_ctx = ctx_with_launcher(dir.path(), "agents/coord-original");
+
+        task(
+            &prepare_ctx,
+            &["workflow docs".into()],
+            WorkflowModeArg::Batch,
+            None,
+            Some("Workflow routing"),
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+        let record = workflow_store::list(&prepare_ctx).unwrap().remove(0);
+        task_run::update(
+            &prepare_ctx,
+            &record.workflow.tasks[0].run,
+            STATUS_PASSED,
+            Some("workflow-docs"),
+            None,
+        )
+        .unwrap();
+
         let ui = Arc::new(MockUi::new());
-        let ctx = Ctx::new_with_options(
+        let run_ctx = Ctx::new_with_options(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
             Config::default(),
             Box::new(MockRunner::new()),
             Box::new(Arc::clone(&ui)),
             crate::context::CtxOptions {
-                launcher_coordinator_id: Some("agents/coord-workflow".into()),
+                launcher_coordinator_id: Some("agents/coord-other".into()),
                 ..crate::context::CtxOptions::default()
             },
         );
-        let record = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["coordinator echo"]);
-        update_task_run(
-            &ctx,
-            &record.workflow.tasks[0],
-            STATUS_PASSED,
-            Some("coordinator-echo"),
-        );
 
-        run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
+        run_after_workflow_selection(&run_ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
 
-        let steps = ui.steps.lock().unwrap().join("\n");
-        assert!(
-            steps.contains("Workflow coordinator: agents/coord-workflow"),
-            "unexpected workflow output: {steps}"
+        let preserved = task_run_record(&run_ctx, &record.workflow.tasks[0].run).unwrap();
+        assert_eq!(
+            preserved.coordinator_id.as_deref(),
+            Some("agents/coord-original")
         );
+        let output = ui
+            .steps
+            .lock()
+            .unwrap()
+            .iter()
+            .chain(ui.dims.lock().unwrap().iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(output.contains("coordinator: agents/coord-original"));
+        assert!(output.contains("run preserves the stored route"));
+        assert!(!output.contains("agents/coord-other"));
     }
 
     #[test]
@@ -842,6 +901,7 @@ cli = "none"
                 mode: WorkflowModeArg::Batch,
                 profile: None,
                 profiles: &[],
+                coordinator: None,
                 title: Some("Workflow migration"),
                 body: Some("Ship the larger workflow migration"),
                 body_file: None,
@@ -899,6 +959,7 @@ cli = "none"
                 mode: WorkflowModeArg::Batch,
                 profile: None,
                 profiles: &[],
+                coordinator: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -938,6 +999,7 @@ cli = "none"
                 mode: WorkflowModeArg::Matrix,
                 profile: None,
                 profiles: &strings(&["alpha", "beta"]),
+                coordinator: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -972,6 +1034,7 @@ cli = "none"
                 mode: WorkflowModeArg::Batch,
                 profile: None,
                 profiles: &[],
+                coordinator: None,
                 title: Some("Workflow migration"),
                 body: None,
                 body_file: Some(&body_path),
@@ -1004,6 +1067,7 @@ cli = "none"
                 mode: WorkflowModeArg::Batch,
                 profile: None,
                 profiles: &[],
+                coordinator: None,
                 title: None,
                 body: Some("inline"),
                 body_file: Some(&body_path),
@@ -1026,6 +1090,7 @@ cli = "none"
                 mode: WorkflowModeArg::Batch,
                 profile: None,
                 profiles: &[],
+                coordinator: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -1262,8 +1327,8 @@ cli = "none"
         .path;
         std::fs::create_dir_all(first_worktree).unwrap();
 
-        let err = run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1)
-            .unwrap_err();
+        let err =
+            run_after_workflow_selection(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap_err();
 
         assert!(err.to_string().contains("Workflow batch failed"));
         let first_run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
@@ -1303,8 +1368,8 @@ cli = "none"
         );
         update_task_run(&ctx, &record.workflow.tasks[1], STATUS_FAILED, None);
 
-        let err = run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1)
-            .unwrap_err();
+        let err =
+            run_after_workflow_selection(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap_err();
         let message = err.to_string();
 
         assert!(
@@ -1509,7 +1574,7 @@ cli = "none"
         let record =
             prepare_matrix_workflow(&ctx, &["add-schema".into()], &strings(&["alpha", "beta"]));
 
-        run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
+        run_after_workflow_selection(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let added_branches = calls
@@ -2981,7 +3046,7 @@ landing = "auto"
         let workflow_before = fs::read_to_string(&workflow.path).unwrap();
         let run_before = fs::read_to_string(&run_path).unwrap();
 
-        run_after_coordinator_session_check(&ctx, None, 1).unwrap();
+        run_after_workflow_selection(&ctx, None, 1).unwrap();
 
         assert_eq!(
             ui.warnings.lock().unwrap().as_slice(),
