@@ -321,7 +321,6 @@ pub struct WorkspaceConfig {
     pub post_deps_tabs: Vec<String>,
     pub colors: HashMap<String, String>,
     pub browser: Option<WorkspaceBrowserConfig>,
-    pub chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
@@ -331,7 +330,7 @@ struct WorkspaceConfigRaw {
     post_deps_tabs: Vec<String>,
     colors: HashMap<String, String>,
     browser: Option<WorkspaceBrowserConfig>,
-    chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
+    chrome_devtools: Option<toml::Value>,
 }
 
 impl<'de> Deserialize<'de> for WorkspaceConfig {
@@ -345,13 +344,17 @@ impl<'de> Deserialize<'de> for WorkspaceConfig {
                 "[workspace].colors.new is no longer supported; use [workspace].colors.branch for wt run branch",
             ));
         }
+        if raw.chrome_devtools.is_some() {
+            return Err(D::Error::custom(
+                "[workspace.chrome_devtools] is no longer supported; move it to [workspace.browser.chrome_devtools]",
+            ));
+        }
 
         Ok(Self {
             tabs: raw.tabs,
             post_deps_tabs: raw.post_deps_tabs,
             colors: raw.colors,
             browser: raw.browser,
-            chrome_devtools: raw.chrome_devtools,
         })
     }
 }
@@ -399,6 +402,7 @@ pub struct WorkspaceBrowserConfig {
     pub mode: WorkspaceBrowserMode,
     pub url: Option<String>,
     pub app: Option<String>,
+    pub chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -415,6 +419,7 @@ struct WorkspaceBrowserConfigRaw {
     mode: WorkspaceBrowserMode,
     url: Option<String>,
     app: Option<String>,
+    chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
 }
 
 impl<'de> Deserialize<'de> for WorkspaceBrowserConfig {
@@ -436,8 +441,19 @@ impl<'de> Deserialize<'de> for WorkspaceBrowserConfig {
                         "[workspace.browser].app is not valid when mode = \"none\"",
                     ));
                 }
+                if raw.chrome_devtools.is_some() {
+                    return Err(D::Error::custom(
+                        "[workspace.browser.chrome_devtools] is only valid when mode = \"chrome_devtools\"",
+                    ));
+                }
             }
-            WorkspaceBrowserMode::System => {}
+            WorkspaceBrowserMode::System => {
+                if raw.chrome_devtools.is_some() {
+                    return Err(D::Error::custom(
+                        "[workspace.browser.chrome_devtools] is only valid when mode = \"chrome_devtools\"",
+                    ));
+                }
+            }
             WorkspaceBrowserMode::ChromeDevtools => {
                 if raw.app.is_some() {
                     return Err(D::Error::custom(
@@ -451,6 +467,7 @@ impl<'de> Deserialize<'de> for WorkspaceBrowserConfig {
             mode: raw.mode,
             url: raw.url,
             app: raw.app,
+            chrome_devtools: raw.chrome_devtools,
         })
     }
 }

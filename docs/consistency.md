@@ -917,6 +917,10 @@ merge된 layer, convention file, built-in default를 사용자가 복사해 수�
 활성 section의 runtime default는 `wt config` 출력에 materialize한다. 예를 들어 active
 `[site]` provider는 name/root/secure/url과 Traefik target default까지 보여주고,
 `[workspace.browser]`는 setup/open 때 browser를 띄울지와 어떤 URL을 열지 결정한다.
+`[workspace.browser.chrome_devtools]`는 `mode = "chrome_devtools"`일 때만 쓰는 Chrome
+DevTools launch detail(`port`, `user_data_dir`)을 소유한다. 이 detail은 browser mode의
+하위 설정이지 `[workspace]`의 형제 section이 아니다. 예전 `[workspace.chrome_devtools]`는
+canonical path가 아니며, 자동 migrate나 alias 없이 새 위치로 옮기라는 parse error로 거부한다.
 `[site]`는 `site_url`을 만들고, browser launch policy를 소유하지 않는다. active `[editor]`
 설정은 생략된 placement의 `cmux_surface` default를 보여준다. cmux에서 이 default는
 caller surface 오른쪽 split pane에 editor를 연다. 반대로
@@ -1025,7 +1029,7 @@ layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 
 | `worktree.copy_as` | extend, `(from, to)` 쌍 dedupe | 같은 from/to 쌍은 한 번만. 다른 from이면 둘 다 살아남는다. |
 | `setup.deps` | extend (현재 dedupe 없음) | 같은 dep을 두 layer가 적으면 두 번 실행된다. dep script는 idempotent하게 짠다. |
 | `setup.env`, `setup.env_files[path]`, `workspace.colors` | HashMap extend (key-level overwrite) | 같은 key를 윗 layer가 덮어쓴다. |
-| `workflow.pull_request`, `workflow.landing`, `editor.command`, `editor.placement`, `workspace.browser`, `workspace.chrome_devtools` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. |
+| `workflow.pull_request`, `workflow.landing`, `editor.command`, `editor.placement`, `workspace.browser` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. `workspace.browser.chrome_devtools`는 `workspace.browser`의 하위 설정이므로 browser section과 함께 교체된다. |
 | `workspace` (Option 섹션) | deep-merge (both Some) | 두 layer가 모두 `[workspace]`를 가지면 필드별로 위 규칙대로 합친다. |
 | `site`, `issues` (Option 섹션) | wholesale REPLACE if Some | 윗 layer가 `[site]`/`[issues]`를 가지면 아랫 layer의 같은 섹션이 통째로 사라진다. 한 필드만 바꾸려면 base의 모든 필드를 다시 적는다. |
 | `agent.{cli, args, command, ready, submit, timeout, send_after}` | per-field presence-based REPLACE | 윗 layer가 명시한 필드만 덮어쓴다. |

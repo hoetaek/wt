@@ -847,6 +847,7 @@ mod tests {
                     mode: WorkspaceBrowserMode::System,
                     url: Some("{{site_url}}".into()),
                     app: Some("Google Chrome".into()),
+                    chrome_devtools: None,
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -887,8 +888,7 @@ mod tests {
     #[test]
     fn run_setup_browser_mode_none_suppresses_browser_and_chrome_launch() {
         use crate::config::{
-            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
-            WorkspaceConfig,
+            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceConfig,
         };
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner};
@@ -921,10 +921,7 @@ mod tests {
                     mode: WorkspaceBrowserMode::None,
                     url: None,
                     app: None,
-                }),
-                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    port: Some(9222),
-                    ..WorkspaceChromeDevtoolsConfig::default()
+                    chrome_devtools: None,
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -1002,9 +999,9 @@ mod tests {
                     mode: WorkspaceBrowserMode::ChromeDevtools,
                     url: None,
                     app: None,
-                }),
-                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    ..WorkspaceChromeDevtoolsConfig::default()
+                    chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                        ..WorkspaceChromeDevtoolsConfig::default()
+                    }),
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -1097,9 +1094,9 @@ mod tests {
                     mode: WorkspaceBrowserMode::ChromeDevtools,
                     url: None,
                     app: None,
-                }),
-                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    ..WorkspaceChromeDevtoolsConfig::default()
+                    chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                        ..WorkspaceChromeDevtoolsConfig::default()
+                    }),
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -1199,9 +1196,9 @@ mod tests {
                     mode: WorkspaceBrowserMode::ChromeDevtools,
                     url: None,
                     app: None,
-                }),
-                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    ..WorkspaceChromeDevtoolsConfig::default()
+                    chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                        ..WorkspaceChromeDevtoolsConfig::default()
+                    }),
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -1315,9 +1312,9 @@ mod tests {
                     mode: WorkspaceBrowserMode::ChromeDevtools,
                     url: None,
                     app: None,
-                }),
-                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    ..WorkspaceChromeDevtoolsConfig::default()
+                    chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                        ..WorkspaceChromeDevtoolsConfig::default()
+                    }),
                 }),
                 ..WorkspaceConfig::default()
             }),

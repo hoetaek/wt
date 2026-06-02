@@ -260,7 +260,7 @@ impl InitCommonConfig {
                     mode,
                     url: browser.url.clone(),
                     app: browser.app.clone(),
-                    chrome_devtools_user_data_dir: workspace
+                    chrome_devtools_user_data_dir: browser
                         .chrome_devtools
                         .as_ref()
                         .and_then(|chrome| chrome.user_data_dir.clone()),
@@ -1239,7 +1239,7 @@ fn append_active_common_config(
         s.push('\n');
 
         if browser.mode == InitWorkspaceBrowserMode::ChromeDevtools {
-            s.push_str("[workspace.chrome_devtools]\n");
+            s.push_str("[workspace.browser.chrome_devtools]\n");
             if let Some(user_data_dir) = browser.chrome_devtools_user_data_dir.as_deref() {
                 s.push_str(&format!("user_data_dir = {}\n", toml_quote(user_data_dir)));
             } else {
@@ -3329,15 +3329,14 @@ mod tests {
         assert_eq!(config.issues.unwrap().provider, IssueProviderType::Linear);
         assert_eq!(config.site.unwrap().provider, SiteProvider::Herd);
         let workspace = config.workspace.unwrap();
+        let browser = workspace.browser.unwrap();
+        assert_eq!(browser.mode, WorkspaceBrowserMode::ChromeDevtools);
         assert_eq!(
-            workspace.browser.unwrap().mode,
-            WorkspaceBrowserMode::ChromeDevtools
-        );
-        assert_eq!(
-            workspace.chrome_devtools.unwrap().user_data_dir.as_deref(),
+            browser.chrome_devtools.unwrap().user_data_dir.as_deref(),
             Some("{{worktree_parent}}/.chrome-devtools/{{worktree_name}}")
         );
         assert!(plan.content.contains("[workspace.browser]"));
+        assert!(plan.content.contains("[workspace.browser.chrome_devtools]"));
         assert!(plan.content.contains("mode = \"chrome_devtools\""));
         assert!(!plan.content.contains("php artisan storage:link"));
         assert!(!plan.content.contains("setup-env"));

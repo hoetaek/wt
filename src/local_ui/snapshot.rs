@@ -227,7 +227,6 @@ struct WorkspaceSummary {
     post_deps_tab_count: usize,
     post_deps_tabs: Vec<String>,
     browser: Option<WorkspaceBrowserSummary>,
-    chrome_devtools: Option<WorkspaceChromeDevtoolsSummary>,
     color_count: usize,
     colors: Vec<WorkspaceColorSummary>,
 }
@@ -237,6 +236,7 @@ struct WorkspaceBrowserSummary {
     mode: String,
     url: Option<String>,
     app: Option<String>,
+    chrome_devtools: Option<WorkspaceChromeDevtoolsSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1550,13 +1550,13 @@ fn workspace_summary(workspace: Option<&WorkspaceConfig>) -> Option<WorkspaceSum
                 mode: workspace_browser_mode_name(browser.mode).into(),
                 url: browser.effective_url().map(|url| url.into_owned()),
                 app: browser.app.clone(),
+                chrome_devtools: browser.chrome_devtools.as_ref().map(|chrome| {
+                    WorkspaceChromeDevtoolsSummary {
+                        port: chrome.port,
+                        user_data_dir: chrome.effective_user_data_dir().into(),
+                    }
+                }),
             }),
-        chrome_devtools: workspace.chrome_devtools.as_ref().map(|chrome| {
-            WorkspaceChromeDevtoolsSummary {
-                port: chrome.port,
-                user_data_dir: chrome.effective_user_data_dir().into(),
-            }
-        }),
         color_count: workspace.effective_colors().len(),
         colors: workspace
             .effective_colors()
@@ -2072,10 +2072,10 @@ mod tests {
                 mode: WorkspaceBrowserMode::ChromeDevtools,
                 url: Some("{{site_url}}".into()),
                 app: None,
-            }),
-            chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                port: Some(9222),
-                user_data_dir: Some("{{worktree_parent}}/.chrome-devtools".into()),
+                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                    port: Some(9222),
+                    user_data_dir: Some("{{worktree_parent}}/.chrome-devtools".into()),
+                }),
             }),
         });
         config.agent = Some(AgentConfig {
@@ -2143,9 +2143,10 @@ mod tests {
         assert_eq!(editor.placement, "cmux_surface");
         let workspace = snapshot.config.workspace.as_ref().unwrap();
         assert_eq!(workspace.tabs, vec!["lazygit", "nvim"]);
-        assert_eq!(workspace.browser.as_ref().unwrap().mode, "chrome_devtools");
+        let browser = workspace.browser.as_ref().unwrap();
+        assert_eq!(browser.mode, "chrome_devtools");
         assert_eq!(
-            workspace.chrome_devtools.as_ref().unwrap().user_data_dir,
+            browser.chrome_devtools.as_ref().unwrap().user_data_dir,
             "{{worktree_parent}}/.chrome-devtools"
         );
         let agent = snapshot.config.agent.as_ref().unwrap();

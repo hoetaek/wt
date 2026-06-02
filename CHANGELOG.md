@@ -12,6 +12,10 @@ minor version instead of moving to `x.0.0`.
   workspace browser mode is `chrome_devtools`, using worktree-local launch-time
   config without changing tracked or global agent settings.
 
+- Changed Chrome DevTools browser config from `[workspace.chrome_devtools]` to
+  `[workspace.browser.chrome_devtools]`; the old section is now rejected with
+  migration guidance instead of being silently accepted.
+
 - Changed Chrome DevTools browser launch to skip Chrome first-run and default-browser prompts for isolated profiles.
 
 - Changed the spec work-sequence layout to the nine-gate LEAF model: folded

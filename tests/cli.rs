@@ -7318,7 +7318,9 @@ fn config_renders_workspace_chrome_devtools_browser_policy_defaults() {
         .stdout(predicate::str::contains("[workspace.browser]"))
         .stdout(predicate::str::contains("mode = \"chrome_devtools\""))
         .stdout(predicate::str::contains("url = \"{{site_url}}/dashboard\""))
-        .stdout(predicate::str::contains("[workspace.chrome_devtools]"))
+        .stdout(predicate::str::contains(
+            "[workspace.browser.chrome_devtools]",
+        ))
         .stdout(predicate::str::contains(
             "user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"",
         ))
