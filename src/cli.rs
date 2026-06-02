@@ -357,7 +357,7 @@ pub enum Commands {
     },
     /// Print, edit, or refactor wt config files
     #[command(
-        long_about = "Print, edit, or refactor wt config files. Shared repo config is .wt.toml; private repo config is <repo-root>/.wt/config/local.toml; named profile config is <repo-root>/.wt/config/profiles/<name>/profile.toml."
+        long_about = "Print, edit, or refactor wt-managed config files. Shared repo config is .wt.toml and SOURCE name `shared`; private repo config is <repo-root>/.wt/config/local.toml and SOURCE name `local`; named profile config is <repo-root>/.wt/config/profiles/<name>/profile.toml and SOURCE name `profiles/<name>`. Config edit, extract, and inline reject files outside that managed namespace."
     )]
     Config {
         /// Show effective config using <repo-root>/.wt/config/profiles/<name>
@@ -448,18 +448,30 @@ pub enum ShellInitShell {
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum ConfigCommand {
     /// Open a config file in the configured editor
+    #[command(
+        long_about = "Open a wt-managed config source in the configured editor. SOURCE may be `shared`, `local`, `profiles/<name>`, or a canonical path to one of those managed files. Missing managed files are created by the editor path after parent directories are prepared. Omit SOURCE to select from existing managed config files; non-managed paths are rejected before the editor opens."
+    )]
     Edit {
-        /// Config file to edit (omit to select from known config files)
+        /// Managed config source to edit: shared, local, profiles/<name>, or a canonical path
+        #[arg(value_name = "SOURCE")]
         source: Option<PathBuf>,
     },
     /// Move selected config sections into the next structured config file
+    #[command(
+        long_about = "Move selected config sections out of a wt-managed config source. SOURCE may be `shared`, `local`, `profiles/<name>`, or a canonical path to one of those managed files. Omit SOURCE to select from managed config files; non-managed paths are rejected."
+    )]
     Extract {
-        /// Config source file to refactor
+        /// Managed config source to refactor: shared, local, profiles/<name>, or a canonical path
+        #[arg(value_name = "SOURCE")]
         source: Option<PathBuf>,
     },
     /// Move selected structured config back inline
+    #[command(
+        long_about = "Move selected structured config back inline from a wt-managed config source. SOURCE may be `shared`, `local`, `profiles/<name>`, or a canonical path to one of those managed files. Prompt convention files are inlined through their owning profile source; direct prompt-file SOURCE paths are rejected."
+    )]
     Inline {
-        /// Config or prompt source file to refactor
+        /// Managed config source to refactor: shared, local, profiles/<name>, or a canonical path
+        #[arg(value_name = "SOURCE")]
         source: Option<PathBuf>,
     },
 }
@@ -2974,6 +2986,41 @@ mod tests {
         assert!(help.contains(".wt.toml"));
         assert!(help.contains("<repo-root>/.wt/config/local.toml"));
         assert!(help.contains("<repo-root>/.wt/config/profiles/<name>/profile.toml"));
+        assert!(help.contains("SOURCE name `shared`"));
+        assert!(help.contains("SOURCE name `local`"));
+        assert!(help.contains("SOURCE name `profiles/<name>`"));
+        assert!(help.contains("reject files outside that managed namespace"));
+    }
+
+    #[test]
+    fn config_source_subcommand_help_describes_closed_namespace() {
+        let mut command = Cli::command();
+        let config = command.find_subcommand_mut("config").unwrap();
+
+        for subcommand in ["edit", "extract", "inline"] {
+            let help = config
+                .find_subcommand_mut(subcommand)
+                .unwrap()
+                .render_long_help()
+                .to_string();
+            assert!(help.contains("shared"), "{subcommand} help was:\n{help}");
+            assert!(help.contains("local"), "{subcommand} help was:\n{help}");
+            assert!(
+                help.contains("profiles/<name>"),
+                "{subcommand} help was:\n{help}"
+            );
+            assert!(
+                help.contains("canonical path"),
+                "{subcommand} help was:\n{help}"
+            );
+        }
+
+        let inline_help = config
+            .find_subcommand_mut("inline")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(inline_help.contains("direct prompt-file SOURCE paths are rejected"));
     }
 
     #[test]
