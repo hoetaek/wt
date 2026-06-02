@@ -110,12 +110,10 @@ const STRINGS = {
     timeoutLabel: "timeout",
     sendAfterLabel: "send_after",
     promptModesLabel: "prompt",
-    testLabel: "test",
     copyLabel: "copy",
     githubUserLabel: "gh_user",
     issuesProviderLabel: "provider",
     linkLabel: "link",
-    testsLabel: "commands",
     errorLabel: "Error",
     configuredLabel: "Configured",
     omittedLabel: "Omitted",
@@ -211,13 +209,12 @@ const STRINGS = {
     agentTimeoutHelp: "Maximum wait for the agent ready signal.",
     agentSendAfterHelp: "Delay before submitting after the prompt is sent.",
     agentPromptHelp: "Prompt scopes configured for agent startup.",
-    testHelp: "Commands reviewers or agents can run for validation.",
     localSettingsSummary: "Private settings for this workspace from .local/.wt.toml.",
     sharedSettingsSummary: "Shared repository defaults from .wt.toml.",
     otherSettingsSummary: "Additional settings loaded for this workspace.",
     selectedProfileSummary: "This profile is currently applied to the effective settings.",
     availableProfileSummary: "This profile is not currently selected.",
-    configProfileSummary: "Profile values that can change agent, files, links, local site, or tests.",
+    configProfileSummary: "Profile values that can change agent, files, links, or local site.",
     profileSiteLabel: "site",
     configInvalidProfileSummary: "This profile cannot be read and needs attention.",
     renderedEffectiveConfig: "Final TOML",
@@ -424,12 +421,10 @@ const STRINGS = {
     timeoutLabel: "timeout",
     sendAfterLabel: "send_after",
     promptModesLabel: "prompt",
-    testLabel: "test",
     copyLabel: "copy",
     githubUserLabel: "gh_user",
     issuesProviderLabel: "provider",
     linkLabel: "link",
-    testsLabel: "commands",
     errorLabel: "오류",
     configuredLabel: "설정됨",
     omittedLabel: "생략됨",
@@ -525,13 +520,12 @@ const STRINGS = {
     agentTimeoutHelp: "agent 준비 신호를 기다리는 최대 시간입니다.",
     agentSendAfterHelp: "prompt를 보낸 뒤 제출하기 전 대기 시간입니다.",
     agentPromptHelp: "agent 시작 prompt가 적용되는 작업 범위입니다.",
-    testHelp: "리뷰어나 agent가 검증에 사용할 수 있는 명령입니다.",
     localSettingsSummary: ".local/.wt.toml에서 현재 worktree에만 적용되는 설정입니다.",
     sharedSettingsSummary: ".wt.toml에서 저장소와 함께 공유되는 기본 설정입니다.",
     otherSettingsSummary: "현재 worktree에 추가로 적용된 설정입니다.",
     selectedProfileSummary: "현재 적용된 프로필입니다.",
     availableProfileSummary: "현재 적용되지는 않은 프로필입니다.",
-    configProfileSummary: "이 프로필이 에이전트, 복사/링크 파일, 로컬 사이트, 테스트를 어떻게 바꾸는지 보여줍니다.",
+    configProfileSummary: "이 프로필이 에이전트, 복사/링크 파일, 로컬 사이트를 어떻게 바꾸는지 보여줍니다.",
     profileSiteLabel: "site",
     configInvalidProfileSummary: "읽을 수 없는 프로필입니다. 이 항목은 확인이 필요합니다.",
     renderedEffectiveConfig: "최종 TOML",
@@ -1254,7 +1248,6 @@ function profileCard(row) {
     valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
     valuesPill(t("linkLabel"), profileLinkValues(row)),
     row.has_site ? pill(t("profileSiteLabel"), "green") : "",
-    row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
   ], [row.path], bodyPreview(row.source_text), "violet", [
     detail(t("sourceToml"), row.source_text, "source"),
   ]);
@@ -1591,19 +1584,6 @@ function configEffectiveCards(config, options = {}) {
       items: agentItems,
     });
   }
-  if (config.test?.commands?.length) {
-    cards.push({
-      kicker: "[test]",
-      value: "",
-      description: t("testHelp"),
-      tone: "green",
-      items: config.test.commands.map((command) => ({
-        label: "run",
-        value: commandSummaryValue(command),
-        description: commandConditionText(command) || t("testHelp"),
-      })),
-    });
-  }
   return cards;
 }
 
@@ -1614,7 +1594,6 @@ function profileEffectiveCards(row) {
     site: row.site,
     workspace: row.workspace,
     agent: row.agent_settings,
-    test: row.test,
   }, { includeWorkflow: false, includeIssues: false, includeEditor: false })
     .map(profileTomlCard);
 }
@@ -1772,7 +1751,6 @@ function profileMasterDetailRecord(row, selected) {
       valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
-      row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
     ],
     summary: selected ? t("selectedProfileSummary") : t("availableProfileSummary"),
     pills: [
@@ -1783,7 +1761,6 @@ function profileMasterDetailRecord(row, selected) {
       valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
-      row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
     ],
     paths: [],
     hideSummarySectionTitle: true,
@@ -3104,7 +3081,6 @@ function profileScanRow(row) {
       valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
-      row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
     ],
     paths: [row.path],
     detail: row.source_text,

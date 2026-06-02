@@ -1027,7 +1027,7 @@ layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 
 | `setup.env`, `setup.env_files[path]`, `workspace.colors` | HashMap extend (key-level overwrite) | 같은 key를 윗 layer가 덮어쓴다. |
 | `workflow.pull_request`, `workflow.landing`, `editor.command`, `editor.placement`, `workspace.browser`, `workspace.chrome_devtools` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. |
 | `workspace` (Option 섹션) | deep-merge (both Some) | 두 layer가 모두 `[workspace]`를 가지면 필드별로 위 규칙대로 합친다. |
-| `site`, `test`, `issues` (Option 섹션) | wholesale REPLACE if Some | 윗 layer가 `[site]`/`[test]`/`[issues]`를 가지면 아랫 layer의 같은 섹션이 통째로 사라진다. 한 필드만 바꾸려면 base의 모든 필드를 다시 적는다. |
+| `site`, `issues` (Option 섹션) | wholesale REPLACE if Some | 윗 layer가 `[site]`/`[issues]`를 가지면 아랫 layer의 같은 섹션이 통째로 사라진다. 한 필드만 바꾸려면 base의 모든 필드를 다시 적는다. |
 | `agent.{cli, args, command, ready, submit, timeout, send_after}` | per-field presence-based REPLACE | 윗 layer가 명시한 필드만 덮어쓴다. |
 | `agent.prompt[mode]` | REPLACE per mode unless `[agent.prompt.append].<mode>` | 같은 mode를 적으면 덮어쓴다. append-key form은 기존 prompt에 `\n\n`으로 이어붙인다. |
 
@@ -1044,8 +1044,8 @@ profile convention(`scaffold/`, `prompts/`)은 effective config에 합쳐지지 
 피하려면 둘 중 하나는 명시한다.
 
 `[profile] name`과 inline `[profile.agent]`, `[profile.worktree]`, `[profile.setup]`,
-`[profile.workspace]`, `[profile.site]`, `[profile.test]`를 같이 쓸 수 없다. parse 단계에서
-hard error로 막는다. 한 곳만 골라서 적는다.
+`[profile.workspace]`, `[profile.site]`를 같이 쓸 수 없다. parse 단계에서 hard error로
+막는다. 한 곳만 골라서 적는다.
 
 ### Omission Means Default Behavior
 *North star: [Direction-Driven Design](north-star.md#direction-driven-design).*
@@ -1215,7 +1215,7 @@ bundle 이름을 고르게 하지 않는다. `--preset`과 `--minimal`은 primar
 않고, 새 parser surface에서는 legacy 입력으로 실패한다.
 
 `wt init --yes`는 non-interactive project recommendation을 받아들이는 자동화 경로다. Repo
-manifest를 scan해 setup command, dev tab, test command 후보를 active config에 반영한다.
+manifest를 scan해 setup command와 dev tab 후보를 active config에 반영한다.
 Issue/site integration은 explicit flag 또는 `.linear.toml`, Laravel app처럼 concrete repo
 signal이 있을 때만 active config에 쓴다. Agent runtime은 explicit flag나 기존 config default가
 있을 때만 쓴다. Interactive wizard에서는 agent runtime도 작은 selector로 물으며, agent를 선택하면

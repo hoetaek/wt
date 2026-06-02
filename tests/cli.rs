@@ -6686,7 +6686,7 @@ fn init_dry_run_previews_plan_without_writing_config() {
         .stdout(predicate::str::contains("저장 범위: 개인 설정"))
         .stdout(predicate::str::contains("작업: 새 설정 생성"))
         .stdout(predicate::str::contains(
-            "저장될 설정: workflow, worktree, setup, test, workspace",
+            "저장될 설정: workflow, worktree, setup, workspace",
         ))
         .stdout(predicate::str::contains("감지된 신호:").not())
         .stdout(predicate::str::contains("[ok] 감지됨:").not())
@@ -6699,9 +6699,7 @@ fn init_dry_run_previews_plan_without_writing_config() {
             "colors = { task = \"blue\", issue = \"blue\", branch = \"green\", pr = \"magenta\" }",
         ))
         .stdout(predicate::str::contains("run = \"npm install\""))
-        .stdout(predicate::str::contains("run = \"npm test\""))
-        .stdout(predicate::str::contains("[setup]"))
-        .stdout(predicate::str::contains("[test]"));
+        .stdout(predicate::str::contains("[setup]"));
 
     assert!(!temp.path().join(".wt.toml").exists());
     assert!(!temp.path().join(".wt/config/local.toml").exists());

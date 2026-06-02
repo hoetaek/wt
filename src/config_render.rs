@@ -1,8 +1,8 @@
 use crate::config::{
     AgentCli, AgentConfig, Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
-    ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig,
-    WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
-    WorkspaceBrowserMode, WorkspaceConfig, WorktreeConfig,
+    ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, WorkflowDefaultLandingPolicy,
+    WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode, WorkspaceBrowserMode, WorkspaceConfig,
+    WorktreeConfig,
 };
 
 pub fn render_effective_config(config: &Config) -> String {
@@ -25,9 +25,6 @@ pub fn render_effective_config(config: &Config) -> String {
     }
     if let Some(agent) = config.agent.as_ref() {
         append_agent_section(&mut s, agent);
-    }
-    if let Some(test) = config.test.as_ref() {
-        append_test_section(&mut s, test);
     }
 
     if s.starts_with('\n') {
@@ -282,29 +279,6 @@ fn append_agent_section(s: &mut String, agent: &AgentConfig) {
             s.push_str(&format!("{} = {}\n", toml_key(mode), toml_array(prompts)));
         }
     }
-}
-
-fn append_test_section(s: &mut String, test: &TestConfig) {
-    if test.commands.is_empty() {
-        return;
-    }
-
-    s.push_str("\n[test]\ncommands = [\n");
-    for command in &test.commands {
-        s.push_str("    { ");
-        if let Some(label) = command.label.as_deref() {
-            s.push_str(&format!("label = {}, ", toml_quote(label)));
-        }
-        if let Some(working_dir) = command.working_dir.as_deref() {
-            s.push_str(&format!("working_dir = {}, ", toml_quote(working_dir)));
-        }
-        s.push_str(&format!("run = {}", toml_quote(&command.run)));
-        if let Some(if_exists) = command.if_exists.as_deref() {
-            s.push_str(&format!(", if_exists = {}", toml_quote(if_exists)));
-        }
-        s.push_str(" },\n");
-    }
-    s.push_str("]\n");
 }
 
 fn agent_cli_name(cli: &AgentCli) -> &'static str {

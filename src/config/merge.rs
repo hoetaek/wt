@@ -46,9 +46,6 @@ pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
             }
         });
     }
-    if profile.test.is_some() {
-        merged.test = profile.test;
-    }
     if profile.issues.is_some() {
         merged.issues = profile.issues;
     }

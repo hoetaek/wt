@@ -86,7 +86,6 @@ Default recommendation rules:
 
 - Keep `[workspace]` when the user benefits from repeatable cmux tabs.
 - Add `[setup]` only when the repo has a real per-worktree install/sync step.
-- Add `[test]` commands that mirror CI and are available locally.
 - Add `[issues]` only when provider issue workflows are used.
 - Add `[site]`, `[workspace.browser]`, and `workspace.post_deps_tabs` only for
   app/web repos with a local server or URL.
@@ -125,7 +124,6 @@ Cover these when relevant:
 
 - `[workspace]`
 - `[setup]`
-- `[test]`
 - `[issues]`
 - `[site]`
 - `[workspace.browser]`
