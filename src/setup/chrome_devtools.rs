@@ -160,6 +160,8 @@ fn launch_chrome_macos(ctx: &Ctx, launch: &ChromeDevtoolsLaunch) -> Result<()> {
         "--remote-debugging-address=127.0.0.1",
         port_arg.as_str(),
         user_data_dir_arg.as_str(),
+        "--no-first-run",
+        "--no-default-browser-check",
         "--new-window",
         launch.url.as_str(),
     ];
@@ -189,6 +191,8 @@ fn launch_chrome_unix(ctx: &Ctx, launch: &ChromeDevtoolsLaunch) -> Result<()> {
         "--remote-debugging-address=127.0.0.1",
         port_arg.as_str(),
         user_data_dir_arg.as_str(),
+        "--no-first-run",
+        "--no-default-browser-check",
         "--new-window",
         launch.url.as_str(),
     ];

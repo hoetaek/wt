@@ -8,6 +8,8 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Changed Chrome DevTools browser launch to skip Chrome first-run and default-browser prompts for isolated profiles.
+
 - Changed the spec work-sequence layout to the nine-gate LEAF model: folded
   context into `01-Learn/02-unknowns.md`, added the `00-status.md` dashboard, and
   renumbered downstream gate files to `02-Example/03-criteria.md`,
