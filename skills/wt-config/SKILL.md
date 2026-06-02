@@ -89,6 +89,14 @@ Default recommendation rules:
 - Add `[issues]` only when provider issue workflows are used.
 - Add `[site]`, `[workspace.browser]`, and `workspace.post_deps_tabs` only for
   app/web repos with a local server or URL.
+- Add `[workspace.browser.chrome_devtools]` only with
+  `[workspace.browser] mode = "chrome_devtools"` when the repo benefits from
+  workspace-isolated debugging Chrome. For `claude`/`codex` agents, that mode
+  also auto-wires chrome-devtools MCP to the workspace Chrome without editing
+  global or tracked agent config.
+- If existing config uses a legacy top-level chrome_devtools sibling, recommend
+  moving it under `[workspace.browser.chrome_devtools]`; do not present the
+  legacy form as active TOML.
 - Add `[editor]` only when a concrete editor command is useful for wt-managed
   TOML editing.
 - Add `[worktree]` only for real path/copy/link/context needs.
@@ -115,6 +123,19 @@ Default recommendation rules:
 - Compact examples are allowed when they clarify a real project choice, but they
   must be project-shaped alternatives, not a general config manual.
 
+For a web repo that should launch an isolated debugging Chrome, use the nested
+browser shape:
+
+```toml
+[workspace.browser]
+mode = "chrome_devtools"
+url = "{{site_url}}"
+
+[workspace.browser.chrome_devtools]
+port = 9222
+user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
+```
+
 ## Explain Omissions
 
 For every relevant section that could plausibly be expected, say whether to
@@ -127,6 +148,7 @@ Cover these when relevant:
 - `[issues]`
 - `[site]`
 - `[workspace.browser]`
+- `[workspace.browser.chrome_devtools]`
 - `[editor]`
 - `[worktree]`
 - `[workflow]`
@@ -136,6 +158,10 @@ Cover these when relevant:
 The omission rationale should be practical, for example: "CLI repo, no dev
 server", "tool missing locally", "built-in default already covers this", or
 "shared config would leak a personal path".
+
+For `[workspace.browser.chrome_devtools]`, omit it when browser mode is
+`none`/`system` or ordinary browser open is enough; keep or add it only for
+`mode = "chrome_devtools"` isolated Chrome debugging.
 
 ## Diagnose Existing Setup Against Intent
 
