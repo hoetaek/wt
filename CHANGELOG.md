@@ -8,6 +8,10 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added automatic chrome-devtools MCP wiring for Claude and Codex agents when
+  workspace browser mode is `chrome_devtools`, using worktree-local launch-time
+  config without changing tracked or global agent settings.
+
 - Changed Chrome DevTools browser launch to skip Chrome first-run and default-browser prompts for isolated profiles.
 
 - Changed the spec work-sequence layout to the nine-gate LEAF model: folded
