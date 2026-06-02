@@ -775,17 +775,9 @@ mod tests {
             ..SetupOptions::default()
         };
 
-        let opened = open_workspace(
-            &ctx,
-            &config,
-            &wt,
-            &names,
-            &HashMap::new(),
-            "",
-            &options,
-        )
-        .unwrap()
-        .unwrap();
+        let opened = open_workspace(&ctx, &config, &wt, &names, &HashMap::new(), "", &options)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(
             opened
