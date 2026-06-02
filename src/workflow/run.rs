@@ -170,12 +170,53 @@ pub(crate) fn prepare_workflow(
 pub(crate) fn run_workflow(ctx: &Ctx, workflow_path: &Path, jobs: usize) -> Result<()> {
     let mut metadata = workflow_store::read(workflow_path)?;
     state::ensure_workflow_task_routes(ctx, workflow_path, &metadata)?;
+    print_workflow_coordinator(ctx, &metadata)?;
     match metadata.mode {
         WorkflowMode::Single => run_single_workflow(ctx, workflow_path, &mut metadata),
         WorkflowMode::Batch => run_batch_workflow(ctx, workflow_path, &mut metadata, jobs),
         WorkflowMode::Stack => run_stack_workflow(ctx, workflow_path, &mut metadata),
         WorkflowMode::Matrix => run_matrix_workflow(ctx, workflow_path, &mut metadata, jobs),
     }
+}
+
+fn print_workflow_coordinator(ctx: &Ctx, metadata: &WorkflowMetadata) -> Result<()> {
+    if let Some(coordinator) = recorded_workflow_coordinator(ctx, metadata)? {
+        ctx.ui
+            .print_step(&format!("Workflow coordinator: {coordinator}"));
+    }
+    Ok(())
+}
+
+fn recorded_workflow_coordinator(ctx: &Ctx, metadata: &WorkflowMetadata) -> Result<Option<String>> {
+    for row in &metadata.tasks {
+        if row.runs.is_empty() {
+            if let Some(coordinator) = recorded_task_run_coordinator(ctx, &row.run)? {
+                return Ok(Some(coordinator));
+            }
+        } else {
+            for run in &row.runs {
+                if let Some(coordinator) = recorded_task_run_coordinator(ctx, &run.run)? {
+                    return Ok(Some(coordinator));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn recorded_task_run_coordinator(ctx: &Ctx, run_id: &str) -> Result<Option<String>> {
+    if run_id.trim().is_empty() {
+        return Ok(None);
+    }
+    let path = task_run::resolve(ctx, run_id)
+        .with_context(|| format!("Workflow references missing TaskRun {run_id}"))?;
+    let run = task_run::read(&path)?;
+    Ok(run
+        .coordinator_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|coordinator| !coordinator.is_empty())
+        .map(str::to_string))
 }
 
 fn run_single_workflow(
