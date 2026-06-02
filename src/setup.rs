@@ -998,6 +998,8 @@ mod tests {
         assert!(launch_args.contains("--remote-debugging-address=127.0.0.1"));
         assert!(launch_args.contains("--remote-debugging-port="));
         assert!(launch_args.contains("--user-data-dir="));
+        assert!(launch_args.contains("--no-first-run"));
+        assert!(launch_args.contains("--no-default-browser-check"));
         assert!(launch_args.contains(&expected_user_data_dir_text));
         assert!(!launch_args.contains("{{worktree_"));
 
