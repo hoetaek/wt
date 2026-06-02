@@ -5,16 +5,50 @@ use anyhow::{Context, Result};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-pub(crate) fn resolve_launch_coordinator(ctx: &Ctx) -> Result<AgentId> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LaunchCoordinatorSource {
+    Explicit,
+    LauncherContext,
+    LiveAnchor,
+    AutoCreated,
+}
+
+pub(crate) struct LaunchCoordinator {
+    pub(crate) agent: AgentId,
+    pub(crate) source: LaunchCoordinatorSource,
+}
+
+pub(crate) fn resolve_launch_coordinator(ctx: &Ctx, explicit: Option<&str>) -> Result<AgentId> {
+    Ok(resolve_launch_coordinator_with_source(ctx, explicit)?.agent)
+}
+
+pub(crate) fn resolve_launch_coordinator_with_source(
+    ctx: &Ctx,
+    explicit: Option<&str>,
+) -> Result<LaunchCoordinator> {
+    if let Some(value) = explicit {
+        return Ok(LaunchCoordinator {
+            agent: AgentId::parse(value).context("Invalid explicit launch coordinator agent id")?,
+            source: LaunchCoordinatorSource::Explicit,
+        });
+    }
+
     if let Some(value) = ctx.launcher_coordinator_id.as_deref() {
-        return AgentId::parse(value)
-            .context("Invalid launch coordinator agent id from WT_AGENT_ID or identity anchor");
+        return Ok(LaunchCoordinator {
+            agent: AgentId::parse(value).context(
+                "Invalid launch coordinator agent id from WT_AGENT_ID or identity anchor",
+            )?,
+            source: LaunchCoordinatorSource::LauncherContext,
+        });
     }
 
     match identity_locator::resolve_identity(ctx) {
         Ok(Some(anchor)) => {
-            return AgentId::parse(&anchor.id)
-                .context("Invalid launch coordinator agent id from live identity anchor");
+            return Ok(LaunchCoordinator {
+                agent: AgentId::parse(&anchor.id)
+                    .context("Invalid launch coordinator agent id from live identity anchor")?,
+                source: LaunchCoordinatorSource::LiveAnchor,
+            });
         }
         Ok(None) => {}
         Err(err) => {
@@ -40,7 +74,11 @@ pub(crate) fn resolve_launch_coordinator(ctx: &Ctx) -> Result<AgentId> {
             key.display()
         )
     })?;
-    AgentId::parse(&anchor.id).context("Invalid auto-created launch coordinator agent id")
+    Ok(LaunchCoordinator {
+        agent: AgentId::parse(&anchor.id)
+            .context("Invalid auto-created launch coordinator agent id")?,
+        source: LaunchCoordinatorSource::AutoCreated,
+    })
 }
 
 fn generated_agent_id_for_anchor(key: &AnchorKey) -> Result<AgentId> {
@@ -91,7 +129,7 @@ mod tests {
             },
         );
 
-        let agent = resolve_launch_coordinator(&ctx).unwrap();
+        let agent = resolve_launch_coordinator(&ctx, None).unwrap();
 
         assert_eq!(agent.as_str(), "agents/coord-a");
     }
@@ -111,7 +149,7 @@ mod tests {
             },
         );
 
-        let agent = resolve_launch_coordinator(&ctx).unwrap();
+        let agent = resolve_launch_coordinator(&ctx, None).unwrap();
         let key = identity_locator::current_anchor_key().unwrap();
         let anchor = identity_locator::read_identity_anchor(&ctx, &key)
             .unwrap()

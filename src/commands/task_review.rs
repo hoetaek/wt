@@ -12,7 +12,7 @@ pub(crate) fn run(
     status: TaskReviewStatus,
     message: &[String],
 ) -> Result<()> {
-    let from = current_actor::resolve_launch_coordinator(ctx)?;
+    let from = current_actor::resolve_launch_coordinator(ctx, None)?;
     run_with_actor(ctx, task_run_id, status, message, &from)
 }
 
