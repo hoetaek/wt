@@ -449,7 +449,7 @@ pub enum ShellInitShell {
 pub enum ConfigCommand {
     /// Open a config file in the configured editor
     #[command(
-        long_about = "Open a wt-managed config source in the configured editor. SOURCE may be `shared`, `local`, `profiles/<name>`, or a canonical path to one of those managed files. Omit SOURCE to select from managed config files; non-managed paths are rejected before the editor opens."
+        long_about = "Open a wt-managed config source in the configured editor. SOURCE may be `shared`, `local`, `profiles/<name>`, or a canonical path to one of those managed files. Missing managed files are created by the editor path after parent directories are prepared. Omit SOURCE to select from existing managed config files; non-managed paths are rejected before the editor opens."
     )]
     Edit {
         /// Managed config source to edit: shared, local, profiles/<name>, or a canonical path

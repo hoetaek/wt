@@ -67,7 +67,7 @@ pub fn edit(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Result<(
 
     let path = match source {
         Some(source) => {
-            let path = resolve_source_path(ctx, source)?;
+            let path = resolve_edit_source_path(ctx, source)?;
             reject_legacy_profile_source(ctx, &path)?;
             path
         }
@@ -1285,6 +1285,117 @@ fn resolve_source_path(ctx: &Ctx, source: &Path) -> Result<PathBuf> {
     bail!("{}", unsupported_source_message(ctx, source, &sources));
 }
 
+fn resolve_edit_source_path(ctx: &Ctx, source: &Path) -> Result<PathBuf> {
+    if let Some(path) = managed_edit_target_path(ctx, source)? {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        return Ok(path.canonicalize().unwrap_or(path));
+    }
+
+    let path = source_path(ctx, source);
+    reject_legacy_profile_source(ctx, &path)?;
+
+    let sources = discover_edit_sources(ctx)?;
+    let canonical_path = path.canonicalize().ok();
+    if let Some(source) = sources
+        .iter()
+        .find(|managed| path_matches_managed_source(&path, canonical_path.as_deref(), managed))
+    {
+        return Ok(source.path.clone());
+    }
+
+    bail!("{}", unsupported_edit_source_message(ctx, source));
+}
+
+fn managed_edit_target_path(ctx: &Ctx, source: &Path) -> Result<Option<PathBuf>> {
+    if source == Path::new("shared") {
+        return Ok(Some(ctx.repo_root.join(".wt.toml")));
+    }
+    if source == Path::new("local") {
+        return Ok(Some(ctx.storage_root.config_toml()));
+    }
+    if let Some(profile_name) = profile_shorthand_name(source)? {
+        return Ok(Some(
+            ctx.storage_root
+                .profiles_dir()
+                .join(profile_name)
+                .join("profile.toml"),
+        ));
+    }
+
+    let path = source_path(ctx, source);
+    if path_matches_logical_target(&path, &ctx.repo_root.join(".wt.toml")) {
+        return Ok(Some(ctx.repo_root.join(".wt.toml")));
+    }
+    if path_matches_logical_target(&path, &ctx.storage_root.config_toml()) {
+        return Ok(Some(ctx.storage_root.config_toml()));
+    }
+    if let Some(profile_name) = profile_name_for_logical_profile_toml(ctx, &path)? {
+        return Ok(Some(
+            ctx.storage_root
+                .profiles_dir()
+                .join(profile_name)
+                .join("profile.toml"),
+        ));
+    }
+
+    Ok(None)
+}
+
+fn profile_shorthand_name(source: &Path) -> Result<Option<String>> {
+    let mut components = source.components();
+    if components.next().map(|component| component.as_os_str())
+        != Some(std::ffi::OsStr::new("profiles"))
+    {
+        return Ok(None);
+    }
+    let Some(name) = components
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+    else {
+        return Ok(None);
+    };
+    if components.next().is_some() {
+        return Ok(None);
+    }
+    crate::config::validate_profile_name(name)?;
+    Ok(Some(name.to_string()))
+}
+
+fn profile_name_for_logical_profile_toml(ctx: &Ctx, path: &Path) -> Result<Option<String>> {
+    let profiles_dir = normalize_path_lexically(&ctx.storage_root.profiles_dir());
+    let path = normalize_path_lexically(path);
+    let Ok(relative) = path.strip_prefix(&profiles_dir) else {
+        return Ok(None);
+    };
+    if relative.file_name() != Some(std::ffi::OsStr::new("profile.toml"))
+        || relative.components().count() != 2
+    {
+        return Ok(None);
+    }
+    let Some(name) = relative.parent().and_then(|parent| parent.file_name()) else {
+        return Ok(None);
+    };
+    let Some(name) = name.to_str() else {
+        return Ok(None);
+    };
+    crate::config::validate_profile_name(name)?;
+    Ok(Some(name.to_string()))
+}
+
+fn source_path(ctx: &Ctx, source: &Path) -> PathBuf {
+    if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        ctx.repo_root.join(source)
+    }
+}
+
+fn path_matches_logical_target(path: &Path, target: &Path) -> bool {
+    normalize_path_lexically(path) == normalize_path_lexically(target)
+}
+
 fn path_matches_managed_source(
     path: &Path,
     canonical_path: Option<&Path>,
@@ -1313,6 +1424,21 @@ fn unsupported_source_message(ctx: &Ctx, source: &Path, sources: &[ManagedConfig
     }
     message.push_str("\nRun without SOURCE to choose from managed config files.");
     message
+}
+
+fn unsupported_edit_source_message(ctx: &Ctx, source: &Path) -> String {
+    format!(
+        "Unsupported config source: {}.\nValid SOURCE values:\n  shared -> .wt.toml\n  local -> {}\n  profiles/<name> -> {}\nRun without SOURCE to choose from existing managed config files.",
+        source.display(),
+        managed_source_display(ctx, &ctx.storage_root.config_toml()),
+        managed_source_display(
+            ctx,
+            &ctx.storage_root
+                .profiles_dir()
+                .join("<name>")
+                .join("profile.toml")
+        )
+    )
 }
 
 fn profile_name_for_source(ctx: &Ctx, path: &Path) -> Option<String> {
@@ -1900,6 +2026,87 @@ mod tests {
         assert_eq!(
             resolve_source_path(&ctx, Path::new("profiles/codex")).unwrap(),
             profile.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn edit_source_shorthands_resolve_missing_managed_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+
+        assert_eq!(
+            resolve_edit_source_path(&ctx, Path::new("shared")).unwrap(),
+            dir.path().join(".wt.toml")
+        );
+        assert_eq!(
+            resolve_edit_source_path(&ctx, Path::new("local")).unwrap(),
+            dir.path().join(".wt/config/local.toml")
+        );
+        assert_eq!(
+            resolve_edit_source_path(&ctx, Path::new("profiles/codex")).unwrap(),
+            dir.path().join(".wt/config/profiles/codex/profile.toml")
+        );
+        assert!(dir.path().join(".wt/config").is_dir());
+        assert!(dir.path().join(".wt/config/profiles/codex").is_dir());
+    }
+
+    #[test]
+    fn edit_source_canonical_paths_resolve_missing_managed_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+        let local = dir.path().join(".wt/config/local.toml");
+        let profile = dir.path().join(".wt/config/profiles/codex/profile.toml");
+
+        assert_eq!(
+            resolve_edit_source_path(&ctx, Path::new(".wt/config/local.toml")).unwrap(),
+            local
+        );
+        assert_eq!(
+            resolve_edit_source_path(&ctx, &profile).unwrap(),
+            profile.clone()
+        );
+        assert_eq!(
+            resolve_edit_source_path(
+                &ctx,
+                Path::new("./.wt/config/profiles/codex/../codex/profile.toml"),
+            )
+            .unwrap(),
+            profile
+        );
+    }
+
+    #[test]
+    fn extract_and_inline_source_resolver_still_requires_discovered_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".wt.toml"), "").unwrap();
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+
+        for source in [
+            Path::new("local"),
+            Path::new(".wt/config/local.toml"),
+            Path::new("profiles/codex"),
+        ] {
+            let err = resolve_source_path(&ctx, source).unwrap_err();
+            let report = format!("{err:#}");
+            assert!(report.contains("Unsupported config source"), "{report}");
+            assert!(report.contains("shared -> .wt.toml"), "{report}");
+        }
+    }
+
+    #[test]
+    fn edit_source_rejects_bare_profile_name_with_creation_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+
+        let err = resolve_edit_source_path(&ctx, Path::new("codex")).unwrap_err();
+        let report = format!("{err:#}");
+        assert!(report.contains("Unsupported config source"));
+        assert!(report.contains("shared -> .wt.toml"));
+        assert!(report.contains("local -> <repo-root>/.wt/config/local.toml"));
+        assert!(
+            report
+                .contains("profiles/<name> -> <repo-root>/.wt/config/profiles/<name>/profile.toml"),
+            "{report}"
         );
     }
 

@@ -925,8 +925,7 @@ merge된 layer, convention file, built-in default를 사용자가 복사해 수�
 ### Config Source Namespace
 
 `wt config edit`, `wt config extract`, `wt config inline`의 typed `SOURCE`는 wt-managed
-config 파일의 닫힌 네임스페이스만 받는다. 유효한 shorthand는 selector가 보여주는 대상과
-같은 집합이다.
+config 파일의 닫힌 네임스페이스만 받는다. 유효한 shorthand는 다음 세 형태뿐이다.
 
 | shorthand | canonical target |
 |---|---|
@@ -934,10 +933,15 @@ config 파일의 닫힌 네임스페이스만 받는다. 유효한 shorthand는 
 | `local` | `<repo-root>/.wt/config/local.toml` |
 | `profiles/<name>` | `<repo-root>/.wt/config/profiles/<name>/profile.toml` |
 
-이 파일들을 가리키는 절대 경로나 repo-relative canonical path도 같은 대상으로 받는다.
+`wt config edit SOURCE`는 위 managed target이 아직 없어도 받는다. Parent directory를 준비한 뒤
+editor가 해당 파일을 만들 수 있게 한다. `wt config extract SOURCE`와 `wt config inline SOURCE`는
+refactor 대상이므로 이미 존재하는 managed file만 받는다. 이 파일들을 가리키는 절대 경로나
+repo-relative canonical path도 같은 대상으로 받는다.
+
 그 외 경로, 오타, bare profile name(`codex` 같은 이름)은 editor나 refactor 작업 전에
 비0 종료로 거부하고, 에러에는 유효한 대상 목록과 `SOURCE` 없이 실행하면 selector를 쓸 수
-있다는 안내를 포함한다.
+있다는 안내를 포함한다. `SOURCE` 없이 실행하는 selector는 기존 managed config file을 보여주며,
+아직 아무 파일도 없을 때는 personal `local` target을 기본 생성 대상으로 삼는다.
 
 Profile prompt convention file은 `SOURCE` 네임스페이스가 아니다. Prompt file을 inline할 때도
 `profiles/<name>` 또는 해당 `profile.toml`을 `SOURCE`로 넘긴 뒤 그 profile 안의 prompt file
