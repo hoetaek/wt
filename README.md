@@ -469,7 +469,8 @@ security, URL template, and Traefik target. A disabled `provider = "none"` site
 section is omitted from effective output. Browser launch behavior belongs to
 `[workspace.browser]`, not `[site]`.
 When `[editor]` is configured, `wt config` prints the effective editor
-placement default, `cmux_surface`, unless it is overridden.
+placement default, `cmux_surface`, unless it is overridden. In cmux, that
+default opens the editor in a right-side split pane next to the caller surface.
 
 `wt workflow task` and `wt workflow issue` snapshot the effective workflow
 policy into `<repo-root>/.wt/execution/workflows/<id>.toml` for the prepared workflow.

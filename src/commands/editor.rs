@@ -150,10 +150,10 @@ mod tests {
         let mut runner = MockRunner::new();
         runner.add_command("cmux");
         runner.add_response(
-            r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:2","pane_ref":"pane:3"}}"#,
+            r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:2","pane_ref":"pane:3","surface_ref":"surface:3"}}"#,
             true,
         );
-        runner.add_response("surface:4 surface:4", true);
+        runner.add_response("OK surface:4 workspace:2", true);
         runner.add_response("", true);
         let runner = Arc::new(runner);
 
@@ -165,6 +165,17 @@ mod tests {
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls[0].0, "cmux");
+        assert_eq!(
+            calls[1].1,
+            vec![
+                "new-split",
+                "right",
+                "--workspace",
+                "workspace:2",
+                "--surface",
+                "surface:3"
+            ]
+        );
         assert_eq!(calls[2].0, "cmux");
         assert_eq!(
             calls[2].1,
