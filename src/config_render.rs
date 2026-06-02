@@ -215,31 +215,17 @@ fn append_workspace_section(s: &mut String, workspace: &WorkspaceConfig) {
         if let Some(app) = browser.app.as_deref() {
             s.push_str(&format!("app = {}\n", toml_quote(app)));
         }
-    }
-    let chrome_devtools_active = workspace
-        .browser
-        .as_ref()
-        .is_some_and(|browser| browser.mode == WorkspaceBrowserMode::ChromeDevtools);
-    if chrome_devtools_active || workspace.chrome_devtools.is_some() {
-        if let Some(chrome_devtools) = workspace.chrome_devtools.as_ref() {
-            if chrome_devtools_active
-                || chrome_devtools.port.is_some()
-                || chrome_devtools.user_data_dir.is_some()
-            {
-                s.push_str("\n[workspace.chrome_devtools]\n");
-                if let Some(port) = chrome_devtools.port {
-                    s.push_str(&format!("port = {port}\n"));
-                }
-                if chrome_devtools_active || chrome_devtools.user_data_dir.is_some() {
-                    s.push_str(&format!(
-                        "user_data_dir = {}\n",
-                        toml_quote(chrome_devtools.effective_user_data_dir())
-                    ));
-                }
+
+        if browser.mode == WorkspaceBrowserMode::ChromeDevtools {
+            let default_chrome_devtools = crate::config::WorkspaceChromeDevtoolsConfig::default();
+            let chrome_devtools = browser
+                .chrome_devtools
+                .as_ref()
+                .unwrap_or(&default_chrome_devtools);
+            s.push_str("\n[workspace.browser.chrome_devtools]\n");
+            if let Some(port) = chrome_devtools.port {
+                s.push_str(&format!("port = {port}\n"));
             }
-        } else if chrome_devtools_active {
-            let chrome_devtools = crate::config::WorkspaceChromeDevtoolsConfig::default();
-            s.push_str("\n[workspace.chrome_devtools]\n");
             s.push_str(&format!(
                 "user_data_dir = {}\n",
                 toml_quote(chrome_devtools.effective_user_data_dir())
@@ -470,6 +456,7 @@ mod tests {
                     mode: WorkspaceBrowserMode::System,
                     url: None,
                     app: Some("Google Chrome".into()),
+                    chrome_devtools: None,
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -492,10 +479,10 @@ mod tests {
                     mode: WorkspaceBrowserMode::ChromeDevtools,
                     url: None,
                     app: None,
-                }),
-                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    port: Some(9222),
-                    ..WorkspaceChromeDevtoolsConfig::default()
+                    chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                        port: Some(9222),
+                        ..WorkspaceChromeDevtoolsConfig::default()
+                    }),
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -505,12 +492,22 @@ mod tests {
         assert!(rendered.contains("[workspace.browser]\n"));
         assert!(rendered.contains("mode = \"chrome_devtools\"\n"));
         assert!(rendered.contains("url = \"{{site_url}}\"\n"));
-        assert!(rendered.contains("[workspace.chrome_devtools]\n"));
+        assert!(rendered.contains("[workspace.browser.chrome_devtools]\n"));
         assert!(rendered.contains("port = 9222\n"));
         assert!(rendered.contains(
             "user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"\n"
         ));
         assert!(!rendered.contains("enabled = "));
+
+        let parsed: Config = toml::from_str(&rendered).unwrap();
+        let chrome_devtools = parsed
+            .workspace
+            .unwrap()
+            .browser
+            .unwrap()
+            .chrome_devtools
+            .unwrap();
+        assert_eq!(chrome_devtools.port, Some(9222));
     }
 
     #[test]
@@ -521,6 +518,7 @@ mod tests {
                     mode: WorkspaceBrowserMode::None,
                     url: None,
                     app: None,
+                    chrome_devtools: None,
                 }),
                 ..WorkspaceConfig::default()
             }),

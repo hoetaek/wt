@@ -1528,10 +1528,10 @@ function configEffectiveCards(config, options = {}) {
         description: t("browserHelp"),
       });
     }
-    if (workspace.chrome_devtools) {
+    if (workspace.browser?.chrome_devtools) {
       workspaceItems.push({
         label: t("chromeDevtoolsLabel"),
-        value: chromeDevtoolsValue(workspace.chrome_devtools),
+        value: chromeDevtoolsValue(workspace.browser.chrome_devtools),
         description: t("chromeDevtoolsHelp"),
       });
     }

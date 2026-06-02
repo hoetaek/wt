@@ -40,7 +40,7 @@ pub(crate) fn prepare_browser_launch(
             app: browser.app.clone(),
         })),
         WorkspaceBrowserMode::ChromeDevtools => {
-            let chrome_devtools = workspace.chrome_devtools.clone().unwrap_or_default();
+            let chrome_devtools = browser.chrome_devtools.clone().unwrap_or_default();
             Ok(Some(BrowserLaunch::ChromeDevtools(
                 chrome_devtools::prepare_chrome_devtools_session(
                     &chrome_devtools,
