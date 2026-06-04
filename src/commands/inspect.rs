@@ -8,7 +8,7 @@ use crate::services::work;
 use crate::task;
 use crate::task_run;
 use crate::workflow::render::{workflow_body_summary, workflow_origin_label, workflow_title_label};
-use crate::workflow::{self, WorkflowPullRequestMode, WorkflowRecord};
+use crate::workflow::{self, WorkflowCodexBaseReview, WorkflowPullRequestMode, WorkflowRecord};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -123,6 +123,7 @@ struct WorkflowMatch {
     task: String,
     parent: Option<String>,
     pull_request: WorkflowPullRequestMode,
+    review_codex_base: WorkflowCodexBaseReview,
 }
 
 fn workflows_for_task_runs(
@@ -183,6 +184,7 @@ fn add_workflow_matches(
                 task: workflow_task_label(&row.task),
                 parent: row.parent.clone(),
                 pull_request: record.workflow.policy.pull_request,
+                review_codex_base: record.workflow.policy.review.codex_base,
             });
         }
         for profile_run in &row.runs {
@@ -199,6 +201,7 @@ fn add_workflow_matches(
                 task: format!("{}:{}", workflow_task_label(&row.task), profile_run.profile),
                 parent: row.parent.clone(),
                 pull_request: record.workflow.policy.pull_request,
+                review_codex_base: record.workflow.policy.review.codex_base,
             });
         }
     }
@@ -309,6 +312,7 @@ struct InspectWorkflowReport {
     task: String,
     parent: Option<String>,
     pull_request: String,
+    review_codex_base: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -396,6 +400,7 @@ fn inspect_report(
                 task: workflow.task.clone(),
                 parent: workflow.parent.clone(),
                 pull_request: workflow.pull_request.as_str().into(),
+                review_codex_base: workflow.review_codex_base.as_str().into(),
             })
             .collect(),
         agent: InspectAgentReport {
@@ -604,6 +609,10 @@ fn print_workflow(ctx: &Ctx, workflow: &WorkflowMatch) {
         details.push(format!("parent={parent}"));
     }
     details.push(format!("pull_request={}", workflow.pull_request.as_str()));
+    details.push(format!(
+        "review_codex_base={}",
+        workflow.review_codex_base.as_str()
+    ));
     ctx.ui.print_dim(&format!(
         "  Workflow: {} ({})",
         workflow.title,
@@ -1328,6 +1337,7 @@ run = "run-unrelated"
             task: "feature".into(),
             parent: None,
             pull_request: WorkflowPullRequestMode::None,
+            review_codex_base: WorkflowCodexBaseReview::None,
         };
 
         print_next_section(&ctx, &target, &[workflow]);

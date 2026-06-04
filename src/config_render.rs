@@ -1,8 +1,8 @@
 use crate::config::{
     AgentCli, AgentConfig, Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
-    ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig,
-    WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
-    WorkspaceBrowserMode, WorkspaceConfig, WorktreeConfig,
+    ReadyMode, ReviewCodexBasePolicy, ReviewDefaultPolicy, SetupConfig, SiteConfig, SiteProvider,
+    SubmitMode, WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy,
+    WorkflowDefaultPullRequestMode, WorkspaceBrowserMode, WorkspaceConfig, WorktreeConfig,
 };
 
 pub fn render_effective_config(config: &Config) -> String {
@@ -11,6 +11,7 @@ pub fn render_effective_config(config: &Config) -> String {
     append_worktree_section(&mut s, &config.worktree);
     append_setup_section(&mut s, &config.setup);
     append_workflow_section(&mut s, config.workflow_default_policy());
+    append_review_section(&mut s, config.review_default_policy());
     if let Some(issues) = config.issues.as_ref() {
         append_issues_section(&mut s, issues);
     }
@@ -25,9 +26,6 @@ pub fn render_effective_config(config: &Config) -> String {
     }
     if let Some(agent) = config.agent.as_ref() {
         append_agent_section(&mut s, agent);
-    }
-    if let Some(test) = config.test.as_ref() {
-        append_test_section(&mut s, test);
     }
 
     if s.starts_with('\n') {
@@ -136,6 +134,14 @@ fn append_workflow_section(s: &mut String, policy: WorkflowDefaultPolicy) {
     ));
 }
 
+fn append_review_section(s: &mut String, policy: ReviewDefaultPolicy) {
+    s.push_str("\n[review]\n");
+    s.push_str(&format!(
+        "codex_base = {}\n",
+        toml_quote(review_codex_base_name(policy.codex_base))
+    ));
+}
+
 fn append_issues_section(s: &mut String, issues: &IssuesConfig) {
     s.push_str("\n[issues]\n");
     s.push_str(&format!(
@@ -218,31 +224,17 @@ fn append_workspace_section(s: &mut String, workspace: &WorkspaceConfig) {
         if let Some(app) = browser.app.as_deref() {
             s.push_str(&format!("app = {}\n", toml_quote(app)));
         }
-    }
-    let chrome_devtools_active = workspace
-        .browser
-        .as_ref()
-        .is_some_and(|browser| browser.mode == WorkspaceBrowserMode::ChromeDevtools);
-    if chrome_devtools_active || workspace.chrome_devtools.is_some() {
-        if let Some(chrome_devtools) = workspace.chrome_devtools.as_ref() {
-            if chrome_devtools_active
-                || chrome_devtools.port.is_some()
-                || chrome_devtools.user_data_dir.is_some()
-            {
-                s.push_str("\n[workspace.chrome_devtools]\n");
-                if let Some(port) = chrome_devtools.port {
-                    s.push_str(&format!("port = {port}\n"));
-                }
-                if chrome_devtools_active || chrome_devtools.user_data_dir.is_some() {
-                    s.push_str(&format!(
-                        "user_data_dir = {}\n",
-                        toml_quote(chrome_devtools.effective_user_data_dir())
-                    ));
-                }
+
+        if browser.mode == WorkspaceBrowserMode::ChromeDevtools {
+            let default_chrome_devtools = crate::config::WorkspaceChromeDevtoolsConfig::default();
+            let chrome_devtools = browser
+                .chrome_devtools
+                .as_ref()
+                .unwrap_or(&default_chrome_devtools);
+            s.push_str("\n[workspace.browser.chrome_devtools]\n");
+            if let Some(port) = chrome_devtools.port {
+                s.push_str(&format!("port = {port}\n"));
             }
-        } else if chrome_devtools_active {
-            let chrome_devtools = crate::config::WorkspaceChromeDevtoolsConfig::default();
-            s.push_str("\n[workspace.chrome_devtools]\n");
             s.push_str(&format!(
                 "user_data_dir = {}\n",
                 toml_quote(chrome_devtools.effective_user_data_dir())
@@ -284,29 +276,6 @@ fn append_agent_section(s: &mut String, agent: &AgentConfig) {
     }
 }
 
-fn append_test_section(s: &mut String, test: &TestConfig) {
-    if test.commands.is_empty() {
-        return;
-    }
-
-    s.push_str("\n[test]\ncommands = [\n");
-    for command in &test.commands {
-        s.push_str("    { ");
-        if let Some(label) = command.label.as_deref() {
-            s.push_str(&format!("label = {}, ", toml_quote(label)));
-        }
-        if let Some(working_dir) = command.working_dir.as_deref() {
-            s.push_str(&format!("working_dir = {}, ", toml_quote(working_dir)));
-        }
-        s.push_str(&format!("run = {}", toml_quote(&command.run)));
-        if let Some(if_exists) = command.if_exists.as_deref() {
-            s.push_str(&format!(", if_exists = {}", toml_quote(if_exists)));
-        }
-        s.push_str(" },\n");
-    }
-    s.push_str("]\n");
-}
-
 fn agent_cli_name(cli: &AgentCli) -> &'static str {
     match cli {
         AgentCli::Codex => "codex",
@@ -345,6 +314,14 @@ fn workflow_default_landing_name(policy: WorkflowDefaultLandingPolicy) -> &'stat
     match policy {
         WorkflowDefaultLandingPolicy::Manual => "manual",
         WorkflowDefaultLandingPolicy::Auto => "auto",
+    }
+}
+
+fn review_codex_base_name(policy: ReviewCodexBasePolicy) -> &'static str {
+    match policy {
+        ReviewCodexBasePolicy::None => "none",
+        ReviewCodexBasePolicy::Advisory => "advisory",
+        ReviewCodexBasePolicy::Required => "required",
     }
 }
 
@@ -432,9 +409,9 @@ fn toml_quote(value: &str) -> String {
 mod tests {
     use super::render_effective_config;
     use crate::config::{
-        Config, EditorConfig, EditorPlacement, SiteConfig, SiteProvider, WorkflowConfig,
-        WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig, WorkspaceBrowserMode,
-        WorkspaceChromeDevtoolsConfig, WorkspaceConfig,
+        Config, EditorConfig, EditorPlacement, ReviewCodexBasePolicy, ReviewConfig, SiteConfig,
+        SiteProvider, WorkflowConfig, WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig,
+        WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig, WorkspaceConfig,
     };
 
     #[test]
@@ -450,6 +427,21 @@ mod tests {
         assert!(rendered.contains("[workflow]\n"));
         assert!(rendered.contains("pull_request = \"draft\"\n"));
         assert!(rendered.contains("landing = \"manual\"\n"));
+        assert!(rendered.contains("[review]\n"));
+        assert!(rendered.contains("codex_base = \"none\"\n"));
+    }
+
+    #[test]
+    fn review_section_uses_effective_policy_defaults() {
+        let rendered = render_effective_config(&Config {
+            review: ReviewConfig {
+                codex_base: Some(ReviewCodexBasePolicy::Required),
+            },
+            ..Config::default()
+        });
+
+        assert!(rendered.contains("[review]\n"));
+        assert!(rendered.contains("codex_base = \"required\"\n"));
     }
 
     #[test]
@@ -496,6 +488,7 @@ mod tests {
                     mode: WorkspaceBrowserMode::System,
                     url: None,
                     app: Some("Google Chrome".into()),
+                    chrome_devtools: None,
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -518,10 +511,10 @@ mod tests {
                     mode: WorkspaceBrowserMode::ChromeDevtools,
                     url: None,
                     app: None,
-                }),
-                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    port: Some(9222),
-                    ..WorkspaceChromeDevtoolsConfig::default()
+                    chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                        port: Some(9222),
+                        ..WorkspaceChromeDevtoolsConfig::default()
+                    }),
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -531,12 +524,22 @@ mod tests {
         assert!(rendered.contains("[workspace.browser]\n"));
         assert!(rendered.contains("mode = \"chrome_devtools\"\n"));
         assert!(rendered.contains("url = \"{{site_url}}\"\n"));
-        assert!(rendered.contains("[workspace.chrome_devtools]\n"));
+        assert!(rendered.contains("[workspace.browser.chrome_devtools]\n"));
         assert!(rendered.contains("port = 9222\n"));
         assert!(rendered.contains(
             "user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"\n"
         ));
         assert!(!rendered.contains("enabled = "));
+
+        let parsed: Config = toml::from_str(&rendered).unwrap();
+        let chrome_devtools = parsed
+            .workspace
+            .unwrap()
+            .browser
+            .unwrap()
+            .chrome_devtools
+            .unwrap();
+        assert_eq!(chrome_devtools.port, Some(9222));
     }
 
     #[test]
@@ -547,6 +550,7 @@ mod tests {
                     mode: WorkspaceBrowserMode::None,
                     url: None,
                     app: None,
+                    chrome_devtools: None,
                 }),
                 ..WorkspaceConfig::default()
             }),

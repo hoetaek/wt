@@ -35,6 +35,11 @@ impl StudioSession {
     pub fn validate_api_headers(&self, headers: &HeaderMap) -> bool {
         origin_matches(headers, &self.origin) && session_cookie_matches(headers, &self.token)
     }
+
+    pub fn validate_read_headers(&self, headers: &HeaderMap) -> bool {
+        optional_origin_matches(headers, &self.origin)
+            && session_cookie_matches(headers, &self.token)
+    }
 }
 
 pub fn mint_session_token() -> Result<String> {
@@ -48,6 +53,13 @@ fn origin_matches(headers: &HeaderMap, expected: &str) -> bool {
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|origin| origin == expected)
+}
+
+fn optional_origin_matches(headers: &HeaderMap, expected: &str) -> bool {
+    headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .is_none_or(|origin| origin == expected)
 }
 
 fn session_cookie_matches(headers: &HeaderMap, expected_token: &str) -> bool {

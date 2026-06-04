@@ -366,25 +366,17 @@ mod tests {
     }
 
     fn assert_wake_sent(calls: &[CommandCall]) {
-        let set_buffer = calls
-            .iter()
-            .find(|(cmd, args, _)| {
-                cmd == "cmux" && args.first().is_some_and(|arg| arg == "set-buffer")
-            })
-            .expect("expected cmux set-buffer call");
-        assert!(set_buffer.1[2].starts_with("wt-codex-surface-4-"));
-        assert_eq!(set_buffer.1.last().unwrap(), "Check your wt inbox.");
         assert!(calls.iter().any(|(cmd, args, _)| {
             cmd == "cmux"
                 && args.iter().map(String::as_str).collect::<Vec<_>>()
                     == vec![
-                        "paste-buffer",
-                        "--name",
-                        set_buffer.1[2].as_str(),
+                        "send",
                         "--surface",
                         "surface:4",
                         "--workspace",
                         "workspace:1",
+                        "--",
+                        "Check your wt inbox.",
                     ]
         }));
         assert!(calls.iter().any(|(cmd, args, _)| {
@@ -399,6 +391,9 @@ mod tests {
                         "--",
                         "enter",
                     ]
+        }));
+        assert!(!calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux" && args.first().is_some_and(|arg| arg == "set-buffer")
         }));
     }
 }

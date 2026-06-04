@@ -7,7 +7,7 @@ use crate::config::{
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::cmux::CmuxService;
-use crate::services::current_actor;
+use crate::services::current_actor::{self, LaunchCoordinatorSource};
 use crate::services::git::GitService;
 use crate::setup;
 use crate::task::{self as task_store, PreparedTask};
@@ -57,6 +57,7 @@ pub(crate) struct PrepareWorkflowOptions<'a> {
     pub(crate) origin_id: Option<&'a str>,
     pub(crate) base: &'a Option<String>,
     pub(crate) pr: Option<WorkflowPrModeArg>,
+    pub(crate) coordinator: Option<&'a str>,
 }
 
 pub(crate) fn validate_prepare_options(
@@ -124,7 +125,8 @@ pub(crate) fn prepare_workflow(
     let default_title =
         default_workflow_title(ctx, options.mode, &prepared_tasks, options.profiles);
     let title = workflow_metadata.title.or(default_title);
-    let coordinator = current_actor::resolve_launch_coordinator(ctx)?;
+    let coordinator =
+        current_actor::resolve_launch_coordinator_with_source(ctx, options.coordinator)?;
     let coordinator_label = workflow_coordinator_label(title.as_deref(), &workflow_id);
     let prepared = workflow_tasks_from_prepared(
         ctx,
@@ -134,7 +136,7 @@ pub(crate) fn prepare_workflow(
         prepared_tasks,
         options.profiles,
         WorkflowRouteSnapshot {
-            coordinator_id: coordinator.as_str(),
+            coordinator_id: coordinator.agent.as_str(),
             coordinator_label: &coordinator_label,
         },
     )?;
@@ -163,18 +165,94 @@ pub(crate) fn prepare_workflow(
         ctx,
         &workflow_path,
         metadata.title.as_deref(),
+        coordinator.agent.as_str(),
+        coordinator.source == LaunchCoordinatorSource::AutoCreated,
     ));
     Ok(())
 }
 
 pub(crate) fn run_workflow(ctx: &Ctx, workflow_path: &Path, jobs: usize) -> Result<()> {
     let mut metadata = workflow_store::read(workflow_path)?;
-    state::ensure_workflow_task_routes(ctx, workflow_path, &metadata)?;
+    let route_repair = state::ensure_workflow_task_routes(ctx, workflow_path, &metadata)?;
+    print_workflow_run_route(ctx, workflow_path, &metadata, &route_repair)?;
     match metadata.mode {
         WorkflowMode::Single => run_single_workflow(ctx, workflow_path, &mut metadata),
         WorkflowMode::Batch => run_batch_workflow(ctx, workflow_path, &mut metadata, jobs),
         WorkflowMode::Stack => run_stack_workflow(ctx, workflow_path, &mut metadata),
         WorkflowMode::Matrix => run_matrix_workflow(ctx, workflow_path, &mut metadata, jobs),
+    }
+}
+
+fn print_workflow_run_route(
+    ctx: &Ctx,
+    workflow_path: &Path,
+    metadata: &WorkflowMetadata,
+    route_repair: &state::WorkflowRouteRepairSummary,
+) -> Result<()> {
+    let workflow_id = task_run::group_from_path(workflow_path)?;
+    ctx.ui.print_step(&format!(
+        "Running workflow: {workflow_id} ({}, {} tasks)",
+        metadata.mode.as_str(),
+        metadata.tasks.len()
+    ));
+    let coordinators = workflow_route_coordinators(ctx, metadata)?;
+    ctx.ui.print_dim(&format!(
+        "  coordinator: {}",
+        coordinator_summary(&coordinators)
+    ));
+    ctx.ui.print_dim(
+        "  note: coordinator is bound when `wt workflow task` creates the workflow; run preserves the stored route.",
+    );
+    if route_repair.repaired_missing_coordinator
+        && let Some(coordinator) = route_repair.fallback_coordinator_id.as_deref()
+    {
+        ctx.ui.print_dim(&format!(
+            "  note: repaired legacy TaskRuns without coordinator_id using {coordinator}."
+        ));
+    }
+    Ok(())
+}
+
+fn workflow_route_coordinators(ctx: &Ctx, metadata: &WorkflowMetadata) -> Result<Vec<String>> {
+    let mut seen = HashSet::new();
+    let mut coordinators = Vec::new();
+    for run_id in workflow_task_run_ids(metadata) {
+        let path = task_run::resolve(ctx, run_id)?;
+        let run = task_run::read(&path)?;
+        if let Some(coordinator) = run
+            .coordinator_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            && seen.insert(coordinator.to_string())
+        {
+            coordinators.push(coordinator.to_string());
+        }
+    }
+    Ok(coordinators)
+}
+
+fn workflow_task_run_ids(metadata: &WorkflowMetadata) -> Vec<&str> {
+    let mut run_ids = Vec::new();
+    for row in &metadata.tasks {
+        if row.runs.is_empty() {
+            run_ids.push(row.run.as_str());
+        } else {
+            run_ids.extend(row.runs.iter().map(|run| run.run.as_str()));
+        }
+    }
+    run_ids
+}
+
+fn coordinator_summary(coordinators: &[String]) -> String {
+    match coordinators {
+        [] => "missing".into(),
+        [coordinator] => coordinator.clone(),
+        _ => format!(
+            "{} ({} unique routes)",
+            coordinators.join(", "),
+            coordinators.len()
+        ),
     }
 }
 

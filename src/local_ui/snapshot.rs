@@ -1,6 +1,6 @@
 use crate::config::{
     AgentCli, AgentConfig, Config, ConfigSource, EditorPlacement, IssueProviderType, ReadyMode,
-    SetupConfig, SiteProvider, SubmitMode, TestConfig, WorkflowDefaultLandingPolicy,
+    ReviewCodexBasePolicy, SetupConfig, SiteProvider, SubmitMode, WorkflowDefaultLandingPolicy,
     WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
 };
 use crate::config_render::render_effective_config;
@@ -127,12 +127,12 @@ struct ConfigSummary {
     worktree: Option<WorktreeSummary>,
     setup: Option<SetupSummary>,
     workflow: WorkflowDefaultSummary,
+    review: ReviewSummary,
     issues: Option<IssuesSummary>,
     site: Option<SiteSummary>,
     editor: Option<EditorSummary>,
     workspace: Option<WorkspaceSummary>,
     agent: Option<AgentSummary>,
-    test: Option<TestSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -145,6 +145,11 @@ struct SourceFileSummary {
 struct WorkflowDefaultSummary {
     pull_request: String,
     landing: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ReviewSummary {
+    codex_base: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -228,7 +233,6 @@ struct WorkspaceSummary {
     post_deps_tab_count: usize,
     post_deps_tabs: Vec<String>,
     browser: Option<WorkspaceBrowserSummary>,
-    chrome_devtools: Option<WorkspaceChromeDevtoolsSummary>,
     color_count: usize,
     colors: Vec<WorkspaceColorSummary>,
 }
@@ -238,6 +242,7 @@ struct WorkspaceBrowserSummary {
     mode: String,
     url: Option<String>,
     app: Option<String>,
+    chrome_devtools: Option<WorkspaceChromeDevtoolsSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -269,11 +274,6 @@ struct AgentSummary {
 struct PromptModeSummary {
     mode: String,
     count: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct TestSummary {
-    commands: Vec<CommandSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -412,6 +412,7 @@ struct TaskRunCounts {
 struct WorkflowPolicySummary {
     pull_request: String,
     landing: String,
+    review_codex_base: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -475,13 +476,11 @@ struct ProfileSummary {
     link: Vec<String>,
     agent: String,
     has_site: bool,
-    test_count: usize,
     worktree: Option<WorktreeSummary>,
     setup: Option<SetupSummary>,
     site: Option<SiteSummary>,
     workspace: Option<WorkspaceSummary>,
     agent_settings: Option<AgentSummary>,
-    test: Option<TestSummary>,
     source_text: Option<String>,
 }
 
@@ -548,7 +547,7 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
             retrospecs: ctx
                 .storage_root
                 .display_path(&ctx.storage_root.retrospectives_dir())
-                + " + <repo-root>/.wt/planning/specs/*/11-retrospect.md",
+                + " + <repo-root>/.wt/planning/specs/*/04-Feedback/09-retrospect.md",
             config_paths: config_source_paths(&ctx),
         },
         config: config_summary(&ctx),
@@ -786,6 +785,7 @@ fn workflow_summary(
         policy: WorkflowPolicySummary {
             pull_request: metadata.policy.pull_request.as_str().into(),
             landing: metadata.policy.landing.as_str().into(),
+            review_codex_base: metadata.policy.review.codex_base.as_str().into(),
         },
         updated_at: metadata.updated_at,
         state_error,
@@ -1178,18 +1178,11 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
             let site = site_summary(&profile.config);
             let workspace = workspace_summary(profile.config.workspace.as_ref());
             let agent_settings = agent_summary(profile.config.agent.as_ref());
-            let test = test_summary(profile.config.test.as_ref());
             let agent = agent_settings
                 .as_ref()
                 .map(|agent| agent.cli.clone())
                 .unwrap_or_else(|| "none".into());
             let has_site = profile.config.has_site();
-            let test_count = profile
-                .config
-                .test
-                .as_ref()
-                .map(|test| test.commands.len())
-                .unwrap_or(0);
 
             ProfileSummary {
                 name: profile.name,
@@ -1208,13 +1201,11 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
                 link: profile.config.worktree.link.clone(),
                 agent,
                 has_site,
-                test_count,
                 worktree,
                 setup,
                 site,
                 workspace,
                 agent_settings,
-                test,
                 source_text: read_known_source_text(ctx, &profile.path),
             }
         })
@@ -1299,7 +1290,7 @@ fn retrospec_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
         {
             let path = entry?.path();
             if path.is_dir() {
-                let retrospec = path.join("11-retrospect.md");
+                let retrospec = path.join("04-Feedback/09-retrospect.md");
                 if retrospec.exists() {
                     paths.push(retrospec);
                 }
@@ -1320,7 +1311,7 @@ fn retrospec_identity(ctx: &Ctx, path: &Path) -> (String, String, Option<String>
             .and_then(|component| component.as_os_str().to_str())
         {
             return (
-                format!("{spec}/11-retrospect"),
+                format!("{spec}/09-retrospect"),
                 "spec-local".into(),
                 Some(spec.to_string()),
             );
@@ -1522,6 +1513,9 @@ fn config_summary(ctx: &Ctx) -> ConfigSummary {
             pull_request: workflow_default_pull_request(policy.pull_request).into(),
             landing: workflow_default_landing(policy.landing).into(),
         },
+        review: ReviewSummary {
+            codex_base: review_codex_base(policy.review.codex_base).into(),
+        },
         issues: ctx.config.issues.as_ref().map(|issues| IssuesSummary {
             provider: match issues.provider {
                 IssueProviderType::Linear => "linear".into(),
@@ -1536,7 +1530,6 @@ fn config_summary(ctx: &Ctx) -> ConfigSummary {
         }),
         workspace: workspace_summary(ctx.config.workspace.as_ref()),
         agent: agent_summary(ctx.config.agent.as_ref()),
-        test: test_summary(ctx.config.test.as_ref()),
     }
 }
 
@@ -1568,13 +1561,13 @@ fn workspace_summary(workspace: Option<&WorkspaceConfig>) -> Option<WorkspaceSum
                 mode: workspace_browser_mode_name(browser.mode).into(),
                 url: browser.effective_url().map(|url| url.into_owned()),
                 app: browser.app.clone(),
+                chrome_devtools: browser.chrome_devtools.as_ref().map(|chrome| {
+                    WorkspaceChromeDevtoolsSummary {
+                        port: chrome.port,
+                        user_data_dir: chrome.effective_user_data_dir().into(),
+                    }
+                }),
             }),
-        chrome_devtools: workspace.chrome_devtools.as_ref().map(|chrome| {
-            WorkspaceChromeDevtoolsSummary {
-                port: chrome.port,
-                user_data_dir: chrome.effective_user_data_dir().into(),
-            }
-        }),
         color_count: workspace.effective_colors().len(),
         colors: workspace
             .effective_colors()
@@ -1682,25 +1675,6 @@ fn setup_summary(setup: &SetupConfig) -> Option<SetupSummary> {
     })
 }
 
-fn test_summary(test: Option<&TestConfig>) -> Option<TestSummary> {
-    let test = test?;
-    if *test == TestConfig::default() {
-        return None;
-    }
-    Some(TestSummary {
-        commands: test
-            .commands
-            .iter()
-            .map(|command| CommandSummary {
-                run: command.run.clone(),
-                working_dir: command.working_dir.clone(),
-                if_exists: command.if_exists.clone(),
-                label: command.label.clone(),
-            })
-            .collect(),
-    })
-}
-
 fn sorted_key_values(values: &std::collections::HashMap<String, String>) -> Vec<KeyValueSummary> {
     let mut values = values
         .iter()
@@ -1780,6 +1754,14 @@ fn workflow_default_landing(policy: WorkflowDefaultLandingPolicy) -> &'static st
     match policy {
         WorkflowDefaultLandingPolicy::Manual => "manual",
         WorkflowDefaultLandingPolicy::Auto => "auto",
+    }
+}
+
+fn review_codex_base(policy: ReviewCodexBasePolicy) -> &'static str {
+    match policy {
+        ReviewCodexBasePolicy::None => "none",
+        ReviewCodexBasePolicy::Advisory => "advisory",
+        ReviewCodexBasePolicy::Required => "required",
     }
 }
 
@@ -1900,7 +1882,7 @@ fn is_known_state_or_config_path(relative: &str) -> bool {
                 Some("toml" | "md" | "markdown")
             ))
         || (relative.starts_with("<repo-root>/.wt/planning/specs/")
-            && relative.ends_with("/11-retrospect.md"))
+            && relative.ends_with("/04-Feedback/09-retrospect.md"))
         || (relative.starts_with("<repo-root>/.wt/execution/tasks/") && relative.ends_with(".toml"))
         || (relative.starts_with("<repo-root>/.wt/execution/workflows/")
             && relative.ends_with(".toml"))
@@ -1998,9 +1980,9 @@ mod tests {
     use crate::config::IssuesConfig;
     use crate::config::{
         AgentCli, AgentConfig, DepCommand, EditorConfig, EditorPlacement, ReadyMode, SiteConfig,
-        SiteProvider, SubmitMode, TestCommand, TestConfig, WorkflowDefaultLandingPolicy,
-        WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig, WorkspaceBrowserMode,
-        WorkspaceChromeDevtoolsConfig, WorkspaceConfig, WorktreeNamingConfig,
+        SiteProvider, SubmitMode, WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode,
+        WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
+        WorkspaceConfig, WorktreeNamingConfig,
     };
     use std::collections::HashMap;
 
@@ -2109,10 +2091,10 @@ mod tests {
                 mode: WorkspaceBrowserMode::ChromeDevtools,
                 url: Some("{{site_url}}".into()),
                 app: None,
-            }),
-            chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                port: Some(9222),
-                user_data_dir: Some("{{worktree_parent}}/.chrome-devtools".into()),
+                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                    port: Some(9222),
+                    user_data_dir: Some("{{worktree_parent}}/.chrome-devtools".into()),
+                }),
             }),
         });
         config.agent = Some(AgentConfig {
@@ -2131,14 +2113,6 @@ mod tests {
                 ),
             ]),
             ..AgentConfig::default()
-        });
-        config.test = Some(TestConfig {
-            commands: vec![TestCommand {
-                working_dir: None,
-                run: "cargo test".into(),
-                if_exists: Some("Cargo.toml".into()),
-                label: Some("Rust tests".into()),
-            }],
         });
         let state = SnapshotState::new(
             dir.path().to_path_buf(),
@@ -2188,9 +2162,10 @@ mod tests {
         assert_eq!(editor.placement, "cmux_surface");
         let workspace = snapshot.config.workspace.as_ref().unwrap();
         assert_eq!(workspace.tabs, vec!["lazygit", "nvim"]);
-        assert_eq!(workspace.browser.as_ref().unwrap().mode, "chrome_devtools");
+        let browser = workspace.browser.as_ref().unwrap();
+        assert_eq!(browser.mode, "chrome_devtools");
         assert_eq!(
-            workspace.chrome_devtools.as_ref().unwrap().user_data_dir,
+            browser.chrome_devtools.as_ref().unwrap().user_data_dir,
             "{{worktree_parent}}/.chrome-devtools"
         );
         let agent = snapshot.config.agent.as_ref().unwrap();
@@ -2204,10 +2179,6 @@ mod tests {
         assert_eq!(agent.prompt_counts[0].count, 1);
         assert_eq!(agent.prompt_counts[1].mode, "issue");
         assert_eq!(agent.prompt_counts[1].count, 2);
-        assert_eq!(
-            snapshot.config.test.as_ref().unwrap().commands[0].run,
-            "cargo test"
-        );
         let profile = snapshot.profiles.items.first().unwrap();
         assert_eq!(
             profile.copy,
@@ -2293,7 +2264,7 @@ mod tests {
             Some("Context\nGoal: Retro goal\n\nKeep\n- Keep this")
         );
         assert_eq!(snapshot.retrospecs.items[0].scope, "cross-work");
-        assert_eq!(snapshot.retrospecs.items[1].key, "demo-spec/11-retrospect");
+        assert_eq!(snapshot.retrospecs.items[1].key, "demo-spec/09-retrospect");
         assert_eq!(snapshot.retrospecs.items[1].scope, "spec-local");
         assert_eq!(
             snapshot.retrospecs.items[1].spec.as_deref(),
@@ -2301,7 +2272,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.retrospecs.items[1].path,
-            "<repo-root>/.wt/planning/specs/demo-spec/11-retrospect.md"
+            "<repo-root>/.wt/planning/specs/demo-spec/04-Feedback/09-retrospect.md"
         );
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
@@ -2419,6 +2390,7 @@ mod tests {
             policy: workflow::WorkflowPolicy {
                 pull_request: workflow::WorkflowPullRequestMode::None,
                 landing: workflow::WorkflowLandingPolicy::Manual,
+                review: Default::default(),
             },
             tasks: vec![
                 workflow::WorkflowTask {
@@ -2549,8 +2521,11 @@ mod tests {
     }
 
     fn write_spec_retrospect(root: &Path, spec: &str, content: &str) {
-        let dir = root.join(".wt/planning/specs").join(spec);
+        let dir = root
+            .join(".wt/planning/specs")
+            .join(spec)
+            .join("04-Feedback");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("11-retrospect.md"), content).unwrap();
+        fs::write(dir.join("09-retrospect.md"), content).unwrap();
     }
 }

@@ -26,7 +26,7 @@ effects.
 | Rendering | `ctx.ui` call sites and prompt builders in command modules today; extract workflow prompt/status text to `src/workflow/render.rs` when split | Human status text, selector labels, agent prompt snapshots, coordinator handoff text | Selector state transitions, filesystem writes, shelling out to tools |
 | Inline selector engine | `src/ui/selector.rs` or `src/ui/selector/*` when introduced | Selector row model, pure keyboard/filter/selection state transitions, visible-window calculation, selected-summary rendering, hidden-row counts, and the small terminal adapter for raw mode/redraw/cleanup | Domain candidate construction, command validation, persisted state schemas, provider calls, workflow/task lifecycle |
 | Config layering | `src/config/` | Config schema, `.wt.toml` and `<repo-root>/.wt/config/local.toml` load order, profile resolution, profile convention overlays, prompt merge/finalization | Worktree creation, site registration, TaskDocument/TaskRun/Workflow state |
-| Setup side effects | `src/setup.rs` and `src/setup/*` | `run_setup` orchestration plus side-effect modules for files, env/template variables, site registration, cmux workspace runtime, agent bootstrap, dependency commands, post-deps tabs, background tests, local context injection, and setup summary | Config precedence, workflow planning, task state ownership |
+| Setup side effects | `src/setup.rs` and `src/setup/*` | `run_setup` orchestration plus side-effect modules for files, env/template variables, site registration, cmux workspace runtime, agent bootstrap, dependency commands, post-deps tabs, local context injection, and setup summary | Config precedence, workflow planning, task state ownership |
 | External services | `src/services/*` | Shell/tool boundaries for Git, GitHub, Linear, cmux, Herd, Valet, Docker proxy, Traefik, issue providers, and work-session observation | CLI policy, persisted wt state schemas, UX concept naming |
 
 ## Canonical State
@@ -248,8 +248,8 @@ entrypoint after a worktree path, names, prompt context, and effective config ar
 already known. Setup child modules own the side-effect boundaries: file
 copy/link, env substitution and template variables, site rendering/registration,
 cmux workspace runtime and coordinator variables, agent bootstrap, dependency
-commands, post-deps tabs, local context injection, background tests, and summary
-rendering. Setup should not decide which TaskDocument or Workflow is runnable,
+commands, post-deps tabs, local context injection, and summary rendering. Setup
+should not decide which TaskDocument or Workflow is runnable,
 write TaskRun status, or define config precedence.
 
 ## Checklist for New Commands

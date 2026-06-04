@@ -5,7 +5,8 @@ use crate::task_run::{
 };
 use crate::workflow::run::WorkflowTaskState;
 use crate::workflow::{
-    WorkflowLandingPolicy, WorkflowMetadata, WorkflowPolicy, WorkflowPullRequestMode, WorkflowTask,
+    WorkflowCodexBaseReview, WorkflowLandingPolicy, WorkflowMetadata, WorkflowPolicy,
+    WorkflowPullRequestMode, WorkflowTask,
 };
 use std::path::Path;
 
@@ -68,11 +69,44 @@ fn landing_wait_text(policy: &WorkflowPolicy) -> &'static str {
     }
 }
 
+fn codex_base_review_text(
+    policy: &WorkflowPolicy,
+    review_base: &str,
+    review_base_label: &str,
+) -> Option<String> {
+    let surface_review_command = format!("/review --base {}", shell_arg(review_base));
+    let cli_review_command = format!("codex review --base {}", shell_arg(review_base));
+    let accept_command = codex_base_review_accept_command("<task-run-id>", review_base);
+    match policy.review.codex_base {
+        WorkflowCodexBaseReview::None => None,
+        WorkflowCodexBaseReview::Advisory => Some(format!(
+            "Workflow review policy sets `review.codex_base = \"advisory\"`. After your report, the coordinator may open a Codex surface and run a base-diff review against the {review_base_label}:\n\n```text\n{surface_review_command}\n```\n\nFor non-interactive runs, the equivalent CLI fallback is:\n\n```bash\n{cli_review_command}\n```\n\nRecord a concise review evidence note with the command, parent, final findings, and any follow-up. If that coordinator review asks for changes, keep ownership in this branch and report again."
+        )),
+        WorkflowCodexBaseReview::Required => Some(format!(
+            "Workflow review policy sets `review.codex_base = \"required\"`. After your report, the coordinator must open a Codex surface and run a base-diff review against the {review_base_label} before passing or landing this workflow task:\n\n```text\n{surface_review_command}\n```\n\nFor non-interactive runs, the equivalent CLI fallback is:\n\n```bash\n{cli_review_command}\n```\n\nRecord a concise review evidence note, then record accepted TaskRun review metadata with:\n\n```bash\n{accept_command}\n```\n\nDo this before passing or landing this workflow task. If that coordinator review asks for changes, keep ownership in this branch and report again."
+        )),
+    }
+}
+
+pub(crate) fn codex_base_review_accept_command(task_run_id: &str, review_base: &str) -> String {
+    format!(
+        "wt task review {} --accept --codex-base {} {}",
+        task_run_id,
+        shell_arg(review_base),
+        shell_arg(&codex_base_review_accept_message(review_base))
+    )
+}
+
+fn codex_base_review_accept_message(review_base: &str) -> String {
+    format!("Codex base review passed against {review_base}: <summary/evidence>")
+}
+
 #[cfg(test)]
 fn default_workflow_policy() -> WorkflowPolicy {
     WorkflowPolicy {
         pull_request: WorkflowPullRequestMode::None,
         landing: WorkflowLandingPolicy::Manual,
+        review: Default::default(),
     }
 }
 
@@ -112,6 +146,7 @@ pub(crate) fn test_workflow_policy(pull_request: WorkflowPullRequestMode) -> Wor
     WorkflowPolicy {
         pull_request,
         landing: WorkflowLandingPolicy::Manual,
+        review: Default::default(),
     }
 }
 
@@ -120,6 +155,7 @@ pub(crate) fn test_auto_landing_policy() -> WorkflowPolicy {
     WorkflowPolicy {
         pull_request: WorkflowPullRequestMode::None,
         landing: WorkflowLandingPolicy::Auto,
+        review: Default::default(),
     }
 }
 
@@ -305,12 +341,21 @@ pub(crate) fn prepared_workflow_message(
     ctx: &Ctx,
     workflow_path: &Path,
     title: Option<&str>,
+    coordinator: &str,
+    show_auto_hint: bool,
 ) -> String {
     let path = ctx.storage_root.display_path(workflow_path);
-    match title.map(str::trim).filter(|title| !title.is_empty()) {
+    let mut message = match title.map(str::trim).filter(|title| !title.is_empty()) {
         Some(title) => format!("Prepared workflow: {title} ({path})"),
         None => format!("Prepared workflow: {path}"),
+    };
+    message.push_str(&format!("\n  coordinator: {coordinator}"));
+    if show_auto_hint {
+        message.push_str(
+            "\n  hint: To bind a different coordinator, rerun with --coordinator <id> or WT_AGENT_ID=<id>.",
+        );
     }
+    message
 }
 
 pub(crate) fn no_runnable_workflow_tasks_message() -> &'static str {
@@ -611,7 +656,7 @@ fn workflow_handoff_policy(
                 }
             };
 
-            let after_send = if let Some(pass) = pass {
+            let mut after_send = if let Some(pass) = pass {
                 format!(
                     "{}\n\nWhen review passes, wait for the coordinator to advance the workflow. The coordinator will run:\n\n```bash\n{}\n```\n\n{}",
                     review_followup(policy),
@@ -625,6 +670,10 @@ fn workflow_handoff_policy(
                     landing_wait_text(policy)
                 )
             };
+            if let Some(codex_review) = codex_base_review_text(policy, pr_base, pr_base_label) {
+                after_send.push_str("\n\n");
+                after_send.push_str(&codex_review);
+            }
             (pull_request_instructions, pr_report_value, after_send)
         }
     }

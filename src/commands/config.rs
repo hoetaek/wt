@@ -67,13 +67,30 @@ pub fn edit(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Result<(
 
     let path = match source {
         Some(source) => {
-            let path = resolve_source_path(ctx, source)?;
+            let path = resolve_edit_source_path(ctx, source)?;
             reject_legacy_profile_source(ctx, &path)?;
             path
         }
         None => select_edit_source(ctx)?,
     };
     crate::commands::editor::open_file(ctx, &path)
+}
+
+#[derive(Debug, Clone)]
+struct ManagedConfigSource {
+    name: String,
+    path: PathBuf,
+    logical_path: PathBuf,
+}
+
+impl ManagedConfigSource {
+    fn item(&self, ctx: &Ctx) -> String {
+        format!(
+            "{} -> {}",
+            self.name,
+            managed_source_display(ctx, &self.logical_path)
+        )
+    }
 }
 
 fn select_edit_source(ctx: &Ctx) -> Result<PathBuf> {
@@ -87,25 +104,25 @@ fn select_edit_source(ctx: &Ctx) -> Result<PathBuf> {
     }
 
     if sources.len() == 1 {
-        return Ok(sources[0].clone());
+        return Ok(sources[0].path.clone());
     }
 
     let items = sources
         .iter()
-        .map(|path| display_path(ctx, path))
+        .map(|source| source.item(ctx))
         .collect::<Vec<_>>();
     let selected = ctx.ui.select("Select config file:", &items)?;
-    Ok(sources[selected].clone())
+    Ok(sources[selected].path.clone())
 }
 
-fn discover_edit_sources(ctx: &Ctx) -> Result<Vec<PathBuf>> {
+fn discover_edit_sources(ctx: &Ctx) -> Result<Vec<ManagedConfigSource>> {
     let mut sources = Vec::new();
     for path in [
         ctx.repo_root.join(".wt.toml"),
         ctx.storage_root.config_toml(),
     ] {
         if path.exists() {
-            sources.push(path.canonicalize()?);
+            sources.push(managed_config_source(ctx, path)?);
         }
     }
 
@@ -116,17 +133,42 @@ fn discover_edit_sources(ctx: &Ctx) -> Result<Vec<PathBuf>> {
             let entry = entry?;
             let path = entry.path().join("profile.toml");
             if path.exists() {
-                profile_sources.push(path.canonicalize()?);
+                profile_sources.push(managed_config_source(ctx, path)?);
             }
         }
-        profile_sources.sort();
+        profile_sources.sort_by(|a, b| a.name.cmp(&b.name));
         sources.extend(profile_sources);
     }
     Ok(sources)
 }
 
-fn display_path(ctx: &Ctx, path: &Path) -> String {
-    relative_display(ctx, path)
+fn managed_config_source(ctx: &Ctx, logical_path: PathBuf) -> Result<ManagedConfigSource> {
+    let path = logical_path.canonicalize()?;
+    let name = managed_source_name(ctx, &path)
+        .ok_or_else(|| anyhow!("Unsupported managed config source: {}", path.display()))?;
+    Ok(ManagedConfigSource {
+        name,
+        path,
+        logical_path,
+    })
+}
+
+fn managed_source_name(ctx: &Ctx, path: &Path) -> Option<String> {
+    if same_existing_path(path, &ctx.repo_root.join(".wt.toml")) {
+        return Some("shared".into());
+    }
+    if same_existing_path(path, &ctx.storage_root.config_toml()) {
+        return Some("local".into());
+    }
+    profile_name_for_source(ctx, path).map(|name| format!("profiles/{name}"))
+}
+
+fn managed_source_display(ctx: &Ctx, path: &Path) -> String {
+    if path.starts_with(ctx.storage_root.personal_root()) {
+        ctx.storage_root.display_path(path)
+    } else {
+        relative_display(ctx, path)
+    }
 }
 
 fn select_inline_source(ctx: &Ctx) -> Result<InlineSummary> {
@@ -167,33 +209,10 @@ fn select_inline_source(ctx: &Ctx) -> Result<InlineSummary> {
 }
 
 fn discover_inline_sources(ctx: &Ctx) -> Result<Vec<InlineSummary>> {
-    let mut summaries = Vec::new();
-    let local_config = ctx.storage_root.config_toml();
-    if local_config.exists() {
-        summaries.push(analyze_inline_source(ctx, &local_config)?);
-    }
-
-    let profiles_dir = ctx.storage_root.profiles_dir();
-    if !profiles_dir.exists() {
-        return Ok(summaries);
-    }
-
-    let mut paths = fs::read_dir(&profiles_dir)?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    paths.sort();
-
-    for summary in paths
+    discover_edit_sources(ctx)?
         .into_iter()
-        .filter(|path| path.is_dir())
-        .map(|path| path.join("profile.toml"))
-        .filter(|path| path.exists())
-        .map(|path| analyze_inline_source(ctx, &path))
-    {
-        summaries.push(summary?);
-    }
-
-    Ok(summaries)
+        .map(|source| analyze_inline_source(ctx, &source.path))
+        .collect()
 }
 
 fn inline_from_source(ctx: &Ctx, summary: InlineSummary) -> Result<()> {
@@ -297,33 +316,10 @@ fn select_source(ctx: &Ctx) -> Result<SourceSummary> {
 }
 
 fn discover_sources(ctx: &Ctx) -> Result<Vec<SourceSummary>> {
-    let mut paths = Vec::new();
-    push_if_exists(&mut paths, ctx.repo_root.join(".wt.toml"));
-    push_if_exists(&mut paths, ctx.storage_root.config_toml());
-
-    let profiles_dir = ctx.storage_root.profiles_dir();
-    if profiles_dir.exists() {
-        let mut entries = fs::read_dir(&profiles_dir)?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        entries.sort();
-        for dir in entries {
-            if dir.is_dir() {
-                push_if_exists(&mut paths, dir.join("profile.toml"));
-            }
-        }
-    }
-
-    paths
+    discover_edit_sources(ctx)?
         .into_iter()
-        .map(|path| analyze_source(ctx, &path))
+        .map(|source| analyze_source(ctx, &source.path))
         .collect()
-}
-
-fn push_if_exists(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if path.exists() {
-        paths.push(path);
-    }
 }
 
 fn extract_from_source(ctx: &Ctx, summary: SourceSummary) -> Result<()> {
@@ -813,6 +809,14 @@ fn analyze_inline_source(ctx: &Ctx, path: &Path) -> Result<InlineSummary> {
     let path = path.to_path_buf();
     let display = relative_display(ctx, &path);
 
+    if same_existing_path(&path, &ctx.repo_root.join(".wt.toml")) {
+        Config::load_file(&path).with_context(|| format!("failed to load {display}"))?;
+        return Ok(InlineSummary {
+            display,
+            candidates: Vec::new(),
+        });
+    }
+
     if same_existing_path(&path, &ctx.storage_root.config_toml()) {
         return analyze_inline_local_config(ctx, path, display);
     }
@@ -831,25 +835,8 @@ fn analyze_inline_source(ctx: &Ctx, path: &Path) -> Result<InlineSummary> {
         return analyze_inline_profile(ctx, path, display, profile_name, None);
     }
 
-    if let Some(prompt_source) = prompt_source_for_path(ctx, &path) {
-        let profile_toml = prompt_source.profile_dir.join("profile.toml");
-        if !profile_toml.exists() {
-            bail!(
-                "Profile config does not exist: {}",
-                relative_display(ctx, &profile_toml)
-            );
-        }
-        return analyze_inline_profile(
-            ctx,
-            profile_toml,
-            display,
-            prompt_source.profile_name,
-            Some(path),
-        );
-    }
-
     bail!(
-        "Unsupported inline source: {display}. Use <repo-root>/.wt/config/local.toml, <repo-root>/.wt/config/profiles/<name>/profile.toml, or <repo-root>/.wt/config/profiles/<name>/prompts/<mode>.md"
+        "Unsupported inline source: {display}. Use .wt.toml, <repo-root>/.wt/config/local.toml, or <repo-root>/.wt/config/profiles/<name>/profile.toml"
     );
 }
 
@@ -1272,16 +1259,186 @@ impl PromptFileSpec {
 }
 
 fn resolve_source_path(ctx: &Ctx, source: &Path) -> Result<PathBuf> {
+    let sources = discover_edit_sources(ctx)?;
+    if let Some(source) = sources
+        .iter()
+        .find(|managed| source == Path::new(managed.name.as_str()))
+    {
+        return Ok(source.path.clone());
+    }
+
     let path = if source.is_absolute() {
         source.to_path_buf()
     } else {
         ctx.repo_root.join(source)
     };
-    if path.exists() {
-        Ok(path.canonicalize()?)
-    } else {
-        Ok(path)
+    reject_legacy_profile_source(ctx, &path)?;
+
+    let canonical_path = path.canonicalize().ok();
+    if let Some(source) = sources
+        .iter()
+        .find(|managed| path_matches_managed_source(&path, canonical_path.as_deref(), managed))
+    {
+        return Ok(source.path.clone());
     }
+
+    bail!("{}", unsupported_source_message(ctx, source, &sources));
+}
+
+fn resolve_edit_source_path(ctx: &Ctx, source: &Path) -> Result<PathBuf> {
+    if let Some(path) = managed_edit_target_path(ctx, source)? {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        return Ok(path.canonicalize().unwrap_or(path));
+    }
+
+    let path = source_path(ctx, source);
+    reject_legacy_profile_source(ctx, &path)?;
+
+    let sources = discover_edit_sources(ctx)?;
+    let canonical_path = path.canonicalize().ok();
+    if let Some(source) = sources
+        .iter()
+        .find(|managed| path_matches_managed_source(&path, canonical_path.as_deref(), managed))
+    {
+        return Ok(source.path.clone());
+    }
+
+    bail!("{}", unsupported_edit_source_message(ctx, source));
+}
+
+fn managed_edit_target_path(ctx: &Ctx, source: &Path) -> Result<Option<PathBuf>> {
+    if source == Path::new("shared") {
+        return Ok(Some(ctx.repo_root.join(".wt.toml")));
+    }
+    if source == Path::new("local") {
+        return Ok(Some(ctx.storage_root.config_toml()));
+    }
+    if let Some(profile_name) = profile_shorthand_name(source)? {
+        return Ok(Some(
+            ctx.storage_root
+                .profiles_dir()
+                .join(profile_name)
+                .join("profile.toml"),
+        ));
+    }
+
+    let path = source_path(ctx, source);
+    if path_matches_logical_target(&path, &ctx.repo_root.join(".wt.toml")) {
+        return Ok(Some(ctx.repo_root.join(".wt.toml")));
+    }
+    if path_matches_logical_target(&path, &ctx.storage_root.config_toml()) {
+        return Ok(Some(ctx.storage_root.config_toml()));
+    }
+    if let Some(profile_name) = profile_name_for_logical_profile_toml(ctx, &path)? {
+        return Ok(Some(
+            ctx.storage_root
+                .profiles_dir()
+                .join(profile_name)
+                .join("profile.toml"),
+        ));
+    }
+
+    Ok(None)
+}
+
+fn profile_shorthand_name(source: &Path) -> Result<Option<String>> {
+    let mut components = source.components();
+    if components.next().map(|component| component.as_os_str())
+        != Some(std::ffi::OsStr::new("profiles"))
+    {
+        return Ok(None);
+    }
+    let Some(name) = components
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+    else {
+        return Ok(None);
+    };
+    if components.next().is_some() {
+        return Ok(None);
+    }
+    crate::config::validate_profile_name(name)?;
+    Ok(Some(name.to_string()))
+}
+
+fn profile_name_for_logical_profile_toml(ctx: &Ctx, path: &Path) -> Result<Option<String>> {
+    let profiles_dir = normalize_path_lexically(&ctx.storage_root.profiles_dir());
+    let path = normalize_path_lexically(path);
+    let Ok(relative) = path.strip_prefix(&profiles_dir) else {
+        return Ok(None);
+    };
+    if relative.file_name() != Some(std::ffi::OsStr::new("profile.toml"))
+        || relative.components().count() != 2
+    {
+        return Ok(None);
+    }
+    let Some(name) = relative.parent().and_then(|parent| parent.file_name()) else {
+        return Ok(None);
+    };
+    let Some(name) = name.to_str() else {
+        return Ok(None);
+    };
+    crate::config::validate_profile_name(name)?;
+    Ok(Some(name.to_string()))
+}
+
+fn source_path(ctx: &Ctx, source: &Path) -> PathBuf {
+    if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        ctx.repo_root.join(source)
+    }
+}
+
+fn path_matches_logical_target(path: &Path, target: &Path) -> bool {
+    normalize_path_lexically(path) == normalize_path_lexically(target)
+}
+
+fn path_matches_managed_source(
+    path: &Path,
+    canonical_path: Option<&Path>,
+    source: &ManagedConfigSource,
+) -> bool {
+    if canonical_path.is_some_and(|path| path == source.path) {
+        return true;
+    }
+
+    let path = normalize_path_lexically(path);
+    path == normalize_path_lexically(&source.path)
+        || path == normalize_path_lexically(&source.logical_path)
+}
+
+fn unsupported_source_message(ctx: &Ctx, source: &Path, sources: &[ManagedConfigSource]) -> String {
+    let mut message = format!(
+        "Unsupported config source: {}.\nValid SOURCE values:",
+        source.display()
+    );
+    if sources.is_empty() {
+        message.push_str("\n  (no managed config files found)");
+    } else {
+        for source in sources {
+            message.push_str(&format!("\n  {}", source.item(ctx)));
+        }
+    }
+    message.push_str("\nRun without SOURCE to choose from managed config files.");
+    message
+}
+
+fn unsupported_edit_source_message(ctx: &Ctx, source: &Path) -> String {
+    format!(
+        "Unsupported config source: {}.\nValid SOURCE values:\n  shared -> .wt.toml\n  local -> {}\n  profiles/<name> -> {}\nRun without SOURCE to choose from existing managed config files.",
+        source.display(),
+        managed_source_display(ctx, &ctx.storage_root.config_toml()),
+        managed_source_display(
+            ctx,
+            &ctx.storage_root
+                .profiles_dir()
+                .join("<name>")
+                .join("profile.toml")
+        )
+    )
 }
 
 fn profile_name_for_source(ctx: &Ctx, path: &Path) -> Option<String> {
@@ -1299,40 +1456,6 @@ fn profile_name_for_source(ctx: &Ctx, path: &Path) -> Option<String> {
         .parent()?
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
-}
-
-struct PromptSource {
-    profile_name: String,
-    profile_dir: PathBuf,
-}
-
-fn prompt_source_for_path(ctx: &Ctx, path: &Path) -> Option<PromptSource> {
-    let profiles_dir = ctx.storage_root.profiles_dir();
-    let canonical_profiles_dir = profiles_dir.canonicalize().unwrap_or(profiles_dir);
-    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let relative = canonical_path.strip_prefix(&canonical_profiles_dir).ok()?;
-    let mut components = relative.components();
-    let profile_name = components
-        .next()?
-        .as_os_str()
-        .to_string_lossy()
-        .into_owned();
-    if components.next()?.as_os_str() != "prompts" {
-        return None;
-    }
-    let file_name = components
-        .next()?
-        .as_os_str()
-        .to_string_lossy()
-        .into_owned();
-    if components.next().is_some() || prompt_file_spec(&file_name).is_none() {
-        return None;
-    }
-    crate::config::validate_profile_name(&profile_name).ok()?;
-    Some(PromptSource {
-        profile_dir: canonical_profiles_dir.join(&profile_name),
-        profile_name,
-    })
 }
 
 fn reject_legacy_profile_source(ctx: &Ctx, path: &Path) -> Result<()> {
@@ -1376,12 +1499,6 @@ fn prompt_file_specs() -> Vec<PromptFileSpec> {
     .collect()
 }
 
-fn prompt_file_spec(file_name: &str) -> Option<PromptFileSpec> {
-    prompt_file_specs()
-        .into_iter()
-        .find(|spec| spec.file_name() == file_name)
-}
-
 fn same_existing_path(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
@@ -1414,7 +1531,7 @@ fn is_movable_shared_section(section: &str) -> bool {
                 | "site"
                 | "workspace"
                 | "agent"
-                | "test"
+                | "review"
                 | "issues"
                 | "editor"
         )
@@ -1597,10 +1714,7 @@ fn profile_toml_root_sections(content: &str) -> Vec<String> {
 }
 
 fn is_inlineable_profile_root(root: &str) -> bool {
-    matches!(
-        root,
-        "worktree" | "setup" | "site" | "workspace" | "agent" | "test"
-    )
+    matches!(root, "worktree" | "setup" | "site" | "workspace" | "agent")
 }
 
 fn render_profile_toml_as_inline_profile(content: &str) -> Result<String> {
@@ -1840,6 +1954,7 @@ mod tests {
     use crate::config::{AgentCli, Config};
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions, OutputMode};
+    use std::sync::Arc;
 
     fn ctx_with_ui(root: &Path, ui: MockUi) -> Ctx {
         Ctx::new_with_options(
@@ -1858,6 +1973,235 @@ mod tests {
                 launcher_coordinator_id: None,
             },
         )
+    }
+
+    fn ctx_with_arc_ui(root: &Path, ui: Arc<MockUi>) -> Ctx {
+        Ctx::new_with_options(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+            CtxOptions {
+                base_config: Config::default(),
+                config_source: crate::config::ConfigSource::Default,
+                storage_root: None,
+                output_mode: OutputMode::Text,
+                verbosity: 0,
+                quiet: false,
+                launcher_coordinator_id: None,
+            },
+        )
+    }
+
+    fn write_managed_config_sources(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let shared = root.join(".wt.toml");
+        let local = root.join(".wt/config/local.toml");
+        let profile = root.join(".wt/config/profiles/codex/profile.toml");
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+        std::fs::write(&shared, "").unwrap();
+        std::fs::write(&local, "").unwrap();
+        std::fs::write(&profile, "").unwrap();
+        (shared, local, profile)
+    }
+
+    #[test]
+    fn managed_config_source_shorthands_resolve_to_discovered_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, local, profile) = write_managed_config_sources(dir.path());
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+
+        assert_eq!(
+            resolve_source_path(&ctx, Path::new("shared")).unwrap(),
+            shared.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolve_source_path(&ctx, Path::new("local")).unwrap(),
+            local.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolve_source_path(&ctx, Path::new("profiles/codex")).unwrap(),
+            profile.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn edit_source_shorthands_resolve_missing_managed_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+
+        assert_eq!(
+            resolve_edit_source_path(&ctx, Path::new("shared")).unwrap(),
+            dir.path().join(".wt.toml")
+        );
+        assert_eq!(
+            resolve_edit_source_path(&ctx, Path::new("local")).unwrap(),
+            dir.path().join(".wt/config/local.toml")
+        );
+        assert_eq!(
+            resolve_edit_source_path(&ctx, Path::new("profiles/codex")).unwrap(),
+            dir.path().join(".wt/config/profiles/codex/profile.toml")
+        );
+        assert!(dir.path().join(".wt/config").is_dir());
+        assert!(dir.path().join(".wt/config/profiles/codex").is_dir());
+    }
+
+    #[test]
+    fn edit_source_canonical_paths_resolve_missing_managed_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+        let local = dir.path().join(".wt/config/local.toml");
+        let profile = dir.path().join(".wt/config/profiles/codex/profile.toml");
+
+        assert_eq!(
+            resolve_edit_source_path(&ctx, Path::new(".wt/config/local.toml")).unwrap(),
+            local
+        );
+        assert_eq!(
+            resolve_edit_source_path(&ctx, &profile).unwrap(),
+            profile.clone()
+        );
+        assert_eq!(
+            resolve_edit_source_path(
+                &ctx,
+                Path::new("./.wt/config/profiles/codex/../codex/profile.toml"),
+            )
+            .unwrap(),
+            profile
+        );
+    }
+
+    #[test]
+    fn extract_and_inline_source_resolver_still_requires_discovered_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".wt.toml"), "").unwrap();
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+
+        for source in [
+            Path::new("local"),
+            Path::new(".wt/config/local.toml"),
+            Path::new("profiles/codex"),
+        ] {
+            let err = resolve_source_path(&ctx, source).unwrap_err();
+            let report = format!("{err:#}");
+            assert!(report.contains("Unsupported config source"), "{report}");
+            assert!(report.contains("shared -> .wt.toml"), "{report}");
+        }
+    }
+
+    #[test]
+    fn edit_source_rejects_bare_profile_name_with_creation_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+
+        let err = resolve_edit_source_path(&ctx, Path::new("codex")).unwrap_err();
+        let report = format!("{err:#}");
+        assert!(report.contains("Unsupported config source"));
+        assert!(report.contains("shared -> .wt.toml"));
+        assert!(report.contains("local -> <repo-root>/.wt/config/local.toml"));
+        assert!(
+            report
+                .contains("profiles/<name> -> <repo-root>/.wt/config/profiles/<name>/profile.toml"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn managed_config_source_canonical_paths_resolve() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, local, profile) = write_managed_config_sources(dir.path());
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+
+        assert_eq!(
+            resolve_source_path(&ctx, Path::new(".wt/config/local.toml")).unwrap(),
+            local.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolve_source_path(
+                &ctx,
+                Path::new("./.wt/config/profiles/codex/../codex/profile.toml"),
+            )
+            .unwrap(),
+            profile.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolve_source_path(&ctx, &local.canonicalize().unwrap()).unwrap(),
+            local.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn non_managed_config_source_is_rejected_with_valid_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        write_managed_config_sources(dir.path());
+        std::fs::write(dir.path().join("README.md"), "").unwrap();
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+
+        for source in [Path::new("README.md"), Path::new("codex")] {
+            let err = resolve_source_path(&ctx, source).unwrap_err();
+            let report = format!("{err:#}");
+            assert!(report.contains("Unsupported config source"));
+            assert!(report.contains("shared -> .wt.toml"));
+            assert!(report.contains("local -> <repo-root>/.wt/config/local.toml"));
+            assert!(
+                report.contains(
+                    "profiles/codex -> <repo-root>/.wt/config/profiles/codex/profile.toml"
+                ),
+                "{report}"
+            );
+            assert!(report.contains("Run without SOURCE to choose from managed config files"));
+        }
+    }
+
+    #[test]
+    fn extract_and_inline_accept_managed_source_shorthands() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".wt.toml"),
+            r#"
+[editor]
+command = "vi {{path}}"
+"#,
+        )
+        .unwrap();
+
+        let profile_dir = dir.path().join(".wt/config/profiles/codex");
+        let prompts_dir = profile_dir.join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[agent]
+cli = "codex"
+"#,
+        )
+        .unwrap();
+        std::fs::write(prompts_dir.join("branch.md"), "Branch prompt\n").unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+        ui.add_confirm(true);
+        ui.add_multi_select(vec![0]);
+        ui.add_confirm(true);
+        let ctx = ctx_with_ui(dir.path(), ui);
+
+        extract(&ctx, None, Some(Path::new("shared"))).unwrap();
+        inline(&ctx, None, Some(Path::new("profiles/codex"))).unwrap();
+
+        let local = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
+        assert!(local.contains("[editor]"));
+        let profile = std::fs::read_to_string(profile_dir.join("profile.toml")).unwrap();
+        assert!(profile.contains("[agent.prompt]"));
+        assert!(profile.contains("branch"));
+        let profile_config = Config::load_profile(dir.path(), "codex", &Config::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            profile_config.agent.unwrap().prompt.get("branch").unwrap(),
+            &vec!["Branch prompt\n".to_string()]
+        );
+        assert!(!prompts_dir.join("branch.md").exists());
     }
 
     #[test]
@@ -2154,7 +2498,7 @@ issue = ["Existing issue\n"]
     }
 
     #[test]
-    fn inline_accepts_direct_prompt_file_source() {
+    fn inline_rejects_direct_prompt_file_source() {
         let dir = tempfile::tempdir().unwrap();
         let profile_dir = dir.path().join(".wt/config/profiles/codex");
         let prompts_dir = profile_dir.join("prompts");
@@ -2169,27 +2513,19 @@ cli = "codex"
         .unwrap();
         std::fs::write(prompts_dir.join("pr.append.md"), "PR append\n").unwrap();
 
-        let mut ui = MockUi::new();
-        ui.add_multi_select(vec![0]);
-        ui.add_confirm(true);
-        let ctx = ctx_with_ui(dir.path(), ui);
-
-        inline(
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+        let err = inline(
             &ctx,
             None,
             Some(Path::new(".wt/config/profiles/codex/prompts/pr.append.md")),
         )
-        .unwrap();
+        .unwrap_err();
 
-        assert!(!prompts_dir.join("pr.append.md").exists());
-        let after = Config::load_profile(dir.path(), "codex", &Config::default())
-            .unwrap()
-            .unwrap();
-        let agent = after.agent.unwrap();
-        assert_eq!(
-            agent.prompt.get("pr").unwrap(),
-            &vec!["PR append\n".to_string()]
-        );
+        let report = format!("{err:#}");
+        assert!(report.contains("Unsupported config source"));
+        assert!(report.contains("profiles/codex"));
+        assert!(report.contains("Run without SOURCE to choose from managed config files"));
+        assert!(prompts_dir.join("pr.append.md").exists());
     }
 
     #[test]
@@ -2335,11 +2671,20 @@ command = "vi {{path}}"
         .unwrap();
         let mut ui = MockUi::new();
         ui.add_select(1);
-        let ctx = ctx_with_ui(dir.path(), ui);
+        let ui = Arc::new(ui);
+        let ctx = ctx_with_arc_ui(dir.path(), Arc::clone(&ui));
 
         let selected = select_edit_source(&ctx).unwrap();
 
         assert!(selected.ends_with(".wt/config/local.toml"));
+        assert_eq!(
+            ui.select_items.lock().unwrap()[0],
+            vec![
+                "shared -> .wt.toml".to_string(),
+                "local -> <repo-root>/.wt/config/local.toml".to_string(),
+                "profiles/codex -> <repo-root>/.wt/config/profiles/codex/profile.toml".to_string(),
+            ]
+        );
     }
 
     #[test]

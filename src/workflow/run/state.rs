@@ -119,10 +119,11 @@ pub(crate) fn ensure_workflow_task_routes(
     ctx: &Ctx,
     workflow_path: &Path,
     metadata: &WorkflowMetadata,
-) -> Result<()> {
+) -> Result<WorkflowRouteRepairSummary> {
     let group = task_run::group_from_path(workflow_path)?;
     let label = workflow_coordinator_label(metadata.title.as_deref(), &group);
     let mut fallback_coordinator_id = None::<String>;
+    let mut repaired_missing_coordinator = false;
 
     for row in &metadata.tasks {
         if row.runs.is_empty() {
@@ -133,6 +134,7 @@ pub(crate) fn ensure_workflow_task_routes(
                 &row.run,
                 &label,
                 &mut fallback_coordinator_id,
+                &mut repaired_missing_coordinator,
             )?;
         } else {
             for profile_run in &row.runs {
@@ -143,12 +145,21 @@ pub(crate) fn ensure_workflow_task_routes(
                     &profile_run.run,
                     &label,
                     &mut fallback_coordinator_id,
+                    &mut repaired_missing_coordinator,
                 )?;
             }
         }
     }
 
-    Ok(())
+    Ok(WorkflowRouteRepairSummary {
+        fallback_coordinator_id,
+        repaired_missing_coordinator,
+    })
+}
+
+pub(crate) struct WorkflowRouteRepairSummary {
+    pub(crate) fallback_coordinator_id: Option<String>,
+    pub(crate) repaired_missing_coordinator: bool,
 }
 
 fn ensure_workflow_task_run_route(
@@ -158,6 +169,7 @@ fn ensure_workflow_task_run_route(
     run_id: &str,
     label: &str,
     fallback_coordinator_id: &mut Option<String>,
+    repaired_missing_coordinator: &mut bool,
 ) -> Result<()> {
     let run_path = task_run::resolve(ctx, run_id).with_context(|| {
         format!(
@@ -169,7 +181,12 @@ fn ensure_workflow_task_run_route(
     let run = task_run::read(&run_path)?;
     validate_workflow_task_run(row, &run)?;
     validate_workflow_task_run_group(row, &run, group)?;
-    let coordinator_id = workflow_route_coordinator_id(ctx, &run, fallback_coordinator_id)?;
+    let coordinator_id = workflow_route_coordinator_id(
+        ctx,
+        &run,
+        fallback_coordinator_id,
+        repaired_missing_coordinator,
+    )?;
     let record = task_run::TaskRunRecord {
         id: run_id.to_string(),
         path: run_path,
@@ -183,6 +200,7 @@ fn workflow_route_coordinator_id(
     ctx: &Ctx,
     run: &task_run::TaskRun,
     fallback_coordinator_id: &mut Option<String>,
+    repaired_missing_coordinator: &mut bool,
 ) -> Result<String> {
     if let Some(id) = run
         .coordinator_id
@@ -192,9 +210,10 @@ fn workflow_route_coordinator_id(
     {
         return Ok(id.to_string());
     }
+    *repaired_missing_coordinator = true;
     if fallback_coordinator_id.is_none() {
         *fallback_coordinator_id = Some(
-            current_actor::resolve_launch_coordinator(ctx)?
+            current_actor::resolve_launch_coordinator(ctx, None)?
                 .as_str()
                 .to_string(),
         );

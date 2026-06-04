@@ -165,6 +165,17 @@ impl<'a> GitService<'a> {
         Ok(out.success)
     }
 
+    /// Whether a remote with the given name is configured.
+    ///
+    /// Reads `.git/config` only (`git remote get-url`); it does not contact the
+    /// remote, so it never triggers network or credential/keychain access.
+    pub fn has_remote(&self, name: &str) -> Result<bool> {
+        let out = self
+            .runner
+            .run("git", &["remote", "get-url", name], self.cwd)?;
+        Ok(out.success)
+    }
+
     pub fn branch_delete(&self, branch: &str) -> Result<CmdOutput> {
         self.runner.run("git", &["branch", "-d", branch], self.cwd)
     }
@@ -547,6 +558,24 @@ branch refs/heads/main
         git.fetch_branch("alice/feature").unwrap();
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls[0].1, vec!["fetch", "origin", "alice/feature"]);
+    }
+
+    #[test]
+    fn has_remote_reads_local_config_via_get_url() {
+        let mut runner = MockRunner::new();
+        runner.add_response("https://example.com/repo.git\n", true);
+        let git = GitService::new(&runner, None);
+        assert!(git.has_remote("origin").unwrap());
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["remote", "get-url", "origin"]);
+    }
+
+    #[test]
+    fn has_remote_returns_false_when_remote_absent() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", false);
+        let git = GitService::new(&runner, None);
+        assert!(!git.has_remote("origin").unwrap());
     }
 
     #[test]

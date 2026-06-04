@@ -1,4 +1,4 @@
-use crate::config::{DepCommand, TestCommand};
+use crate::config::DepCommand;
 use std::path::{Path, PathBuf};
 
 pub(super) fn command_working_dir(wt_path: &Path, working_dir: Option<&str>) -> PathBuf {
@@ -10,10 +10,6 @@ pub(super) fn command_working_dir(wt_path: &Path, working_dir: Option<&str>) -> 
 
 pub(super) fn setup_command_display(dep: &DepCommand) -> String {
     command_display(dep.working_dir.as_deref(), &dep.run)
-}
-
-pub(super) fn test_command_display(command: &TestCommand) -> String {
-    command_display(command.working_dir.as_deref(), &command.run)
 }
 
 fn command_display(working_dir: Option<&str>, run: &str) -> String {

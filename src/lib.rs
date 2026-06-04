@@ -59,9 +59,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Session { command } => match command {
             SessionCommand::Set { id } => commands::session::set(ctx, id),
             SessionCommand::Unset => commands::session::unset(ctx),
-            SessionCommand::Whoami { json } => {
-                commands::session::whoami(ctx, ctx.is_json() || *json)
-            }
+            SessionCommand::Show { json } => commands::session::show(ctx, ctx.is_json() || *json),
         },
         Commands::DeprecatedIssue { .. } => {
             deprecated_start_command_error("wt issue", "wt run issue")
@@ -117,6 +115,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 accept,
                 reject,
                 block,
+                codex_base,
                 message,
             } => {
                 let status = match (*accept, *reject, *block) {
@@ -125,7 +124,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     (false, false, true) => task_run::REVIEW_BLOCKED,
                     _ => bail!("Pass exactly one of --accept, --reject, or --block"),
                 };
-                commands::task_review::run(ctx, task_run_id, status, message)
+                commands::task_review::run(ctx, task_run_id, status, codex_base.as_deref(), message)
             }
         },
         Commands::Workflow { command } => match command {
@@ -136,6 +135,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 mode,
                 profile,
                 profiles,
+                coordinator,
                 title,
                 body,
                 body_file,
@@ -150,6 +150,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     mode: *mode,
                     profile: profile.as_deref(),
                     profiles,
+                    coordinator: coordinator.as_deref(),
                     title: title.as_deref(),
                     body: body.as_deref(),
                     body_file: body_file.as_deref(),
@@ -190,6 +191,14 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             }
             WorkflowCommand::Show { workflow } => {
                 commands::workflow::show(ctx, workflow.as_deref())
+            }
+            WorkflowCommand::Watch {
+                workflow,
+                interval,
+                timeout,
+                heartbeat,
+            } => {
+                commands::workflow::watch(ctx, workflow.as_deref(), *interval, *timeout, *heartbeat)
             }
             WorkflowCommand::Edit { workflow } => {
                 commands::workflow::edit(ctx, workflow.as_deref())
@@ -338,7 +347,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         }
         Commands::As { agent, command } => commands::agent_runtime::run_as(ctx, agent, command),
         Commands::Ui { port } => commands::ui::run(ctx, *port),
-        Commands::Studio { port } => commands::studio::run(ctx, *port),
+        Commands::Studio {
+            port,
+            dev,
+            dev_origin,
+        } => commands::studio::run(ctx, *port, *dev, dev_origin.clone()),
         Commands::Msg { command } => match command {
             MsgCommand::Send { to, scope, message } => {
                 commands::msg::send(ctx, to, scope.as_deref(), message)

@@ -1,6 +1,7 @@
 use crate::cli::{WorkflowModeArg, WorkflowPrModeArg};
 use crate::config::{
-    WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
+    ReviewCodexBasePolicy, WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy,
+    WorkflowDefaultPullRequestMode,
 };
 use crate::task as task_store;
 use crate::task::PreparedTask;
@@ -8,7 +9,8 @@ use crate::task_run::{STATUS_PASSED, STATUS_SKIPPED};
 use crate::workflow::render::workflow_task_label;
 use crate::workflow::run::WorkflowTaskState;
 use crate::workflow::{
-    WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowPolicy, WorkflowPullRequestMode,
+    WorkflowCodexBaseReview, WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowPolicy,
+    WorkflowPullRequestMode, WorkflowReviewPolicy,
 };
 use anyhow::{Result, bail};
 
@@ -165,6 +167,13 @@ pub(crate) fn workflow_policy(
         landing: match default_policy.landing {
             WorkflowDefaultLandingPolicy::Manual => WorkflowLandingPolicy::Manual,
             WorkflowDefaultLandingPolicy::Auto => WorkflowLandingPolicy::Auto,
+        },
+        review: WorkflowReviewPolicy {
+            codex_base: match default_policy.review.codex_base {
+                ReviewCodexBasePolicy::None => WorkflowCodexBaseReview::None,
+                ReviewCodexBasePolicy::Advisory => WorkflowCodexBaseReview::Advisory,
+                ReviewCodexBasePolicy::Required => WorkflowCodexBaseReview::Required,
+            },
         },
     }
 }

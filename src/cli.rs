@@ -1,3 +1,4 @@
+use crate::messages::AgentId;
 use clap::{ArgAction, ArgGroup, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -180,7 +181,7 @@ pub enum Commands {
         /// Create <repo-root>/.wt/planning/ideas/<feature>.md
         #[arg(long)]
         idea: bool,
-        /// Create numbered prep files under <repo-root>/.wt/planning/specs/<feature>/
+        /// Create phase-folder prep files under <repo-root>/.wt/planning/specs/<feature>/
         #[arg(long)]
         spec: bool,
         /// Create <repo-root>/.wt/execution/tasks/<feature>.toml
@@ -189,7 +190,7 @@ pub enum Commands {
         /// Create <repo-root>/.wt/execution/workflows/<feature>.toml
         #[arg(long)]
         workflow: bool,
-        /// Create <repo-root>/.wt/planning/specs/<feature>/11-retrospect.md
+        /// Create <repo-root>/.wt/planning/specs/<feature>/04-Feedback/09-retrospect.md
         #[arg(long)]
         retrospect: bool,
         /// Create all scaffold document kinds
@@ -308,16 +309,22 @@ pub enum Commands {
     },
     /// Start the write-capable authoring web surface
     #[command(
-        long_about = "Start the write-capable wt studio authoring surface. The server binds only to 127.0.0.1, prints a one-time /auth URL, and opens it in the default browser unless --quiet is set. Studio serves a Vite-built Preact frontend embedded in the wt binary. API routes require the session cookie and a matching Origin header; this first skeleton exposes only GET /api/ping and does not add mutation routes."
+        long_about = "Start the write-capable wt studio authoring surface. The server binds only to 127.0.0.1, prints a one-time /auth URL, and opens it in the default browser unless --quiet is set. By default Studio serves the embedded Vite production bundle from the wt binary. Pass --dev while running the Vite dev server from src/studio/web to use HMR assets instead; /auth and /api requests should be proxied back to this Studio server. API routes require the session cookie and a matching browser Origin header."
     )]
     Studio {
         /// Port to bind on 127.0.0.1; 0 selects an available port
         #[arg(long, default_value_t = 0, value_name = "PORT")]
         port: u16,
+        /// Use Vite dev-server assets instead of the embedded production bundle
+        #[arg(long)]
+        dev: bool,
+        /// Browser origin for --dev; defaults to Vite's loopback dev origin
+        #[arg(long, value_name = "ORIGIN", requires = "dev")]
+        dev_origin: Option<String>,
     },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <repo-root>/.wt/runtime/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to agents/<agent> <message>` as a low-level explicit inbox write. Task completion should use `wt task report <message>`, which derives direct or workflow scope from the current TaskRun; coordinator feedback should use `wt task review <task-run-id> --accept|--reject|--block <message>`, which sends task_run:<id> scope to the recorded task agent. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --agent <agent> --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent falls back to WT_AGENT_ID. `wt msg check-inbox --silent` is an internal hook consumer for the implicit inbox resolved from WT_AGENT_ID, then the current live identity anchor; missing both exits successfully with no output. `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages and authorized workflow/task_run scoped messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <repo-root>/.wt/runtime/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to agents/<agent> <message>` as a low-level explicit inbox write. Task completion should use `wt task report <message>`, which derives direct or workflow scope from the current TaskRun; coordinator feedback should use `wt task review <task-run-id> --accept|--reject|--block <message>`, which sends task_run:<id> scope to the recorded task agent. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --agent <agent> --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent falls back to WT_AGENT_ID, then the current live identity anchor. `wt msg check-inbox --silent` is an internal hook consumer for the implicit inbox resolved from WT_AGENT_ID, then the current live identity anchor; missing both exits successfully with no output. `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages and authorized workflow/task_run scoped messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -351,7 +358,7 @@ pub enum Commands {
     },
     /// Print, edit, or refactor wt config files
     #[command(
-        long_about = "Print, edit, or refactor wt config files. Shared repo config is .wt.toml; private repo config is <repo-root>/.wt/config/local.toml; named profile config is <repo-root>/.wt/config/profiles/<name>/profile.toml."
+        long_about = "Print, edit, or refactor wt-managed config files. Shared repo config is .wt.toml and SOURCE name `shared`; private repo config is <repo-root>/.wt/config/local.toml and SOURCE name `local`; named profile config is <repo-root>/.wt/config/profiles/<name>/profile.toml and SOURCE name `profiles/<name>`. Config edit, extract, and inline reject files outside that managed namespace."
     )]
     Config {
         /// Show effective config using <repo-root>/.wt/config/profiles/<name>
@@ -418,7 +425,7 @@ pub enum Commands {
 pub enum SessionCommand {
     /// Write a session identity anchor and print shell exports
     #[command(
-        long_about = "Write a session identity anchor for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set my-coord)\"`, so the current shell gets WT_AGENT_ID immediately while later wt invocations from the same anchor can resolve the identity anchor."
+        long_about = "Write a session identity anchor for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set coord-review-routing)\"`, so the current shell gets WT_AGENT_ID immediately while later wt invocations from the same anchor can resolve the identity anchor."
     )]
     Set {
         /// Agent id as NAME or agents/NAME
@@ -427,7 +434,7 @@ pub enum SessionCommand {
     /// Remove the current session identity anchor and print shell unsets
     Unset,
     /// Print the current session identity resolution
-    Whoami {
+    Show {
         /// Emit machine-readable JSON
         #[arg(long)]
         json: bool,
@@ -442,18 +449,30 @@ pub enum ShellInitShell {
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum ConfigCommand {
     /// Open a config file in the configured editor
+    #[command(
+        long_about = "Open a wt-managed config source in the configured editor. SOURCE may be `shared`, `local`, `profiles/<name>`, or a canonical path to one of those managed files. Missing managed files are created by the editor path after parent directories are prepared. Omit SOURCE to select from existing managed config files; non-managed paths are rejected before the editor opens."
+    )]
     Edit {
-        /// Config file to edit (omit to select from known config files)
+        /// Managed config source to edit: shared, local, profiles/<name>, or a canonical path
+        #[arg(value_name = "SOURCE")]
         source: Option<PathBuf>,
     },
     /// Move selected config sections into the next structured config file
+    #[command(
+        long_about = "Move selected config sections out of a wt-managed config source. SOURCE may be `shared`, `local`, `profiles/<name>`, or a canonical path to one of those managed files. Omit SOURCE to select from managed config files; non-managed paths are rejected."
+    )]
     Extract {
-        /// Config source file to refactor
+        /// Managed config source to refactor: shared, local, profiles/<name>, or a canonical path
+        #[arg(value_name = "SOURCE")]
         source: Option<PathBuf>,
     },
     /// Move selected structured config back inline
+    #[command(
+        long_about = "Move selected structured config back inline from a wt-managed config source. SOURCE may be `shared`, `local`, `profiles/<name>`, or a canonical path to one of those managed files. Prompt convention files are inlined through their owning profile source; direct prompt-file SOURCE paths are rejected."
+    )]
     Inline {
-        /// Config or prompt source file to refactor
+        /// Managed config source to refactor: shared, local, profiles/<name>, or a canonical path
+        #[arg(value_name = "SOURCE")]
         source: Option<PathBuf>,
     },
 }
@@ -662,10 +681,10 @@ pub enum MsgCommand {
     },
     /// Observe pending or newly-arriving inbox/new messages without claiming them
     #[command(
-        long_about = "Observe pending or newly-arriving inbox/new messages for one agent without claiming, moving, or acknowledging them.\n\n`wt msg watch` arms a filesystem watcher, drains existing .toml messages in mtime order, and exits after emitting pending messages, one new arrival, or a timeout. Omitted --agent falls back to WT_AGENT_ID. Use --json for newline-delimited JSON rows with the same fields as `wt msg list --json` message records. Use `wt msg list` for a snapshot instead of --timeout 0."
+        long_about = "Observe pending or newly-arriving inbox/new messages for one agent without claiming, moving, or acknowledging them.\n\n`wt msg watch` arms a filesystem watcher, drains existing .toml messages in mtime order, and exits after emitting pending messages, one new arrival, or a timeout. Omitted --agent falls back to WT_AGENT_ID, then the current live identity anchor. Use --json for newline-delimited JSON rows with the same fields as `wt msg list --json` message records. Use `wt msg list` for a snapshot instead of --timeout 0."
     )]
     Watch {
-        /// Explicit single agent id as NAME or agents/NAME; omitted uses WT_AGENT_ID
+        /// Explicit single agent id as NAME or agents/NAME; omitted uses WT_AGENT_ID, then the current live identity anchor
         #[arg(long)]
         agent: Option<String>,
         /// Maximum seconds to wait for a new inbox/new message; must be greater than 0
@@ -754,7 +773,7 @@ pub enum RunCommand {
     },
     /// Start runnable tasks from a saved workflow
     #[command(
-        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts. In non-interactive shells, pass WORKFLOW explicitly.\n\nThis does not list, edit, repair, or pass workflow tasks; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff using `wt task report \"Agent Completion Report: ...\"` with workflow scope derived from the TaskRun, plus fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow pass ...` command. Stack prompts include `--run-next`."
+        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts. In non-interactive shells, pass WORKFLOW explicitly.\n\nThis does not list, edit, repair, or pass workflow tasks; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff using `wt task report \"Agent Completion Report: ...\"` with workflow scope derived from the TaskRun, plus fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation, the prepared [policy.review].codex_base value for Codex base-diff review evidence, and include their `wt workflow pass ...` command. Stack prompts include `--run-next`."
     )]
     Workflow {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -840,7 +859,7 @@ pub enum TaskCommand {
     },
     /// Send coordinator review feedback to a TaskRun agent
     #[command(
-        long_about = "Send coordinator review feedback to the task agent recorded on a TaskRun.\n\nUse `wt task review <task-run-id> --accept <message>` to accept a report, `--reject` to request changes, or `--block` when the task cannot proceed. Feedback is sent through the file inbox to TaskRun.agent_id with task_run:<id> scope and updates TaskRun review metadata. Rejecting or blocking a passed TaskRun reopens it to running; accepting records metadata only and does not pass a running TaskRun.",
+        long_about = "Send coordinator review feedback to the task agent recorded on a TaskRun.\n\nUse `wt task review <task-run-id> --accept <message>` to accept a report, `--reject` to request changes, or `--block` when the task cannot proceed. Add `--codex-base <parent>` only with `--accept` after running the required Codex base-diff review for that parent. Feedback is sent through the file inbox to TaskRun.agent_id with task_run:<id> scope and updates TaskRun review metadata. Codex base review evidence is stored separately from generic review acceptance. Rejecting or blocking a passed TaskRun reopens it to running; accepting records metadata only and does not pass a running TaskRun.",
         group(ArgGroup::new("review_status").required(true).args(["accept", "reject", "block"]))
     )]
     Review {
@@ -856,6 +875,9 @@ pub enum TaskCommand {
         /// Block the TaskRun on missing input or external state
         #[arg(long)]
         block: bool,
+        /// Record accepted Codex base-diff review evidence for this parent/base
+        #[arg(long = "codex-base", value_name = "PARENT")]
+        codex_base: Option<String>,
         /// Review feedback message to send
         #[arg(value_name = "MESSAGE", num_args = 1..)]
         message: Vec<String>,
@@ -893,6 +915,9 @@ pub enum WorkflowCommand {
         /// With --mode matrix, selected named profiles to run in order
         #[arg(long, value_name = "PROFILE", value_delimiter = ',')]
         profiles: Vec<String>,
+        /// Bind the workflow TaskRuns to this coordinator id at creation time
+        #[arg(long, value_name = "ID", value_parser = parse_agent_id)]
+        coordinator: Option<String>,
         /// Short workflow title for list, select, and show surfaces
         #[arg(long)]
         title: Option<String>,
@@ -961,9 +986,34 @@ pub enum WorkflowCommand {
         args: Vec<String>,
     },
     /// Show workflow metadata and task statuses
+    #[command(
+        long_about = "Show one saved <repo-root>/.wt/execution/workflows/<id>.toml Workflow file with its prepared policy snapshot and linked TaskRun statuses.\n\nHuman output preserves the compact meta section plus numbered task rows. Use global --json for the one-shot machine-readable observation surface: path, mode, base, title, pull_request, landing, review.codex_base, and tasks with order, task, status, branch, parent, and title. This command is read-only and its exit code means command success or failure only."
+    )]
     Show {
         /// Workflow TOML path, shorthand id, or "latest" (default)
         workflow: Option<String>,
+    },
+    /// Block until every workflow task reaches a terminal state
+    #[command(
+        long_about = "Poll one saved Workflow until every linked TaskRun is terminal: passed, failed, or skipped.\n\nThis is a workflow-level durable terminal block over <repo-root>/.wt/execution/workflows/<id>.toml and linked TaskRuns. It is separate from `wt agent watch`, which observes one task agent's Layer 2 runtime state from cmux. `wt workflow watch` reuses the agent watch exit-code contract for workflow status: 0 for all passed/skipped or timeout while still non-terminal, 1 for unavailable workflow state, and 3 when any terminal task failed. It does not write <repo-root>/.wt/runtime/agents/<agent>/observations/wait-observations.jsonl. Human output is transition-only by default; use --heartbeat for unchanged waiting output. Use global --json to print the final workflow show JSON snapshot on exit. Omit WORKFLOW in an interactive terminal to choose an observable workflow; pass WORKFLOW explicitly for scripts, --json, --quiet, and non-interactive use."
+    )]
+    Watch {
+        /// Workflow TOML path or shorthand id to watch
+        workflow: Option<String>,
+        /// Seconds between workflow observations
+        #[arg(
+            long,
+            default_value_t = 2,
+            value_name = "SECONDS",
+            value_parser = parse_positive_u64
+        )]
+        interval: u64,
+        /// Stop waiting after this many positive seconds
+        #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
+        timeout: Option<u64>,
+        /// Print unchanged workflow observations at this positive-second interval
+        #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
+        heartbeat: Option<u64>,
     },
     /// Open workflow TOML in the configured editor
     Edit {
@@ -1078,6 +1128,12 @@ fn parse_positive_u64(value: &str) -> std::result::Result<u64, String> {
         return Err("must be a positive integer".into());
     }
     Ok(parsed)
+}
+
+fn parse_agent_id(value: &str) -> std::result::Result<String, String> {
+    AgentId::parse(value)
+        .map(|agent| agent.as_str().to_string())
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
@@ -1993,6 +2049,8 @@ mod tests {
             "stack",
             "--profile",
             "codex",
+            "--coordinator",
+            "coord-split",
             "--title",
             "Split workflow",
             "--body",
@@ -2014,6 +2072,7 @@ mod tests {
                     mode: WorkflowModeArg::Stack,
                     profile: Some(ref profile),
                     ref profiles,
+                    coordinator: Some(ref coordinator),
                     title: Some(ref title),
                     body: Some(ref body),
                     body_file: None,
@@ -2025,6 +2084,7 @@ mod tests {
             }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
                 && profiles.is_empty()
+                && coordinator == "agents/coord-split"
                 && title == "Split workflow"
                 && body == "Ship the split workflow"
                 && origin_provider == "linear"
@@ -2044,6 +2104,7 @@ mod tests {
                     mode: WorkflowModeArg::Batch,
                     profile: None,
                     ref profiles,
+                    coordinator: None,
                     title: None,
                     body: None,
                     body_file: None,
@@ -2054,6 +2115,26 @@ mod tests {
                 }
             }) if tasks.is_empty() && profiles.is_empty()
         ));
+    }
+
+    #[test]
+    fn workflow_task_rejects_invalid_coordinator_id() {
+        let err = Cli::try_parse_from([
+            "wt",
+            "workflow",
+            "task",
+            "--mode",
+            "batch",
+            "--coordinator",
+            "agents/team/bad",
+            "add-schema",
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("agents/team/bad"));
+        assert!(
+            err.to_string()
+                .contains("Agent ids must be NAME or agents/NAME")
+        );
     }
 
     #[test]
@@ -2179,6 +2260,35 @@ mod tests {
     }
 
     #[test]
+    fn task_review_accepts_codex_base_marker() {
+        let cli = parse(&[
+            "wt",
+            "task",
+            "review",
+            "run-feature",
+            "--accept",
+            "--codex-base",
+            "main",
+            "Codex base review passed",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Review {
+                    ref task_run_id,
+                    accept: true,
+                    reject: false,
+                    block: false,
+                    ref codex_base,
+                    ref message,
+                },
+            }) if task_run_id == "run-feature"
+                && codex_base.as_deref() == Some("main")
+                && message == &vec!["Codex base review passed".to_string()]
+        ));
+    }
+
+    #[test]
     fn workflow_repair_accepts_apply_flag() {
         let cli = parse(&["wt", "workflow", "repair", "2026-05-17-002", "--apply"]);
         assert!(matches!(
@@ -2238,6 +2348,7 @@ mod tests {
         assert!(help.contains("workflow scope derived from the TaskRun"));
         assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("prepared [policy].pull_request"));
+        assert!(help.contains("prepared [policy.review].codex_base"));
         assert!(help.contains("wt workflow pass"));
     }
 
@@ -2253,6 +2364,7 @@ mod tests {
         assert!(task_help.contains("--body-file"));
         assert!(task_help.contains("--origin-provider"));
         assert!(task_help.contains("--origin-id"));
+        assert!(task_help.contains("--coordinator <ID>"));
         assert!(task_help.contains("Workflow-level [origin] is stored only on the Workflow"));
         assert!(task_help.contains("does not add issue-closing keywords"));
         assert!(!task_help.contains("--objective"));
@@ -2943,6 +3055,41 @@ mod tests {
         assert!(help.contains(".wt.toml"));
         assert!(help.contains("<repo-root>/.wt/config/local.toml"));
         assert!(help.contains("<repo-root>/.wt/config/profiles/<name>/profile.toml"));
+        assert!(help.contains("SOURCE name `shared`"));
+        assert!(help.contains("SOURCE name `local`"));
+        assert!(help.contains("SOURCE name `profiles/<name>`"));
+        assert!(help.contains("reject files outside that managed namespace"));
+    }
+
+    #[test]
+    fn config_source_subcommand_help_describes_closed_namespace() {
+        let mut command = Cli::command();
+        let config = command.find_subcommand_mut("config").unwrap();
+
+        for subcommand in ["edit", "extract", "inline"] {
+            let help = config
+                .find_subcommand_mut(subcommand)
+                .unwrap()
+                .render_long_help()
+                .to_string();
+            assert!(help.contains("shared"), "{subcommand} help was:\n{help}");
+            assert!(help.contains("local"), "{subcommand} help was:\n{help}");
+            assert!(
+                help.contains("profiles/<name>"),
+                "{subcommand} help was:\n{help}"
+            );
+            assert!(
+                help.contains("canonical path"),
+                "{subcommand} help was:\n{help}"
+            );
+        }
+
+        let inline_help = config
+            .find_subcommand_mut("inline")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(inline_help.contains("direct prompt-file SOURCE paths are rejected"));
     }
 
     #[test]

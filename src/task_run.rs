@@ -137,6 +137,10 @@ pub(crate) struct TaskRun {
     pub(crate) last_review_status: Option<TaskReviewStatus>,
     pub(crate) last_review_message_id: Option<String>,
     pub(crate) last_reviewed_at: Option<String>,
+    pub(crate) codex_base_review_status: Option<TaskReviewStatus>,
+    pub(crate) codex_base_review_base: Option<String>,
+    pub(crate) codex_base_review_message_id: Option<String>,
+    pub(crate) codex_base_reviewed_at: Option<String>,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
 }
@@ -177,6 +181,14 @@ struct RawTaskRun {
     last_review_message_id: Option<String>,
     #[serde(default)]
     last_reviewed_at: Option<String>,
+    #[serde(default)]
+    codex_base_review_status: Option<String>,
+    #[serde(default)]
+    codex_base_review_base: Option<String>,
+    #[serde(default)]
+    codex_base_review_message_id: Option<String>,
+    #[serde(default)]
+    codex_base_reviewed_at: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -207,6 +219,14 @@ impl TryFrom<RawTaskRun> for TaskRun {
                 .transpose()?,
             last_review_message_id: raw.last_review_message_id,
             last_reviewed_at: raw.last_reviewed_at,
+            codex_base_review_status: raw
+                .codex_base_review_status
+                .as_deref()
+                .map(TaskReviewStatus::parse)
+                .transpose()?,
+            codex_base_review_base: raw.codex_base_review_base,
+            codex_base_review_message_id: raw.codex_base_review_message_id,
+            codex_base_reviewed_at: raw.codex_base_reviewed_at,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
         };
@@ -393,6 +413,10 @@ fn create_with_routes(
         last_review_status: None,
         last_review_message_id: None,
         last_reviewed_at: None,
+        codex_base_review_status: None,
+        codex_base_review_base: None,
+        codex_base_review_message_id: None,
+        codex_base_reviewed_at: None,
         created_at: now.clone(),
         updated_at: now,
     };
@@ -664,6 +688,31 @@ pub(crate) fn update_review_metadata(
     })
 }
 
+pub(crate) fn update_codex_base_review_metadata(
+    record: &TaskRunRecord,
+    review_base: &str,
+    message_id: &str,
+) -> Result<TaskRunRecord> {
+    let review_base = review_base.trim();
+    if review_base.is_empty() {
+        bail!("Codex base review parent cannot be empty");
+    }
+    let mut run = read(&record.path)?;
+    let now = current_utc_timestamp();
+    run.codex_base_review_status = Some(REVIEW_ACCEPTED);
+    run.codex_base_review_base = Some(review_base.to_string());
+    run.codex_base_review_message_id = optional_string(message_id);
+    run.codex_base_reviewed_at = Some(now.clone());
+    run.updated_at = now;
+    write(&record.path, &run)?;
+
+    Ok(TaskRunRecord {
+        id: record.id.clone(),
+        path: record.path.clone(),
+        run,
+    })
+}
+
 pub(crate) fn delete_record(record: &TaskRunRecord) -> Result<()> {
     match fs::remove_file(&record.path) {
         Ok(()) => Ok(()),
@@ -828,6 +877,30 @@ fn write(path: &Path, run: &TaskRun) -> Result<()> {
     if let Some(reviewed_at) = run.last_reviewed_at.as_deref() {
         content.push_str(&format!("last_reviewed_at = {}\n", toml_quote(reviewed_at)));
     }
+    if let Some(review_status) = run.codex_base_review_status {
+        content.push_str(&format!(
+            "codex_base_review_status = {}\n",
+            toml_quote(review_status.as_str())
+        ));
+    }
+    if let Some(review_base) = run.codex_base_review_base.as_deref() {
+        content.push_str(&format!(
+            "codex_base_review_base = {}\n",
+            toml_quote(review_base)
+        ));
+    }
+    if let Some(message_id) = run.codex_base_review_message_id.as_deref() {
+        content.push_str(&format!(
+            "codex_base_review_message_id = {}\n",
+            toml_quote(message_id)
+        ));
+    }
+    if let Some(reviewed_at) = run.codex_base_reviewed_at.as_deref() {
+        content.push_str(&format!(
+            "codex_base_reviewed_at = {}\n",
+            toml_quote(reviewed_at)
+        ));
+    }
     content.push_str(&format!("created_at = {}\n", toml_quote(&run.created_at)));
     content.push_str(&format!("updated_at = {}\n", toml_quote(&run.updated_at)));
 
@@ -844,6 +917,13 @@ fn validate_run(run: &TaskRun) -> Result<()> {
     }
     if let Some(agent_id) = run.agent_id.as_deref() {
         AgentId::parse(agent_id).context("Invalid TaskRun agent_id")?;
+    }
+    if run
+        .codex_base_review_base
+        .as_deref()
+        .is_some_and(|review_base| review_base.trim().is_empty())
+    {
+        bail!("Task run codex_base_review_base cannot be empty");
     }
     Ok(())
 }
@@ -1000,7 +1080,7 @@ fn current_utc_timestamp() -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{nanos:09}Z")
 }
 
-fn normalized_utc_timestamp(timestamp: &str) -> Option<String> {
+pub(crate) fn normalized_utc_timestamp(timestamp: &str) -> Option<String> {
     let without_zone = timestamp.trim().strip_suffix('Z')?;
     let (base, fraction) = without_zone
         .split_once('.')
@@ -1256,6 +1336,8 @@ mod tests {
 
         let updated = update_report_metadata(&record, "msg_123").unwrap();
         let updated = update_review_metadata(&updated, REVIEW_ACCEPTED, "msg_456").unwrap();
+        let updated =
+            update_codex_base_review_metadata(&updated, "main", "msg_codex_review").unwrap();
         let parsed = read(&updated.path).unwrap();
 
         assert_eq!(parsed.agent_id.as_deref(), Some("agents/run-1-add-schema"));
@@ -1269,6 +1351,13 @@ mod tests {
         assert_eq!(parsed.last_review_status, Some(REVIEW_ACCEPTED));
         assert_eq!(parsed.last_review_message_id.as_deref(), Some("msg_456"));
         assert!(parsed.last_reviewed_at.is_some());
+        assert_eq!(parsed.codex_base_review_status, Some(REVIEW_ACCEPTED));
+        assert_eq!(parsed.codex_base_review_base.as_deref(), Some("main"));
+        assert_eq!(
+            parsed.codex_base_review_message_id.as_deref(),
+            Some("msg_codex_review")
+        );
+        assert!(parsed.codex_base_reviewed_at.is_some());
 
         let content = std::fs::read_to_string(updated.path).unwrap();
         assert!(content.contains("agent_id = \"agents/run-1-add-schema\""));
@@ -1281,6 +1370,10 @@ mod tests {
         assert!(content.contains("last_review_status = \"accepted\""));
         assert!(content.contains("last_review_message_id = \"msg_456\""));
         assert!(content.contains("last_reviewed_at = "));
+        assert!(content.contains("codex_base_review_status = \"accepted\""));
+        assert!(content.contains("codex_base_review_base = \"main\""));
+        assert!(content.contains("codex_base_review_message_id = \"msg_codex_review\""));
+        assert!(content.contains("codex_base_reviewed_at = "));
     }
 
     #[test]
@@ -1304,6 +1397,10 @@ mod tests {
             last_review_status: None,
             last_review_message_id: None,
             last_reviewed_at: None,
+            codex_base_review_status: None,
+            codex_base_review_base: None,
+            codex_base_review_message_id: None,
+            codex_base_reviewed_at: None,
             created_at: "2026-05-16T00:00:00Z".into(),
             updated_at: "2026-05-16T00:00:00Z".into(),
         };
@@ -1798,6 +1895,10 @@ updated_at = "2026-05-16T00:00:00Z"
             last_review_status: None,
             last_review_message_id: None,
             last_reviewed_at: None,
+            codex_base_review_status: None,
+            codex_base_review_base: None,
+            codex_base_review_message_id: None,
+            codex_base_reviewed_at: None,
             created_at: created_at.into(),
             updated_at: created_at.into(),
         }

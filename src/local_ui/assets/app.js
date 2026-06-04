@@ -76,6 +76,8 @@ const STRINGS = {
     siteLabel: "provider",
     pullRequestLabel: "pull_request",
     landingLabel: "landing",
+    reviewLabel: "review",
+    codexBaseLabel: "codex base",
     worktreePathLabel: "path",
     namingLabel: "naming",
     namingCommandLabel: "command",
@@ -110,12 +112,10 @@ const STRINGS = {
     timeoutLabel: "timeout",
     sendAfterLabel: "send_after",
     promptModesLabel: "prompt",
-    testLabel: "test",
     copyLabel: "copy",
     githubUserLabel: "gh_user",
     issuesProviderLabel: "provider",
     linkLabel: "link",
-    testsLabel: "commands",
     errorLabel: "Error",
     configuredLabel: "Configured",
     omittedLabel: "Omitted",
@@ -181,8 +181,10 @@ const STRINGS = {
     ifExistsHelp: "Runs only when this path exists.",
     workingDirHelp: "Runs from this directory.",
     workflowCardHelp: "Default review and landing behavior for workflow tasks.",
+    reviewCardHelp: "Default Codex native review evidence collection before coordinator pass or landing.",
     pullRequestHelp: "ready means create a PR that is immediately ready for review.",
     landingHelp: "landing means the post-review step that merges accepted work and cleans up the worktree.",
+    codexBaseHelp: "required means the coordinator must run /review --base <resolved-parent> in a Codex surface; advisory records evidence when available.",
     agentHelp: "CLI used for new agent work.",
     agentRuntimeHelp: "Agent launch and prompt delivery behavior.",
     issuesHelp: "Issue provider wt uses for issue-backed work.",
@@ -211,13 +213,12 @@ const STRINGS = {
     agentTimeoutHelp: "Maximum wait for the agent ready signal.",
     agentSendAfterHelp: "Delay before submitting after the prompt is sent.",
     agentPromptHelp: "Prompt scopes configured for agent startup.",
-    testHelp: "Commands reviewers or agents can run for validation.",
     localSettingsSummary: "Private settings for this workspace from .local/.wt.toml.",
     sharedSettingsSummary: "Shared repository defaults from .wt.toml.",
     otherSettingsSummary: "Additional settings loaded for this workspace.",
     selectedProfileSummary: "This profile is currently applied to the effective settings.",
     availableProfileSummary: "This profile is not currently selected.",
-    configProfileSummary: "Profile values that can change agent, files, links, local site, or tests.",
+    configProfileSummary: "Profile values that can change agent, files, links, or local site.",
     profileSiteLabel: "site",
     configInvalidProfileSummary: "This profile cannot be read and needs attention.",
     renderedEffectiveConfig: "Final TOML",
@@ -390,6 +391,8 @@ const STRINGS = {
     siteLabel: "provider",
     pullRequestLabel: "pull_request",
     landingLabel: "landing",
+    reviewLabel: "review",
+    codexBaseLabel: "codex base",
     worktreePathLabel: "path",
     namingLabel: "naming",
     namingCommandLabel: "command",
@@ -424,12 +427,10 @@ const STRINGS = {
     timeoutLabel: "timeout",
     sendAfterLabel: "send_after",
     promptModesLabel: "prompt",
-    testLabel: "test",
     copyLabel: "copy",
     githubUserLabel: "gh_user",
     issuesProviderLabel: "provider",
     linkLabel: "link",
-    testsLabel: "commands",
     errorLabel: "오류",
     configuredLabel: "설정됨",
     omittedLabel: "생략됨",
@@ -495,8 +496,10 @@ const STRINGS = {
     ifExistsHelp: "이 경로가 있을 때만 실행합니다.",
     workingDirHelp: "이 디렉터리에서 명령을 실행합니다.",
     workflowCardHelp: "워크플로우 작업의 기본 PR 생성과 landing 동작입니다.",
+    reviewCardHelp: "coordinator pass 또는 landing 전 Codex native review evidence 수집 기본값입니다.",
     pullRequestHelp: "ready는 PR을 만들 때 바로 리뷰 가능한 상태로 만든다는 뜻입니다.",
     landingHelp: "landing은 리뷰가 끝난 작업을 parent branch에 합치고 worktree를 정리하는 단계입니다.",
+    codexBaseHelp: "required는 coordinator가 Codex surface에서 /review --base <resolved-parent>를 반드시 실행한다는 뜻이고, advisory는 가능한 경우 evidence로 남긴다는 뜻입니다.",
     agentHelp: "새 agent 작업을 시작할 때 사용할 CLI입니다.",
     agentRuntimeHelp: "agent 실행과 prompt 전달 방식입니다.",
     issuesHelp: "이슈 기반 작업에서 wt가 사용할 이슈 제공자입니다.",
@@ -525,13 +528,12 @@ const STRINGS = {
     agentTimeoutHelp: "agent 준비 신호를 기다리는 최대 시간입니다.",
     agentSendAfterHelp: "prompt를 보낸 뒤 제출하기 전 대기 시간입니다.",
     agentPromptHelp: "agent 시작 prompt가 적용되는 작업 범위입니다.",
-    testHelp: "리뷰어나 agent가 검증에 사용할 수 있는 명령입니다.",
     localSettingsSummary: ".local/.wt.toml에서 현재 worktree에만 적용되는 설정입니다.",
     sharedSettingsSummary: ".wt.toml에서 저장소와 함께 공유되는 기본 설정입니다.",
     otherSettingsSummary: "현재 worktree에 추가로 적용된 설정입니다.",
     selectedProfileSummary: "현재 적용된 프로필입니다.",
     availableProfileSummary: "현재 적용되지는 않은 프로필입니다.",
-    configProfileSummary: "이 프로필이 에이전트, 복사/링크 파일, 로컬 사이트, 테스트를 어떻게 바꾸는지 보여줍니다.",
+    configProfileSummary: "이 프로필이 에이전트, 복사/링크 파일, 로컬 사이트를 어떻게 바꾸는지 보여줍니다.",
     profileSiteLabel: "site",
     configInvalidProfileSummary: "읽을 수 없는 프로필입니다. 이 항목은 확인이 필요합니다.",
     renderedEffectiveConfig: "최종 TOML",
@@ -1208,7 +1210,7 @@ function workflowCard(row) {
     row.profile ? pill(`profile ${row.profile}`, "violet") : "",
     row.profiles.length ? pill(`${row.profiles.length} profiles`, "violet") : "",
     row.origin ? pill(`${row.origin.provider} ${row.origin.id}`, "violet") : "",
-    pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
+    pill(`${row.policy.pull_request}/${row.policy.landing}/review:${row.policy.review_codex_base}`, "amber"),
   ], [row.path], row.body_summary || row.state_error, groupColor(workflowUiGroup(row)), [
     detail(t("body"), row.body || row.state_error, "prose", row.body_summary || row.state_error),
     detail(t("workflowTaskRuns"), formatWorkflowTaskRuns(row.task_run_groups || []), "source"),
@@ -1254,7 +1256,6 @@ function profileCard(row) {
     valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
     valuesPill(t("linkLabel"), profileLinkValues(row)),
     row.has_site ? pill(t("profileSiteLabel"), "green") : "",
-    row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
   ], [row.path], bodyPreview(row.source_text), "violet", [
     detail(t("sourceToml"), row.source_text, "source"),
   ]);
@@ -1317,12 +1318,14 @@ function configEffectiveRecord(config) {
     listPills: [
       pill(`${t("pullRequestLabel")} ${config.workflow.pull_request}`, "green"),
       pill(`${t("landingLabel")} ${config.workflow.landing}`, "amber"),
+      config.review ? pill(`${t("reviewLabel")} ${config.review.codex_base}`, "violet") : "",
       ...configSourceLayerPills(config),
     ],
     summary: t("configAppliedSummary"),
     pills: [
       pill(`${t("pullRequestLabel")} ${config.workflow.pull_request}`, "green"),
       pill(`${t("landingLabel")} ${config.workflow.landing}`, "amber"),
+      config.review ? pill(`${t("reviewLabel")} ${config.review.codex_base}`, "violet") : "",
       ...configSourceLayerPills(config),
       config.selected_profile ? pill(`${t("selectedProfile")}: ${config.selected_profile}`, "violet") : "",
     ],
@@ -1447,6 +1450,17 @@ function configEffectiveCards(config, options = {}) {
       ],
     });
   }
+  if (config.review) {
+    cards.push({
+      kicker: "[review]",
+      value: "",
+      description: t("reviewCardHelp"),
+      tone: "amber",
+      items: [
+        { label: t("codexBaseLabel"), value: config.review.codex_base, description: t("codexBaseHelp") },
+      ],
+    });
+  }
   const issues = typeof config.issues === "string" ? { provider: config.issues } : config.issues;
   if (includeIssues && issues) {
     const issueItems = [
@@ -1535,10 +1549,10 @@ function configEffectiveCards(config, options = {}) {
         description: t("browserHelp"),
       });
     }
-    if (workspace.chrome_devtools) {
+    if (workspace.browser?.chrome_devtools) {
       workspaceItems.push({
         label: t("chromeDevtoolsLabel"),
-        value: chromeDevtoolsValue(workspace.chrome_devtools),
+        value: chromeDevtoolsValue(workspace.browser.chrome_devtools),
         description: t("chromeDevtoolsHelp"),
       });
     }
@@ -1591,19 +1605,6 @@ function configEffectiveCards(config, options = {}) {
       items: agentItems,
     });
   }
-  if (config.test?.commands?.length) {
-    cards.push({
-      kicker: "[test]",
-      value: "",
-      description: t("testHelp"),
-      tone: "green",
-      items: config.test.commands.map((command) => ({
-        label: "run",
-        value: commandSummaryValue(command),
-        description: commandConditionText(command) || t("testHelp"),
-      })),
-    });
-  }
   return cards;
 }
 
@@ -1614,7 +1615,6 @@ function profileEffectiveCards(row) {
     site: row.site,
     workspace: row.workspace,
     agent: row.agent_settings,
-    test: row.test,
   }, { includeWorkflow: false, includeIssues: false, includeEditor: false })
     .map(profileTomlCard);
 }
@@ -1772,7 +1772,6 @@ function profileMasterDetailRecord(row, selected) {
       valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
-      row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
     ],
     summary: selected ? t("selectedProfileSummary") : t("availableProfileSummary"),
     pills: [
@@ -1783,7 +1782,6 @@ function profileMasterDetailRecord(row, selected) {
       valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
-      row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
     ],
     paths: [],
     hideSummarySectionTitle: true,
@@ -1912,7 +1910,7 @@ function workflowPills(row, group = workflowUiGroup(row)) {
     row.task_runs.missing ? pill(`${row.task_runs.missing} missing`, "red") : "",
     row.profile ? pill(`${t("profileLabel")} ${row.profile}`, "violet") : "",
     row.profiles.length ? pill(`${row.profiles.length} profiles`, "violet") : "",
-    pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
+    pill(`${row.policy.pull_request}/${row.policy.landing}/review:${row.policy.review_codex_base}`, "amber"),
   ];
 }
 
@@ -1940,7 +1938,7 @@ function workflowFactFields(row) {
     { label: "Workflow", value: row.id },
     { label: t("workflowModeLabel"), value: row.mode },
     { label: t("workflowBaseLabel"), value: row.base || row.base_mode },
-    { label: t("workflowPolicyLabel"), value: `${row.policy.pull_request}/${row.policy.landing}` },
+    { label: t("workflowPolicyLabel"), value: `${row.policy.pull_request}/${row.policy.landing}/review:${row.policy.review_codex_base}` },
     { label: t("workflowRunnableLabel"), value: row.runnable.runnable_count },
     { label: t("workflowUpdatedAtLabel"), value: row.updated_at },
     row.profile ? { label: t("profileLabel"), value: row.profile } : null,
@@ -2367,7 +2365,7 @@ function workflowCanvasInspector(row) {
     : "";
   const facts = detailFields([
     { label: t("workflowModeLabel"), value: row.mode },
-    { label: t("workflowPolicyLabel"), value: `${row.policy.pull_request}/${row.policy.landing}` },
+    { label: t("workflowPolicyLabel"), value: `${row.policy.pull_request}/${row.policy.landing}/review:${row.policy.review_codex_base}` },
     { label: t("workflowRunnableLabel"), value: row.runnable.runnable_count },
   ]);
   return `<aside class="workflow-canvas-inspector" aria-label="${escapeHtml(t("workflowCanvasInspector"))}"><h5>${escapeHtml(t("workflowCanvasInspector"))}</h5>${facts}<details><summary>${escapeHtml(t("workflowCanvasSource"))}</summary>${sourceHtml}</details><div class="workflow-canvas-legend"><span>${escapeHtml(t("workflowCanvasLegend"))}</span><p>${escapeHtml(t("workflowCanvasSolidEdge"))}</p><p>${escapeHtml(t("workflowCanvasDashedEdge"))}</p><p>${escapeHtml(t("workflowCanvasAttentionEdge"))}</p></div></aside>`;
@@ -2990,7 +2988,7 @@ function workflowScanRow(row) {
       row.task_runs.running ? pill(`${row.task_runs.running} ${stateLabel("running").toLowerCase()}`, "green") : "",
       row.task_runs.failed ? pill(`${row.task_runs.failed} ${stateLabel("failed").toLowerCase()}`, "red") : "",
       row.task_runs.missing ? pill(`${row.task_runs.missing} missing`, "red") : "",
-      pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
+      pill(`${row.policy.pull_request}/${row.policy.landing}/review:${row.policy.review_codex_base}`, "amber"),
     ],
     paths: [row.path],
     detail: formatWorkflowTaskRuns(row.task_run_groups || []) || row.source_text,
@@ -3104,7 +3102,6 @@ function profileScanRow(row) {
       valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
-      row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
     ],
     paths: [row.path],
     detail: row.source_text,

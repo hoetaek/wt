@@ -48,7 +48,7 @@ pub fn run(
     if selected.is_empty() {
         bail!("No local tasks selected");
     }
-    let coordinator = current_actor::resolve_launch_coordinator(ctx)?;
+    let coordinator = current_actor::resolve_launch_coordinator(ctx, None)?;
 
     if jobs > 1 && selected.len() > 1 {
         return run_selected_tasks_parallel(ctx, selected, base_raw, profile, jobs, &coordinator);
@@ -430,6 +430,7 @@ mod tests {
             ),
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true); // fetch
         runner.add_response("", false); // local branch exists
         runner.add_response("", false); // remote branch exists
@@ -539,6 +540,7 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true);
         runner.add_response("", false);
         runner.add_response("", false);
@@ -765,6 +767,7 @@ id = "PROJ-123"
             ),
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true);
         runner.add_response("", false);
         runner.add_response("", false);
@@ -880,6 +883,7 @@ id = "PROJ-123"
             ),
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true);
         runner.add_response("", false);
         runner.add_response("", false);
@@ -954,6 +958,7 @@ id = "PROJ-123"
             ),
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true);
         runner.add_response("", false);
         runner.add_response("", false);
@@ -1031,6 +1036,7 @@ id = "PROJ-123"
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true);
         runner.add_response("", false);
         runner.add_response("", false);
@@ -1106,6 +1112,7 @@ id = "PROJ-123"
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true);
         runner.add_response("", false);
         runner.add_response("", false);
@@ -1175,6 +1182,7 @@ id = "PROJ-123"
             ),
             true,
         );
+        runner.add_response("", true); // first has_remote (origin present)
         runner.add_response("", true); // first fetch
         runner.add_response("", false); // first local branch exists
         runner.add_response("", false); // first remote branch exists
@@ -1189,6 +1197,7 @@ id = "PROJ-123"
             ),
             true,
         );
+        runner.add_response("", true); // second has_remote (origin present)
         runner.add_response("", true); // second fetch
         runner.add_response("", false); // second local branch exists
         runner.add_response("", false); // second remote branch exists
@@ -1279,6 +1288,7 @@ id = "PROJ-123"
             ),
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true); // fetch
         runner.add_response("", false); // local branch exists
         runner.add_response("", false); // remote branch exists

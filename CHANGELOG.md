@@ -8,6 +8,26 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added automatic chrome-devtools MCP wiring for Claude and Codex agents when
+  workspace browser mode is `chrome_devtools`, using worktree-local launch-time
+  config without changing tracked or global agent settings.
+
+- Changed Chrome DevTools browser config from `[workspace.chrome_devtools]` to
+  `[workspace.browser.chrome_devtools]`; the old section is now rejected with
+  migration guidance instead of being silently accepted.
+
+- Changed Chrome DevTools browser launch to skip Chrome first-run and default-browser prompts for isolated profiles.
+
+- Changed the spec work-sequence layout to the nine-gate LEAF model: folded
+  context into `01-Learn/02-unknowns.md`, added the `00-status.md` dashboard, and
+  renumbered downstream gate files to `02-Example/03-criteria.md`,
+  `02-Example/04-wireframe.md`, `03-Architect/05-design.md`,
+  `03-Architect/06-tasks.md`, `03-Architect/07-execution.md`,
+  `04-Feedback/08-review.md`, and `04-Feedback/09-retrospect.md`. `wt scaffold
+  --spec` now seeds this layout and rejects pre-9-gate files, `wt ui` retrospect
+  scanning reads `09-retrospect.md`, and `docs/consistency.md` plus the wt skill
+  pack follow the same numbering.
+
 ## 0.43.0 - 2026-05-28
 
 - Changed remaining agent runtime state to live under the owning

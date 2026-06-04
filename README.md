@@ -65,13 +65,11 @@ This repository also ships an installable Agent Skills pack for the `wt`
 lifecycle. The pack contains:
 
 - `wt-welcome`
-- `wt-idea`
 - `wt-ready`
-- `wt-start`
-- `wt-coordinate`
+- `wt-work`
 - `wt-land`
 - `wt-config`
-- `wt-work`
+- `wt-lifecycle`
 
 For an interactive install, run one command and choose the skills, agent, and
 scope from the prompts:
@@ -87,50 +85,51 @@ For a non-interactive Codex global install, pass explicit skill names:
 ```bash
 npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/skills \
   --skill wt-welcome \
-  --skill wt-idea \
   --skill wt-ready \
-  --skill wt-start \
-  --skill wt-coordinate \
+  --skill wt-work \
   --skill wt-land \
   --skill wt-config \
-  --skill wt-work \
+  --skill wt-lifecycle \
   -g -a codex --copy -y
 ```
 
-From a local clone of this repository, use `.` as the source:
+From a local clone of this repository, use `./skills` as the source:
 
 ```bash
-npx --yes skills@latest add . \
+npx --yes skills@latest add ./skills \
   --skill wt-welcome \
-  --skill wt-idea \
   --skill wt-ready \
-  --skill wt-start \
-  --skill wt-coordinate \
+  --skill wt-work \
   --skill wt-land \
   --skill wt-config \
-  --skill wt-work \
+  --skill wt-lifecycle \
   -g -a codex --copy -y
 ```
 
 For a project-local Codex install, run the same command from the project that
-should receive the skills, point `add` at this repository clone, and omit `-g`:
+should receive the skills, point `add` at this repository clone's `skills/`
+directory, and omit `-g`:
 
 ```bash
-npx --yes skills@latest add /path/to/wt \
+npx --yes skills@latest add /path/to/wt/skills \
   --skill wt-welcome \
-  --skill wt-idea \
   --skill wt-ready \
-  --skill wt-start \
-  --skill wt-coordinate \
+  --skill wt-work \
   --skill wt-land \
   --skill wt-config \
-  --skill wt-work \
+  --skill wt-lifecycle \
   -a codex --copy -y
 ```
 
 Installing these skills only installs Agent Skills playbooks. It does not
 install the `wt` binary, run `wt init`, write `.wt.toml`, configure providers,
-or create personal `wt` task/workflow state.
+or create personal `wt` task/workflow state. Internal repo-only skills such as
+`consistency` live outside the installable `skills/` pack.
+
+Some `wt-ready` preparation patterns are adapted from Gajae-Code's
+[deep-interview](https://github.com/Yeachan-Heo/gajae-code/tree/main/packages/coding-agent/src/defaults/gjc/skills/deep-interview)
+and [ralplan](https://github.com/Yeachan-Heo/gajae-code/tree/main/packages/coding-agent/src/defaults/gjc/skills/ralplan)
+skills for `wt`'s harness-first model.
 
 ## Requirements
 
@@ -439,6 +438,9 @@ Workflow preparation reads policy from the effective config:
 [workflow]
 pull_request = "none"  # none | draft | ready
 landing = "manual"     # manual | auto
+
+[review]
+codex_base = "none"    # none | advisory | required
 ```
 
 `pull_request = "none"` means workflow agents report `PR=none`,
@@ -449,11 +451,24 @@ explicit landing direction. `landing = "auto"` means review passing is enough
 approval for the coordinator to proceed to landing and cleanup, without
 bypassing dirty-worktree, check, pull-request review, review-thread, or ancestry
 safety gates.
+`review.codex_base = "none"` means no additional Codex base-diff review
+evidence is required by default. `advisory` asks the coordinator to open a Codex
+surface and run `/review --base <resolved-parent>` when practical, with
+`codex review --base <resolved-parent>` as the non-interactive fallback, and
+record concise evidence. `required` means the coordinator must not pass or land
+the prepared workflow task until that Codex base-diff review has run against the
+resolved workflow base or stack parent, the concise evidence note exists, and
+`wt task review <task-run-id> --accept --codex-base <resolved-parent>` has
+recorded dedicated Codex base review evidence for the TaskRun after the latest
+Agent Completion Report. `wt workflow pass` rejects required-review tasks
+without fresh accepted Codex base review evidence for the current parent.
 
-`wt config` prints the effective `[workflow]` policy, including the built-in
-defaults above. `wt init` writes an explicit starter `[workflow]` policy so the
-PR and landing behavior for newly prepared workflows is visible in the generated
-config.
+`wt config` prints the effective `[workflow]` and `[review]` policy, including
+the built-in defaults above. `wt init` writes an explicit starter `[workflow]`
+policy so the PR and landing behavior for newly prepared workflows is visible in
+the generated config. It only writes `[review]` when preserving an existing
+explicit review policy, so local init does not accidentally override a shared
+or root review requirement.
 
 When `[workspace]` is configured, `wt config` also prints effective workspace
 colors, including built-in defaults. `wt init` writes the starter color map;
@@ -470,7 +485,8 @@ security, URL template, and Traefik target. A disabled `provider = "none"` site
 section is omitted from effective output. Browser launch behavior belongs to
 `[workspace.browser]`, not `[site]`.
 When `[editor]` is configured, `wt config` prints the effective editor
-placement default, `cmux_surface`, unless it is overridden.
+placement default, `cmux_surface`, unless it is overridden. In cmux, that
+default opens the editor in a right-side split pane next to the caller surface.
 
 `wt workflow task` and `wt workflow issue` snapshot the effective workflow
 policy into `<repo-root>/.wt/execution/workflows/<id>.toml` for the prepared workflow.
@@ -544,6 +560,9 @@ mode = "chrome_devtools"
 In Chrome DevTools browser mode, `wt` reserves a localhost port, launches Chrome
 with `--remote-debugging-address=127.0.0.1`, and uses a non-default per-worktree
 user data directory under the worktree parent, outside the repository checkout.
+When the workspace agent is Claude or Codex and `npx` is available, setup also
+wires a launch-time `chrome-devtools` MCP server to that reserved browser URL
+without changing tracked or global agent config.
 Setup templates, post-deps tabs, local context, and agent bootstrap can use
 `{{chrome_debug_port}}`, `{{chrome_debug_url}}`, and
 `{{chrome_user_data_dir}}`. A localhost Chrome remote debugging endpoint lets

@@ -3,7 +3,10 @@ use crate::commands::editor;
 use crate::commands::issue_selection;
 use crate::commands::task as task_command;
 #[cfg(test)]
-use crate::config::{WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode};
+use crate::config::{
+    ReviewCodexBasePolicy, ReviewConfig, WorkflowDefaultLandingPolicy,
+    WorkflowDefaultPullRequestMode,
+};
 use crate::context::Ctx;
 use crate::task::{self as task_store, PreparedTask};
 #[cfg(test)]
@@ -33,24 +36,28 @@ use crate::workflow::run::{
 };
 #[cfg(test)]
 use crate::workflow::{
-    WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowOrigin, WorkflowPullRequestMode,
-    WorkflowTask,
+    WorkflowCodexBaseReview, WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowOrigin,
+    WorkflowPullRequestMode, WorkflowTask,
 };
 use anyhow::{Result, bail};
-use std::env;
 use std::path::{Path, PathBuf};
 
 mod archive;
+mod codex_base_review;
 mod display;
 mod list_command;
 mod repair;
 mod selection;
+mod show_command;
 mod stack_completion;
+mod task_match;
+mod watch_command;
 
 use display::show_workflow;
 #[cfg(test)]
 use selection::list_runnable_workflow_candidates;
 use selection::resolve_run_workflow_path;
+use show_command::show_workflow_json;
 use stack_completion::pass_workflow;
 
 pub fn archive(ctx: &Ctx, workflow: &str) -> Result<()> {
@@ -71,6 +78,7 @@ pub struct TaskOptions<'a> {
     pub mode: WorkflowModeArg,
     pub profile: Option<&'a str>,
     pub profiles: &'a [String],
+    pub coordinator: Option<&'a str>,
     pub title: Option<&'a str>,
     pub body: Option<&'a str>,
     pub body_file: Option<&'a Path>,
@@ -131,6 +139,7 @@ pub fn task(ctx: &Ctx, tasks: &[String], options: TaskOptions<'_>) -> Result<()>
             mode: options.mode,
             profile: options.profile,
             profiles: options.profiles,
+            coordinator: options.coordinator,
             title: options.title,
             body: options.body,
             body_file: options.body_file,
@@ -186,6 +195,7 @@ pub fn issue(ctx: &Ctx, issues: &[String], options: IssueOptions<'_>) -> Result<
             origin_id: options.origin_id,
             base: options.base,
             pr: options.pr,
+            coordinator: None,
         },
         prepared_tasks,
     )
@@ -194,7 +204,20 @@ pub fn issue(ctx: &Ctx, issues: &[String], options: IssueOptions<'_>) -> Result<
 pub fn show(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
     let path = resolve_read_target(ctx, workflow)?;
     let metadata = workflow_store::read(&path)?;
+    if ctx.is_json() {
+        return show_workflow_json(ctx, &path, &metadata);
+    }
     show_workflow(ctx, &path, &metadata)
+}
+
+pub fn watch(
+    ctx: &Ctx,
+    workflow: Option<&str>,
+    interval_secs: u64,
+    timeout_secs: Option<u64>,
+    heartbeat_secs: Option<u64>,
+) -> Result<()> {
+    watch_command::run(ctx, workflow, interval_secs, timeout_secs, heartbeat_secs)
 }
 
 pub fn edit(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
@@ -207,34 +230,14 @@ pub fn repair(ctx: &Ctx, workflow: &str, apply: bool) -> Result<()> {
 }
 
 pub fn run(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
-    require_coordinator_session_for_workflow_run()?;
-    run_after_coordinator_session_check(ctx, workflow, jobs)
+    run_after_workflow_selection(ctx, workflow, jobs)
 }
 
-fn run_after_coordinator_session_check(
-    ctx: &Ctx,
-    workflow: Option<&str>,
-    jobs: usize,
-) -> Result<()> {
+fn run_after_workflow_selection(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
     let Some(path) = resolve_run_workflow_path(ctx, workflow)? else {
         return Ok(());
     };
     workflow_runner::run_workflow(ctx, &path, jobs)
-}
-
-fn require_coordinator_session_for_workflow_run() -> Result<()> {
-    let has_agent_id =
-        env::var_os("WT_AGENT_ID").is_some_and(|value| !value.to_string_lossy().trim().is_empty());
-    if has_agent_id {
-        return Ok(());
-    }
-
-    bail!(
-        "wt workflow run requires a coordinator session.\n\
-         Set WT_AGENT_ID in this shell first, for example:\n\n\
-             eval \"$(wt session set coordinator)\"\n\n\
-         You can pick any semantic name (coordinator, lead-claude, wt-fix-foo, ...)."
-    )
 }
 
 pub fn pass(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
@@ -399,6 +402,7 @@ cli = "none"
                 mode,
                 profile,
                 profiles: &[],
+                coordinator: None,
                 title,
                 body: None,
                 body_file: None,
@@ -441,6 +445,7 @@ cli = "none"
                 mode: WorkflowModeArg::Matrix,
                 profile: None,
                 profiles,
+                coordinator: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -459,6 +464,60 @@ cli = "none"
         branch: Option<&str>,
     ) {
         task_run::update(ctx, &row.run, status, branch, None).unwrap();
+    }
+
+    fn task_run_update_record(ctx: &Ctx, run_id: &str) -> task_run::TaskRunRecord {
+        task_run::list(ctx)
+            .unwrap()
+            .into_iter()
+            .find(|record| record.id == run_id)
+            .unwrap()
+    }
+
+    fn record_accepted_review_after_report(
+        ctx: &Ctx,
+        run_id: &str,
+        reported_at: &str,
+        reviewed_at: &str,
+    ) {
+        let run = task_run_update_record(ctx, run_id);
+        task_run::update_report_metadata(&run, "msg-report").unwrap();
+        let run = task_run_update_record(ctx, run_id);
+        task_run::update_review_metadata(&run, task_run::REVIEW_ACCEPTED, "msg-review").unwrap();
+        set_task_run_review_timestamps(ctx, run_id, reported_at, reviewed_at);
+    }
+
+    fn set_task_run_review_timestamps(
+        ctx: &Ctx,
+        run_id: &str,
+        reported_at: &str,
+        reviewed_at: &str,
+    ) {
+        let path = task_run::resolve(ctx, run_id).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let mut document = content.parse::<toml_edit::DocumentMut>().unwrap();
+        document["last_reported_at"] = toml_edit::value(reported_at);
+        document["last_reviewed_at"] = toml_edit::value(reviewed_at);
+        std::fs::write(path, document.to_string()).unwrap();
+    }
+
+    fn record_accepted_codex_base_review(
+        ctx: &Ctx,
+        run_id: &str,
+        review_base: &str,
+        reviewed_at: &str,
+    ) {
+        let run = task_run_update_record(ctx, run_id);
+        task_run::update_codex_base_review_metadata(&run, review_base, "msg-codex-review").unwrap();
+        set_task_run_codex_base_review_timestamp(ctx, run_id, reviewed_at);
+    }
+
+    fn set_task_run_codex_base_review_timestamp(ctx: &Ctx, run_id: &str, reviewed_at: &str) {
+        let path = task_run::resolve(ctx, run_id).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let mut document = content.parse::<toml_edit::DocumentMut>().unwrap();
+        document["codex_base_reviewed_at"] = toml_edit::value(reviewed_at);
+        std::fs::write(path, document.to_string()).unwrap();
     }
 
     fn write_workflow_with_parent(
@@ -628,6 +687,52 @@ cli = "none"
     }
 
     #[test]
+    fn task_explicit_coordinator_overrides_launcher_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new_with_options(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+            crate::context::CtxOptions {
+                launcher_coordinator_id: Some("agents/coord-env".into()),
+                ..crate::context::CtxOptions::default()
+            },
+        );
+
+        super::task(
+            &ctx,
+            &["workflow docs".into()],
+            TaskOptions {
+                mode: WorkflowModeArg::Batch,
+                profile: None,
+                profiles: &[],
+                coordinator: Some("agents/coord-explicit"),
+                title: Some("Workflow explicit"),
+                body: None,
+                body_file: None,
+                origin_provider: None,
+                origin_id: None,
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap();
+
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].run.coordinator_id.as_deref(),
+            Some("agents/coord-explicit")
+        );
+        let output = ui.steps.lock().unwrap().join("\n");
+        assert!(output.contains("coordinator: agents/coord-explicit"));
+        assert!(!output.contains("hint:"));
+    }
+
+    #[test]
     fn task_prepares_workflow_task_runs_with_auto_created_coordinator_when_unset() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
@@ -697,6 +802,7 @@ cli = "none"
                 mode: WorkflowModeArg::Matrix,
                 profile: None,
                 profiles: &["alpha".into(), "beta".into()],
+                coordinator: None,
                 title: Some("Workflow routing"),
                 body: None,
                 body_file: None,
@@ -748,6 +854,7 @@ cli = "none"
                 mode: WorkflowModeArg::Matrix,
                 profile: None,
                 profiles: &["alpha".into()],
+                coordinator: None,
                 title: Some("Workflow routing"),
                 body: None,
                 body_file: None,
@@ -763,7 +870,7 @@ cli = "none"
         rewrite_as_legacy_workflow_route(&ctx, run_id);
         assert!(task_run_record(&ctx, run_id).unwrap().agent_id.is_none());
 
-        run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
+        run_after_workflow_selection(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
 
         let repaired = task_run_record(&ctx, run_id).unwrap();
         assert_eq!(repaired.status, STATUS_RUNNING);
@@ -782,6 +889,65 @@ cli = "none"
     }
 
     #[test]
+    fn workflow_run_preserves_existing_coordinator_when_launcher_differs() {
+        let dir = tempfile::tempdir().unwrap();
+        let prepare_ctx = ctx_with_launcher(dir.path(), "agents/coord-original");
+
+        task(
+            &prepare_ctx,
+            &["workflow docs".into()],
+            WorkflowModeArg::Batch,
+            None,
+            Some("Workflow routing"),
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+        let record = workflow_store::list(&prepare_ctx).unwrap().remove(0);
+        task_run::update(
+            &prepare_ctx,
+            &record.workflow.tasks[0].run,
+            STATUS_PASSED,
+            Some("workflow-docs"),
+            None,
+        )
+        .unwrap();
+
+        let ui = Arc::new(MockUi::new());
+        let run_ctx = Ctx::new_with_options(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+            crate::context::CtxOptions {
+                launcher_coordinator_id: Some("agents/coord-other".into()),
+                ..crate::context::CtxOptions::default()
+            },
+        );
+
+        run_after_workflow_selection(&run_ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
+
+        let preserved = task_run_record(&run_ctx, &record.workflow.tasks[0].run).unwrap();
+        assert_eq!(
+            preserved.coordinator_id.as_deref(),
+            Some("agents/coord-original")
+        );
+        let output = ui
+            .steps
+            .lock()
+            .unwrap()
+            .iter()
+            .chain(ui.dims.lock().unwrap().iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(output.contains("coordinator: agents/coord-original"));
+        assert!(output.contains("run preserves the stored route"));
+        assert!(!output.contains("agents/coord-other"));
+    }
+
+    #[test]
     fn task_prepares_workflow_with_title_body_origin_and_show_displays_it() {
         let dir = tempfile::tempdir().unwrap();
         let ui = Arc::new(MockUi::new());
@@ -794,6 +960,7 @@ cli = "none"
                 mode: WorkflowModeArg::Batch,
                 profile: None,
                 profiles: &[],
+                coordinator: None,
                 title: Some("Workflow migration"),
                 body: Some("Ship the larger workflow migration"),
                 body_file: None,
@@ -851,6 +1018,7 @@ cli = "none"
                 mode: WorkflowModeArg::Batch,
                 profile: None,
                 profiles: &[],
+                coordinator: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -890,6 +1058,7 @@ cli = "none"
                 mode: WorkflowModeArg::Matrix,
                 profile: None,
                 profiles: &strings(&["alpha", "beta"]),
+                coordinator: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -924,6 +1093,7 @@ cli = "none"
                 mode: WorkflowModeArg::Batch,
                 profile: None,
                 profiles: &[],
+                coordinator: None,
                 title: Some("Workflow migration"),
                 body: None,
                 body_file: Some(&body_path),
@@ -956,6 +1126,7 @@ cli = "none"
                 mode: WorkflowModeArg::Batch,
                 profile: None,
                 profiles: &[],
+                coordinator: None,
                 title: None,
                 body: Some("inline"),
                 body_file: Some(&body_path),
@@ -978,6 +1149,7 @@ cli = "none"
                 mode: WorkflowModeArg::Batch,
                 profile: None,
                 profiles: &[],
+                coordinator: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -1214,8 +1386,8 @@ cli = "none"
         .path;
         std::fs::create_dir_all(first_worktree).unwrap();
 
-        let err = run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1)
-            .unwrap_err();
+        let err =
+            run_after_workflow_selection(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap_err();
 
         assert!(err.to_string().contains("Workflow batch failed"));
         let first_run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
@@ -1235,6 +1407,7 @@ cli = "none"
 
         let mut runner = MockRunner::new();
         runner.add_response("", true); // checked_out_path
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true); // fetch
         runner.add_response("", false); // local branch exists
         runner.add_response("", false); // remote branch exists
@@ -1254,8 +1427,8 @@ cli = "none"
         );
         update_task_run(&ctx, &record.workflow.tasks[1], STATUS_FAILED, None);
 
-        let err = run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1)
-            .unwrap_err();
+        let err =
+            run_after_workflow_selection(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap_err();
         let message = err.to_string();
 
         assert!(
@@ -1460,7 +1633,7 @@ cli = "none"
         let record =
             prepare_matrix_workflow(&ctx, &["add-schema".into()], &strings(&["alpha", "beta"]));
 
-        run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
+        run_after_workflow_selection(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let added_branches = calls
@@ -1609,6 +1782,7 @@ cli = "none"
         );
         workflow.policy.pull_request = WorkflowPullRequestMode::None;
         workflow.policy.landing = WorkflowLandingPolicy::Manual;
+        workflow.policy.review.codex_base = WorkflowCodexBaseReview::Required;
         let record = workflow_store::create(&ctx, workflow).unwrap();
 
         show(&ctx, Some(&record.id)).unwrap();
@@ -1616,6 +1790,7 @@ cli = "none"
         let dims = ui.dims.lock().unwrap().join("\n");
         assert!(dims.contains("Pull request: none"));
         assert!(dims.contains("Landing: manual"));
+        assert!(dims.contains("Review codex_base: required"));
     }
 
     #[test]
@@ -1625,6 +1800,9 @@ cli = "none"
             workflow: crate::config::WorkflowConfig {
                 pull_request: Some(WorkflowDefaultPullRequestMode::Draft),
                 landing: Some(WorkflowDefaultLandingPolicy::Auto),
+            },
+            review: ReviewConfig {
+                codex_base: Some(ReviewCodexBasePolicy::Required),
             },
             ..Config::default()
         };
@@ -1647,10 +1825,16 @@ cli = "none"
             WorkflowPullRequestMode::Draft
         );
         assert_eq!(record.workflow.policy.landing, WorkflowLandingPolicy::Auto);
+        assert_eq!(
+            record.workflow.policy.review.codex_base,
+            WorkflowCodexBaseReview::Required
+        );
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("pull_request = \"draft\""));
         assert!(content.contains("[policy]"));
         assert!(content.contains("landing = \"auto\""));
+        assert!(content.contains("[policy.review]"));
+        assert!(content.contains("codex_base = \"required\""));
     }
 
     #[test]
@@ -1968,6 +2152,249 @@ landing = "auto"
     }
 
     #[test]
+    fn workflow_pass_requires_accepted_review_for_required_codex_base_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let mut record = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["feature"]);
+        record.workflow.policy.review.codex_base = WorkflowCodexBaseReview::Required;
+        workflow_store::write(&ctx, &record.path, &mut record.workflow).unwrap();
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("feature"),
+        );
+
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("requires Codex base review evidence before pass"));
+        assert!(message.contains("latest Agent Completion Report timestamp is missing"));
+        assert!(message.contains("/review --base main"));
+        assert!(message.contains("codex review --base main"));
+        assert!(message.contains(&format!(
+            "wt task review {} --accept --codex-base main",
+            record.workflow.tasks[0].run
+        )));
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_RUNNING
+        );
+
+        let run = task_run_update_record(&ctx, &record.workflow.tasks[0].run);
+        task_run::update_review_metadata(&run, task_run::REVIEW_ACCEPTED, "msg-review").unwrap();
+
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("latest Agent Completion Report timestamp is missing")
+        );
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_RUNNING
+        );
+
+        record_accepted_review_after_report(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "2026-05-18T00:01:00Z",
+            "2026-05-18T00:02:00Z",
+        );
+
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("accepted Codex base review evidence is missing")
+        );
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_RUNNING
+        );
+
+        record_accepted_codex_base_review(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "main",
+            "2026-05-18T00:02:00Z",
+        );
+
+        pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap();
+
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_PASSED
+        );
+    }
+
+    #[test]
+    fn workflow_pass_requires_accepted_review_for_required_matrix_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        write_profile(dir.path(), "alpha");
+        write_profile(dir.path(), "beta");
+        write_task(
+            dir.path(),
+            "add-schema",
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        );
+        let ctx = ctx(dir.path());
+        let mut record =
+            prepare_matrix_workflow(&ctx, &["add-schema".into()], &strings(&["alpha", "beta"]));
+        record.workflow.policy.review.codex_base = WorkflowCodexBaseReview::Required;
+        workflow_store::write(&ctx, &record.path, &mut record.workflow).unwrap();
+        let row = &record.workflow.tasks[0];
+        for profile_run in &row.runs {
+            task_run::update(
+                &ctx,
+                &profile_run.run,
+                STATUS_RUNNING,
+                Some(&format!("add-schema-{}", profile_run.profile)),
+                None,
+            )
+            .unwrap();
+        }
+
+        let err = pass(
+            &ctx,
+            record.path.to_str().unwrap(),
+            Some("add-schema:alpha"),
+            false,
+        )
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("requires Codex base review evidence before pass"));
+        assert!(message.contains("/review --base main"));
+        assert!(message.contains("codex review --base main"));
+        assert!(message.contains(&format!(
+            "wt task review {} --accept --codex-base main",
+            row.runs[0].run
+        )));
+
+        record_accepted_review_after_report(
+            &ctx,
+            &row.runs[0].run,
+            "2026-05-18T00:01:00Z",
+            "2026-05-18T00:02:00Z",
+        );
+        record_accepted_codex_base_review(&ctx, &row.runs[0].run, "main", "2026-05-18T00:02:00Z");
+
+        pass(
+            &ctx,
+            record.path.to_str().unwrap(),
+            Some("add-schema:alpha"),
+            false,
+        )
+        .unwrap();
+
+        let alpha = task_run_record(&ctx, &row.runs[0].run).unwrap();
+        let beta = task_run_record(&ctx, &row.runs[1].run).unwrap();
+        assert_eq!(alpha.status, STATUS_PASSED);
+        assert_eq!(beta.status, STATUS_RUNNING);
+    }
+
+    #[test]
+    fn workflow_pass_rejects_accepted_review_older_than_latest_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let mut record = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["feature"]);
+        record.workflow.policy.review.codex_base = WorkflowCodexBaseReview::Required;
+        workflow_store::write(&ctx, &record.path, &mut record.workflow).unwrap();
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("feature"),
+        );
+        record_accepted_review_after_report(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "2026-05-18T00:03:00Z",
+            "2026-05-18T00:02:00Z",
+        );
+        record_accepted_codex_base_review(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "main",
+            "2026-05-18T00:02:00Z",
+        );
+
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains(
+            "accepted Codex base review at 2026-05-18T00:02:00Z is older than latest Agent Completion Report at 2026-05-18T00:03:00Z"
+        ));
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_RUNNING
+        );
+
+        record_accepted_review_after_report(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "2026-05-18T00:03:00Z",
+            "2026-05-18T00:04:00Z",
+        );
+        record_accepted_codex_base_review(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "main",
+            "2026-05-18T00:04:00Z",
+        );
+
+        pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap();
+
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_PASSED
+        );
+    }
+
+    #[test]
+    fn workflow_pass_quotes_required_codex_base_review_accept_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let mut record = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["feature"]);
+        let review_base = "feature/$(touch pwn)`base`";
+        record.workflow.base = Some(review_base.into());
+        record.workflow.policy.review.codex_base = WorkflowCodexBaseReview::Required;
+        workflow_store::write(&ctx, &record.path, &mut record.workflow).unwrap();
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("feature"),
+        );
+
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+
+        let expected_message =
+            format!("Codex base review passed against {review_base}: <summary/evidence>");
+        let expected_command = format!(
+            "wt task review {} --accept --codex-base {} {}",
+            record.workflow.tasks[0].run,
+            shell_arg(review_base),
+            shell_arg(&expected_message)
+        );
+        let unsafe_command = format!("--accept \"{expected_message}\"");
+        let message = err.to_string();
+        assert!(message.contains(&expected_command));
+        assert!(!message.contains(&unsafe_command));
+    }
+
+    #[test]
     fn workflow_pass_run_next_rejects_non_stack_workflows() {
         for mode in [WorkflowModeArg::Single, WorkflowModeArg::Batch] {
             let dir = tempfile::tempdir().unwrap();
@@ -2199,6 +2626,7 @@ landing = "auto"
             ),
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true);
         runner.add_response("", false);
         runner.add_response("", false);
@@ -2313,7 +2741,8 @@ landing = "auto"
             runs: Vec::new(),
         };
         let workflow_path = PathBuf::from("/repo/.wt/execution/workflows/2026-05-16-001.toml");
-        let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
+        let mut policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
+        policy.review.codex_base = WorkflowCodexBaseReview::Required;
 
         let content = workflow_task_prompt_content_with_policy_and_parent(
             "title = \"API\"\n",
@@ -2328,7 +2757,11 @@ landing = "auto"
                 "gh pr create --body-file <pr-body-file> --base validated-runtime-parent"
             )
         );
+        assert!(content.contains("/review --base validated-runtime-parent"));
+        assert!(content.contains("codex review --base validated-runtime-parent"));
         assert!(!content.contains("gh pr create --body-file <pr-body-file> --base stored-parent"));
+        assert!(!content.contains("/review --base stored-parent"));
+        assert!(!content.contains("codex review --base stored-parent"));
     }
 
     #[test]
@@ -2479,6 +2912,60 @@ landing = "auto"
     }
 
     #[test]
+    fn workflow_prompt_describes_required_codex_base_review_policy() {
+        let mut policy = test_workflow_policy(WorkflowPullRequestMode::None);
+        policy.review.codex_base = WorkflowCodexBaseReview::Required;
+
+        let content = workflow_batch_task_prompt_content_for_policy("title = \"API\"\n", &policy);
+
+        assert!(content.contains("Workflow review policy sets `review.codex_base = \"required\"`"));
+        assert!(content.contains("coordinator must open a Codex surface"));
+        assert!(content.contains("against the workflow base branch"));
+        assert!(content.contains("/review --base main"));
+        assert!(content.contains("codex review --base main"));
+        assert!(!content.contains("codex review --base <parent>"));
+        assert!(content.contains("wt task review <task-run-id> --accept --codex-base main"));
+        assert!(content.contains("concise review evidence note"));
+        assert!(content.contains("before passing or landing this workflow task"));
+        assert!(!content.contains("record the log"));
+        assert!(content.contains("Workflow policy sets `pull_request = \"none\"`"));
+        assert!(!content.contains("gh pr create"));
+    }
+
+    #[test]
+    fn workflow_prompt_quotes_required_codex_base_review_accept_message() {
+        let row = WorkflowTask {
+            task: "PROJ-2".into(),
+            run: "run-2".into(),
+            parent: Some("stored-parent".into()),
+            runs: Vec::new(),
+        };
+        let workflow_path = PathBuf::from("/repo/.wt/execution/workflows/2026-05-16-001.toml");
+        let mut policy = test_workflow_policy(WorkflowPullRequestMode::None);
+        let review_base = "feature/$(touch pwn)`base`";
+        policy.review.codex_base = WorkflowCodexBaseReview::Required;
+
+        let content = workflow_task_prompt_content_with_policy_and_parent(
+            "title = \"API\"\n",
+            &workflow_path,
+            &row,
+            &policy,
+            review_base,
+        );
+
+        let expected_message =
+            format!("Codex base review passed against {review_base}: <summary/evidence>");
+        let expected_command = format!(
+            "wt task review <task-run-id> --accept --codex-base {} {}",
+            shell_arg(review_base),
+            shell_arg(&expected_message)
+        );
+        let unsafe_command = format!("--accept \"{expected_message}\"");
+        assert!(content.contains(&expected_command));
+        assert!(!content.contains(&unsafe_command));
+    }
+
+    #[test]
     fn workflow_grouped_single_prompt_includes_report_only_coordinator_handoff() {
         let states = vec![
             WorkflowTaskState {
@@ -2514,6 +3001,10 @@ landing = "auto"
                     last_review_status: None,
                     last_review_message_id: None,
                     last_reviewed_at: None,
+                    codex_base_review_status: None,
+                    codex_base_review_base: None,
+                    codex_base_review_message_id: None,
+                    codex_base_reviewed_at: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                 },
@@ -2551,6 +3042,10 @@ landing = "auto"
                     last_review_status: None,
                     last_review_message_id: None,
                     last_reviewed_at: None,
+                    codex_base_review_status: None,
+                    codex_base_review_base: None,
+                    codex_base_review_message_id: None,
+                    codex_base_reviewed_at: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                 },
@@ -2931,7 +3426,7 @@ landing = "auto"
         let workflow_before = fs::read_to_string(&workflow.path).unwrap();
         let run_before = fs::read_to_string(&run_path).unwrap();
 
-        run_after_coordinator_session_check(&ctx, None, 1).unwrap();
+        run_after_workflow_selection(&ctx, None, 1).unwrap();
 
         assert_eq!(
             ui.warnings.lock().unwrap().as_slice(),

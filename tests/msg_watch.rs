@@ -244,6 +244,77 @@ fn msg_watch_resolves_omitted_agent_from_wt_agent_id() {
 }
 
 #[test]
+fn msg_watch_resolves_omitted_agent_from_identity_anchor() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "anchor-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-watch-anchor")
+        .assert()
+        .success();
+
+    send_message(temp.path(), "anchor-coord", "anchor identity");
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "watch",
+            "--timeout",
+            "1",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-watch-anchor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("summary=\"anchor identity\""));
+}
+
+#[test]
+fn msg_watch_prefers_wt_agent_id_over_identity_anchor() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "anchor-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-watch-precedence")
+        .assert()
+        .success();
+
+    send_message(temp.path(), "env-coord", "env identity");
+    send_message(temp.path(), "anchor-coord", "anchor identity");
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "watch",
+            "--timeout",
+            "1",
+        ])
+        .env("WT_AGENT_ID", "agents/env-coord")
+        .env("CMUX_SURFACE_ID", "surface-watch-precedence")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("summary=\"env identity\""))
+        .stdout(predicate::str::contains("summary=\"anchor identity\"").not());
+}
+
+#[test]
 fn msg_watch_without_identity_errors_with_resolution_chain() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -384,5 +455,8 @@ fn msg_watch_help_documents_flags() {
         .success()
         .stdout(predicate::str::contains("--agent"))
         .stdout(predicate::str::contains("--timeout"))
-        .stdout(predicate::str::contains("--json"));
+        .stdout(predicate::str::contains("--json"))
+        .stdout(predicate::str::contains(
+            "WT_AGENT_ID, then the current live identity anchor",
+        ));
 }

@@ -1,14 +1,30 @@
 use crate::context::{CmdOutput, CommandRunner};
+use crate::services::cmux::{CmuxCaller, CmuxService};
 use crate::services::cmux::{
-    CODEX_PASTE_MARKER_POLL, CODEX_PASTE_MARKER_TIMEOUT, PASTE_SUBMIT_SETTLE,
-    cmux_paste_buffer_args, cmux_send_args, cmux_set_buffer_args,
-    codex_prompt_expects_pasted_content_marker, screen_has_codex_pasted_content_marker,
+    PASTE_SUBMIT_SETTLE, cmux_paste_buffer_args, cmux_send_args, cmux_set_buffer_args,
     unique_cmux_buffer_name,
 };
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
+use std::time::Duration;
 
 pub const DEFAULT_PAYLOAD_CAP_BYTES: usize = 1024;
+pub(crate) const CODEX_IN_PROMPT_NEWLINE_KEY: &str = "shift-enter";
+
+/// How many times to (re)send the submit Enter to codex. The Enter races
+/// codex's ingestion of the just-delivered multi-line input and can be
+/// swallowed as a newline, leaving the prompt unsent. We re-send only on
+/// positive evidence that the composer still holds the prompt.
+const CODEX_SUBMIT_MAX_ATTEMPTS: usize = 3;
+/// Bottom-of-screen lines to inspect when confirming submission.
+const CODEX_SUBMIT_VERIFY_LINES: usize = 40;
+/// Grace after Enter before reading the screen to confirm submission.
+const CODEX_SUBMIT_VERIFY_GRACE: Duration = Duration::from_millis(400);
+/// Substring codex prints while a turn is in flight.
+const CODEX_WORKING_MARKER: &str = "esc to interrupt";
+/// Cap on the prompt-tail needle used to detect an unsent composer; keeping it
+/// short avoids false negatives from terminal line wrapping.
+const CODEX_SUBMIT_NEEDLE_CAP: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushKind {
@@ -158,25 +174,109 @@ fn push_codex_prompt(
     workspace: Option<&str>,
     text: &str,
 ) -> Result<()> {
-    let buffer = unique_cmux_buffer_name("wt-codex", surface_id);
-    let set_buffer_args = cmux_set_buffer_args(&buffer, text);
-    run_cmux(runner, &set_buffer_args, "set-buffer")?;
-    let paste_buffer_args = cmux_paste_buffer_args(surface_id, workspace, &buffer);
-    run_cmux(runner, &paste_buffer_args, "paste-buffer")?;
-    if let Some(workspace) = workspace {
-        if codex_prompt_expects_pasted_content_marker(text)
-            && wait_for_codex_pasted_content_marker(runner, surface_id, workspace)?
-        {
-            let enter_args = cmux_send_args("send-key", surface_id, Some(workspace), "enter");
-            return run_cmux(runner, &enter_args, "send-key");
+    submit_codex_prompt(runner, surface_id, workspace, text)
+}
+
+pub(crate) fn submit_codex_prompt(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: Option<&str>,
+    text: &str,
+) -> Result<()> {
+    let lines = codex_prompt_lines(text);
+    for (i, line) in lines.iter().enumerate() {
+        if !line.is_empty() {
+            let send_args = cmux_send_args("send", surface_id, workspace, line);
+            run_cmux(runner, &send_args, "send")?;
+        }
+        if i + 1 < lines.len() {
+            let newline_args = cmux_send_args(
+                "send-key",
+                surface_id,
+                workspace,
+                CODEX_IN_PROMPT_NEWLINE_KEY,
+            );
+            run_cmux(runner, &newline_args, "send-key")?;
         }
     }
-    std::thread::sleep(PASTE_SUBMIT_SETTLE);
-    let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
-    run_cmux(runner, &enter_args, "send-key")
+
+    let last_prompt_line = lines
+        .iter()
+        .rev()
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    submit_codex_enter(runner, surface_id, workspace, last_prompt_line)
+}
+
+/// Deliver the submit Enter to codex and confirm it landed.
+///
+/// The Enter races codex's ingestion of the just-delivered multi-line input;
+/// fired with no settle it is swallowed as a newline and the prompt sits unsent
+/// (observed against codex gpt-5.5 in cmux 0.64.x). We settle before each Enter
+/// (the root-cause fix, mirroring the Claude paste path) and, when the workspace
+/// is known, re-send Enter only on positive evidence that the composer still
+/// holds the prompt. Without that evidence — or when the screen cannot be read —
+/// we trust the settled Enter rather than risk submitting an extra empty turn.
+fn submit_codex_enter(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: Option<&str>,
+    last_prompt_line: &str,
+) -> Result<()> {
+    let cmux = CmuxService::new(runner);
+    let needle: String = last_prompt_line
+        .chars()
+        .take(CODEX_SUBMIT_NEEDLE_CAP)
+        .collect();
+    for attempt in 0..CODEX_SUBMIT_MAX_ATTEMPTS {
+        std::thread::sleep(PASTE_SUBMIT_SETTLE);
+        let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
+        run_cmux(runner, &enter_args, "send-key")?;
+
+        // Confirmation needs a workspace to read and a distinctive needle to
+        // look for; without either, trust the settled Enter.
+        let Some(ws) = workspace else {
+            return Ok(());
+        };
+        if needle.is_empty() || attempt + 1 == CODEX_SUBMIT_MAX_ATTEMPTS {
+            return Ok(());
+        }
+
+        std::thread::sleep(CODEX_SUBMIT_VERIFY_GRACE);
+        match cmux.read_screen_lines(surface_id, ws, CODEX_SUBMIT_VERIFY_LINES) {
+            Ok(screen) if codex_prompt_submitted(&screen, &needle) => return Ok(()),
+            Ok(_) => { /* composer still holds the prompt: re-send Enter */ }
+            Err(_) => return Ok(()),
+        }
+    }
+    Ok(())
+}
+
+/// Decide whether a codex prompt was submitted from a bottom-of-screen capture.
+///
+/// A submitted turn shows codex's working marker; otherwise, an accepted prompt
+/// clears the composer so the prompt tail is gone. Only a screen that still
+/// shows the prompt tail with no working marker is treated as unsent.
+fn codex_prompt_submitted(screen: &str, needle: &str) -> bool {
+    let lower = screen.to_ascii_lowercase();
+    if lower.contains(CODEX_WORKING_MARKER) {
+        return true;
+    }
+    !screen.contains(needle)
 }
 
 fn push_pasted_prompt(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: Option<&str>,
+    buffer_prefix: &str,
+    text: &str,
+) -> Result<()> {
+    submit_pasted_prompt_with_enter(runner, surface_id, workspace, buffer_prefix, text)
+}
+
+pub(crate) fn submit_pasted_prompt_with_enter(
     runner: &dyn CommandRunner,
     surface_id: &str,
     workspace: Option<&str>,
@@ -187,41 +287,107 @@ fn push_pasted_prompt(
     let set_buffer_args = cmux_set_buffer_args(&buffer, text);
     run_cmux(runner, &set_buffer_args, "set-buffer")?;
     let paste_buffer_args = cmux_paste_buffer_args(surface_id, workspace, &buffer);
-    run_cmux(runner, &paste_buffer_args, "paste-buffer")?;
+    run_cmux_paste_buffer_with_retry(runner, surface_id, workspace, &paste_buffer_args)?;
     std::thread::sleep(PASTE_SUBMIT_SETTLE);
     let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
     run_cmux(runner, &enter_args, "send-key")
 }
 
-fn wait_for_codex_pasted_content_marker(
+/// Retry paste-buffer on transient `Command timed out` errors.
+///
+/// cmux 0.64.x has an offscreen-PTY race where a surface that is not currently
+/// focused can be slow to process `paste-buffer`; the cmux CLI eventually
+/// returns "Command timed out". The previous fix at the workspace-open layer
+/// (d0c5594, `src/setup/workspace.rs:140-155`) handled the same race for the
+/// initial agent launch by briefly focusing the target workspace, letting the
+/// PTY wake, then restoring the prior focus. The send/paste-buffer path lost
+/// that mirror when cmux send paths were unified, so we reapply it here.
+fn run_cmux_paste_buffer_with_retry(
     runner: &dyn CommandRunner,
     surface_id: &str,
-    workspace: &str,
-) -> Result<bool> {
-    let deadline = std::time::Instant::now() + CODEX_PASTE_MARKER_TIMEOUT;
-    loop {
-        let out = runner.run(
-            "cmux",
-            &[
-                "read-screen",
-                "--surface",
-                surface_id,
-                "--workspace",
-                workspace,
-            ],
-            None,
-        )?;
-        if !out.success {
-            bail!("cmux read-screen failed: {}", command_error(&out));
+    workspace: Option<&str>,
+    args: &[&str],
+) -> Result<()> {
+    const DWELL_MS: &[u64] = &[0, 1_000, 3_000];
+    let cmux = CmuxService::new(runner);
+    let mut prior_focus: Option<CmuxCaller> = None;
+    let mut last_err: Option<String> = None;
+    for (idx, &dwell_ms) in DWELL_MS.iter().enumerate() {
+        if idx > 0 {
+            if prior_focus.is_none() {
+                prior_focus = cmux
+                    .identity_context()
+                    .and_then(|identity| identity.focused.or(identity.caller));
+            }
+            let _ = cmux.focus_surface(surface_id, workspace);
+            std::thread::sleep(std::time::Duration::from_millis(dwell_ms));
+            if let Some(prior) = prior_focus.as_ref() {
+                restore_prior_focus(&cmux, prior);
+            }
         }
-        if screen_has_codex_pasted_content_marker(&out.stdout) {
-            return Ok(true);
+        let out = runner.run("cmux", args, None)?;
+        if out.success {
+            return Ok(());
         }
-        if std::time::Instant::now() >= deadline {
-            return Ok(false);
+        let message = command_error(&out);
+        if !is_transient_paste_failure(&message) {
+            bail!("cmux paste-buffer failed: {message}");
         }
-        std::thread::sleep(CODEX_PASTE_MARKER_POLL);
+        last_err = Some(message);
     }
+    bail!(
+        "cmux paste-buffer failed after {} attempts: {}",
+        DWELL_MS.len(),
+        last_err.unwrap_or_else(|| "command exited with non-zero status".into())
+    )
+}
+
+fn restore_prior_focus(cmux: &CmuxService<'_>, prior: &CmuxCaller) {
+    if let Some(surface) = prior.surface.as_deref().filter(|s| !s.trim().is_empty()) {
+        if cmux
+            .focus_surface(surface, prior.workspace.as_deref())
+            .is_ok()
+        {
+            return;
+        }
+    }
+    if let Some(workspace) = prior.workspace.as_deref().filter(|w| !w.trim().is_empty()) {
+        let _ = cmux.select_workspace(workspace);
+    }
+}
+
+fn is_transient_paste_failure(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("timed out") || lower.contains("timeout")
+}
+
+pub(crate) fn codex_prompt_lines(text: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\n' => {
+                lines.push(&text[start..i]);
+                i += 1;
+                start = i;
+            }
+            b'\r' => {
+                lines.push(&text[start..i]);
+                i += 1;
+                if i < bytes.len() && bytes[i] == b'\n' {
+                    i += 1;
+                }
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+
+    lines.push(&text[start..]);
+    lines
 }
 
 fn run_cmux(runner: &dyn CommandRunner, args: &[&str], verb: &str) -> Result<()> {
@@ -369,41 +535,67 @@ mod tests {
     use crate::context::mock::MockRunner;
 
     #[test]
-    fn codex_push_sets_pastes_buffer_then_enters() {
+    fn codex_push_sends_single_line_then_enter() {
         let mut runner = MockRunner::new();
-        runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
 
         push_to_surface(&runner, "surface:4", PushKind::Codex, "hello").unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 3);
-        assert_eq!(calls[0].1[0], "set-buffer");
-        assert_eq!(calls[0].1[1], "--name");
-        assert!(calls[0].1[2].starts_with("wt-codex-surface-4-"));
+        assert_eq!(calls.len(), 2);
         assert_eq!(
             calls[0].1,
-            vec![
-                "set-buffer",
-                "--name",
-                calls[0].1[2].as_str(),
-                "--",
-                "hello"
-            ]
+            vec!["send", "--surface", "surface:4", "--", "hello"]
+        );
+        assert_eq!(
+            calls[1].1,
+            vec!["send-key", "--surface", "surface:4", "--", "enter"]
+        );
+    }
+
+    #[test]
+    fn codex_push_sends_multiline_text_with_shift_enter_between_lines() {
+        let mut runner = MockRunner::new();
+        for _ in 0..5 {
+            runner.add_response("", true);
+        }
+
+        push_to_surface(&runner, "surface:4", PushKind::Codex, "hello\n\nworld").unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 5);
+        assert_eq!(
+            calls[0].1,
+            vec!["send", "--surface", "surface:4", "--", "hello"]
         );
         assert_eq!(
             calls[1].1,
             vec![
-                "paste-buffer",
-                "--name",
-                calls[0].1[2].as_str(),
+                "send-key",
                 "--surface",
-                "surface:4"
+                "surface:4",
+                "--",
+                CODEX_IN_PROMPT_NEWLINE_KEY
+            ]
+        );
+        // empty middle line: no cmux send "", just shift-enter
+        assert_eq!(
+            calls[2].1,
+            vec![
+                "send-key",
+                "--surface",
+                "surface:4",
+                "--",
+                CODEX_IN_PROMPT_NEWLINE_KEY
             ]
         );
         assert_eq!(
-            calls[2].1,
+            calls[3].1,
+            vec!["send", "--surface", "surface:4", "--", "world"]
+        );
+        assert_eq!(
+            calls[4].1,
             vec!["send-key", "--surface", "surface:4", "--", "enter"]
         );
     }
@@ -411,9 +603,9 @@ mod tests {
     #[test]
     fn codex_push_in_workspace_passes_workspace_to_send_commands() {
         let mut runner = MockRunner::new();
-        runner.add_response("", true);
-        runner.add_response("", true);
-        runner.add_response("", true);
+        runner.add_response("", true); // send hello
+        runner.add_response("", true); // send-key enter
+        runner.add_response("> working (esc to interrupt)", true); // read-screen verify
 
         CmuxPushService::new(&runner)
             .push_to_surface_in_workspace(
@@ -426,33 +618,20 @@ mod tests {
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 3);
-        assert_eq!(calls[0].1[0], "set-buffer");
-        assert_eq!(calls[0].1[1], "--name");
-        assert!(calls[0].1[2].starts_with("wt-codex-surface-4-"));
         assert_eq!(
             calls[0].1,
             vec![
-                "set-buffer",
-                "--name",
-                calls[0].1[2].as_str(),
+                "send",
+                "--surface",
+                "surface:4",
+                "--workspace",
+                "workspace:2",
                 "--",
                 "hello"
             ]
         );
         assert_eq!(
             calls[1].1,
-            vec![
-                "paste-buffer",
-                "--name",
-                calls[0].1[2].as_str(),
-                "--surface",
-                "surface:4",
-                "--workspace",
-                "workspace:2"
-            ]
-        );
-        assert_eq!(
-            calls[2].1,
             vec![
                 "send-key",
                 "--surface",
@@ -463,33 +642,7 @@ mod tests {
                 "enter"
             ]
         );
-    }
-
-    #[test]
-    fn codex_push_in_workspace_waits_for_long_prompt_marker() {
-        let mut runner = MockRunner::new();
-        runner.add_response("", true);
-        runner.add_response("", true);
-        runner.add_response("› ## Task[Pasted Content 1639 chars]", true);
-        runner.add_response("", true);
-        let long_prompt = (1..=60)
-            .map(|line| format!("line {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        CmuxPushService::new(&runner)
-            .push_to_surface_in_workspace(
-                "surface:4",
-                Some("workspace:2"),
-                PushKind::Codex,
-                &long_prompt,
-            )
-            .unwrap();
-
-        let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 4);
-        assert_eq!(calls[0].1[0], "set-buffer");
-        assert_eq!(calls[1].1[0], "paste-buffer");
+        // Working marker observed -> no extra Enter, just the confirming read.
         assert_eq!(
             calls[2].1,
             vec![
@@ -497,61 +650,92 @@ mod tests {
                 "--surface",
                 "surface:4",
                 "--workspace",
-                "workspace:2"
-            ]
-        );
-        assert_eq!(
-            calls[3].1,
-            vec![
-                "send-key",
-                "--surface",
-                "surface:4",
-                "--workspace",
                 "workspace:2",
-                "--",
-                "enter"
+                "--lines",
+                "40"
             ]
         );
     }
 
     #[test]
-    fn claude_push_sets_pastes_buffer_then_enters() {
+    fn codex_resends_enter_when_composer_still_holds_prompt() {
         let mut runner = MockRunner::new();
-        runner.add_response("", true);
-        runner.add_response("", true);
-        runner.add_response("", true);
+        runner.add_response("", true); // send "hello"
+        runner.add_response("", true); // shift-enter
+        runner.add_response("", true); // send "world please run it"
+        runner.add_response("", true); // send-key enter (attempt 0)
+        // Composer still shows the prompt tail, no working marker -> not submitted.
+        runner.add_response("  world please run it", true); // read-screen (attempt 0)
+        runner.add_response("", true); // send-key enter (attempt 1, the resend)
+        runner.add_response("running (esc to interrupt)", true); // read-screen (attempt 1)
+
+        CmuxPushService::new(&runner)
+            .push_to_surface_in_workspace(
+                "surface:4",
+                Some("workspace:2"),
+                PushKind::Codex,
+                "hello\nworld please run it",
+            )
+            .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let enter_keys = calls
+            .iter()
+            .filter(|(cmd, args, _)| {
+                cmd == "cmux"
+                    && args.first().is_some_and(|a| a == "send-key")
+                    && args.last().is_some_and(|a| a == "enter")
+            })
+            .count();
+        assert_eq!(enter_keys, 2, "expected one resend after unsent composer");
+        let read_screens = calls
+            .iter()
+            .filter(|(_, args, _)| args.first().is_some_and(|a| a == "read-screen"))
+            .count();
+        assert_eq!(read_screens, 2);
+    }
+
+    #[test]
+    fn codex_submit_detection_uses_working_marker_and_prompt_tail() {
+        // Working marker present -> submitted regardless of tail.
+        assert!(codex_prompt_submitted(
+            "the tail is here\n> working (esc to interrupt)",
+            "the tail is here"
+        ));
+        // No marker and tail gone (composer cleared) -> submitted.
+        assert!(codex_prompt_submitted(
+            "> \n  conversation history",
+            "the tail"
+        ));
+        // No marker and tail still on screen -> not submitted.
+        assert!(!codex_prompt_submitted(
+            "  the tail is here",
+            "the tail is here"
+        ));
+    }
+
+    #[test]
+    fn codex_prompt_lines_splits_lf_crlf_and_empty_payloads() {
+        assert_eq!(codex_prompt_lines(""), vec![""]);
+        assert_eq!(codex_prompt_lines("a\nb\n"), vec!["a", "b", ""]);
+        assert_eq!(codex_prompt_lines("a\r\nb\rc"), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn claude_push_uses_paste_buffer_then_enter() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true); // set-buffer
+        runner.add_response("", true); // paste-buffer
+        runner.add_response("", true); // send-key enter
 
         push_to_surface(&runner, "surface:4", PushKind::Claude, "hello").unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 3);
-        assert_eq!(calls[0].1[0], "set-buffer");
-        assert_eq!(calls[0].1[1], "--name");
+        let verbs: Vec<&str> = calls.iter().map(|c| c.1[0].as_str()).collect();
+        assert_eq!(verbs, vec!["set-buffer", "paste-buffer", "send-key"]);
         assert!(calls[0].1[2].starts_with("wt-claude-surface-4-"));
-        assert_eq!(
-            calls[0].1,
-            vec![
-                "set-buffer",
-                "--name",
-                calls[0].1[2].as_str(),
-                "--",
-                "hello"
-            ]
-        );
-        assert_eq!(
-            calls[1].1,
-            vec![
-                "paste-buffer",
-                "--name",
-                calls[0].1[2].as_str(),
-                "--surface",
-                "surface:4"
-            ]
-        );
-        assert_eq!(
-            calls[2].1,
-            vec!["send-key", "--surface", "surface:4", "--", "enter"]
-        );
+        assert_eq!(calls[0].1.last().unwrap(), "hello");
+        assert_eq!(calls[2].1.last().unwrap(), "enter");
     }
 
     #[test]

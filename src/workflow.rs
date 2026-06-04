@@ -1,7 +1,7 @@
 use crate::config::validate_profile_name;
 use crate::context::Ctx;
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,7 +15,7 @@ pub const WORKFLOW_COLOR_ROTATION: &[&str] = &[
     "indigo", "purple", "magenta", "rose", "brown", "charcoal",
 ];
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowMode {
     Single,
@@ -35,7 +35,7 @@ impl WorkflowMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowMetadata {
     #[serde(default)]
@@ -61,14 +61,14 @@ pub struct WorkflowMetadata {
     pub tasks: Vec<WorkflowTask>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowOrigin {
     pub provider: String,
     pub id: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowTask {
     pub task: String,
@@ -80,14 +80,14 @@ pub struct WorkflowTask {
     pub runs: Vec<WorkflowTaskRun>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowTaskRun {
     pub profile: String,
     pub run: String,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowPullRequestMode {
     None,
@@ -105,18 +105,45 @@ impl WorkflowPullRequestMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowPolicy {
     pub pull_request: WorkflowPullRequestMode,
     pub landing: WorkflowLandingPolicy,
+    #[serde(default)]
+    pub review: WorkflowReviewPolicy,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowLandingPolicy {
     Manual,
     Auto,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowReviewPolicy {
+    pub codex_base: WorkflowCodexBaseReview,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowCodexBaseReview {
+    #[default]
+    None,
+    Advisory,
+    Required,
+}
+
+impl WorkflowCodexBaseReview {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkflowCodexBaseReview::None => "none",
+            WorkflowCodexBaseReview::Advisory => "advisory",
+            WorkflowCodexBaseReview::Required => "required",
+        }
+    }
 }
 
 impl WorkflowLandingPolicy {
@@ -179,6 +206,7 @@ impl Default for WorkflowPolicy {
         Self {
             pull_request: WorkflowPullRequestMode::None,
             landing: WorkflowLandingPolicy::Manual,
+            review: WorkflowReviewPolicy::default(),
         }
     }
 }
@@ -604,6 +632,11 @@ pub(crate) fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
         "landing = {}\n",
         toml_quote(workflow.policy.landing.as_str())
     ));
+    content.push_str("\n[policy.review]\n");
+    content.push_str(&format!(
+        "codex_base = {}\n",
+        toml_quote(workflow.policy.review.codex_base.as_str())
+    ));
 
     for item in &workflow.tasks {
         content.push_str("\n[[tasks]]\n");
@@ -818,6 +851,7 @@ mod tests {
             policy: WorkflowPolicy {
                 pull_request: WorkflowPullRequestMode::Draft,
                 landing: WorkflowLandingPolicy::Auto,
+                review: WorkflowReviewPolicy::default(),
             },
             tasks: vec![WorkflowTask {
                 task: "add-schema".into(),

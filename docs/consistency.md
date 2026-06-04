@@ -80,15 +80,21 @@ Canonical personal storage layout:
 │   │   └── <slug>.{md,toml}
 │   ├── specs/
 │   │   └── <slug>/
-│   │       ├── 01-intent.md
-│   │       ├── 02-unknowns.md
-│   │       ├── 03-context.md
-│   │       ├── 04+05+06-requirements.md
-│   │       ├── 07-design.md
-│   │       ├── 08-tasks.md
-│   │       ├── 09-execution.md    # lazy, when launch handoff exists
-│   │       ├── 10-review.md       # lazy, when review/sync evidence exists
-│   │       └── 11-retrospect.md   # lazy, for spec-backed work retrospectives
+│   │       ├── 00-status.md
+│   │       ├── 01-Learn/
+│   │       │   ├── 01-intent.md
+│   │       │   ├── 02-unknowns.md
+│   │       │   └── 02-references/      # template, always scaffolded; holds bulky source material
+│   │       ├── 02-Example/
+│   │       │   ├── 03-criteria.md
+│   │       │   └── 04-wireframe.md
+│   │       ├── 03-Architect/
+│   │       │   ├── 05-design.md
+│   │       │   ├── 06-tasks.md
+│   │       │   └── 07-execution.md    # lazy, when launch handoff exists
+│   │       └── 04-Feedback/
+│   │           ├── 08-review.md       # lazy, when review/sync evidence exists
+│   │           └── 09-retrospect.md   # lazy, for spec-backed work retrospectives
 │   └── retrospectives/
 │       └── <slug>.md         # cross-work/spec-less retrospectives only
 ├── execution/
@@ -154,13 +160,13 @@ them as canonical state. The canonical replacements are
 ### Idea And Spec Prep
 
 Idea는 kill-able exploration이고 Spec은 실행하기로 결정한 작업의 prep artifact다.
-`wt-idea`는 `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}`에 쓴다. Format은 자유로운
-Markdown이거나 TOML body일 수 있다. Idea는 committed-work status가 없고, 언제든 삭제하거나
-다시 쓸 수 있다. Idea 삭제나 재작성은 다른 component가 관찰해야 하는 state transition이
-아니다.
+`wt-ready`는 사용자가 아직 실행에 commit하지 않은 탐색을
+`<repo-root>/.wt/planning/ideas/<slug>.{md,toml}`에 쓸 수 있다. Format은 자유로운 Markdown이거나
+TOML body일 수 있다. Idea는 committed-work status가 없고, 언제든 삭제하거나 다시 쓸 수 있다.
+Idea 삭제나 재작성은 다른 component가 관찰해야 하는 state transition이 아니다.
 
 `wt-ready`가 idea를 받고 사용자가 실행에 commit하면 idea는 spec으로 promotion된다.
-Promotion은 `planning/ideas/<slug>.{md,toml}`을 제거하고 numbered work-sequence artifact를
+Promotion은 `planning/ideas/<slug>.{md,toml}`을 제거하고 numbered LEAF artifact를
 `planning/specs/<slug>/` 아래에 만드는 동작이다. 이 directory location change가 visible
 commit gate다. `wt` state tree를 읽는 사람은 `planning/ideas/` 아래의 exploration과
 `planning/specs/<slug>/` 아래의 committed prep work를 directory 위치만으로 구분할 수 있어야
@@ -168,29 +174,74 @@ commit gate다. `wt` state tree를 읽는 사람은 `planning/ideas/` 아래의 
 
 TaskDocument는 계속 `<repo-root>/.wt/execution/tasks/<slug>.toml`에 있는 launch unit이다. 그
 body는 `planning/specs/<slug>/` relative path를 참조할 수 있지만 TaskDocument schema는 바뀌지
-않는다. Spec은 intent, unknowns, context, requirements, design, tasks, execution handoff,
+않는다. Spec은 intent, unknowns & context, criteria, wireframe, design, tasks, execution handoff,
 review/sync, retrospect를 담는 긴 human/AI artifact이고, TaskDocument는 `wt run task`와
 `wt workflow`가 소비하는 실행 단위다. Spec 없이 TaskDocument TOML만 있는 pre-redesign task도
 valid local task로 남는다.
+
+Spec 내부의 canonical layout은 LEAF phase folder다. `planning/specs/<slug>/` bucket은
+wt의 personal-state ownership을 유지하고, 그 안에서 `01-Learn/`, `02-Example/`,
+`03-Architect/`, `04-Feedback/`이 사고 과정의 phase를 표현한다. 일반 leaf-work는 여러
+artifact를 담기 위해 `05-design-<artifact>.md`, `07-execution-<artifact>.md`,
+`08-review-<artifact>-vN.md`, `09-retrospect-<topic>.md` 같은 suffix를 권장하지만, wt spec은
+slug 하나가 하나의 work item을 소유하므로 canonical file은 `05-design.md`,
+`07-execution.md`, `08-review.md`, `09-retrospect.md`처럼 deterministic하게 둔다.
 
 `wt scaffold`가 만드는 idea/spec/task/workflow/retrospect template의 사람이 읽는 제목과
 section heading은 한국어를 기본으로 한다. TOML field name(`title`, `branch`, `mode` 등)은
 schema contract이므로 영어로 유지하지만, 값과 body template은 한국어로 읽히게 한다.
 
-`planning/specs/<slug>/01-intent.md`는 raw user wording, interpreted intent, and promotion note를
+`planning/specs/<slug>/00-status.md`는 spec을 재개 가능하게 하는 dashboard다. 현재 phase/gate,
+첫 미충족 gate, 다음 액션, 최근 return, return 횟수, gate별 progress를 적는다. progress 값은
+`0`, `25`, `50`, `75`, `100`, state 값은 `not-started`, `active`, `needs-approval`, `approved`를
+쓰고 return은 별도 gate state가 아니라 Return Log event로 기록한다. 이 파일은 index이지 source of
+truth가 아니다 — gate file이 authoritative하다.
+
+`planning/specs/<slug>/01-Learn/01-intent.md`는 raw user wording, interpreted intent, and promotion note를
 preserve한다. 이 파일은 later agent가 "사용자가 실제로 무엇을 요청했는지"와 "coordinator가
 어떻게 해석했는지"를 구분할 수 있게 해야 한다.
+Intent는 core noun과 topology도 기록할 수 있다. Core noun은 사용자가 실제로 바꾸려는 대상
+(`idea`, `spec`, `task`, `workflow`, command, UI 등)이고, topology는 독립적으로 성공/실패할 수
+있는 top-level outcome, surface, integration, deliverable 목록이다. Deferred topology item은
+삭제하지 않고 왜 이번 prep에서 제외했는지 적는다.
 
-`planning/specs/<slug>/02-unknowns.md`는 domain concepts, standards/conventions, external facts,
+`planning/specs/<slug>/01-Learn/02-unknowns.md`는 domain concepts, standards/conventions, external facts,
 internal facts를 구분하고 각 항목을 `blocking now` 또는 `useful later`로 표시한다. Evidence
-gathering은 이 unknown list를 agenda로 삼는다.
+gathering은 이 unknown list를 agenda로 삼는다. Gate 1-3 prep에서는 intent, topology, success,
+constraints, output form 중 현재 가장 약한 clarity row를 표시해서 다음 질문이나 evidence pass가
+그 gap을 줄이도록 한다.
 
-`planning/specs/<slug>/03-context.md`는 verified facts, inventoried user/team material, flagged
-assumptions, references/options/tradeoffs를 담는다. 이 파일은 결정문이 아니라 downstream gates가
-의존할 수 있는 fact inventory다.
+Gate 2는 unknown surfacing과 context/reference 탐색을 하나의 gate로 합친다. 같은
+`02-unknowns.md`에 verified facts, inventoried user/team material, flagged assumptions,
+references/options/tradeoffs를 함께 적어 각 unknown 항목 옆에서 답을 채운다. 이 파일은 결정문이
+아니라 downstream gates가 의존할 수 있는 fact inventory다. 분량이 큰 원본은 항상 seed되는
+`01-Learn/02-references/`(README 템플릿 포함)로 빼고 요약만 `02-unknowns.md`에 남긴다. 폴더가
+항상 존재하므로 보유 자료를 둘 자리는 빈 게이트에서도 보이며, `02-unknowns.md` 파일명이 unknown만
+받는다는 인상을 슬롯의 존재로 상쇄한다.
 
-`planning/specs/<slug>/04+05+06-requirements.md`는 purpose/success criteria, requirements/principles,
-output concept을 한 파일에 합친다. 첫 줄은 한국어 사용자 스토리 line으로 시작한다.
+LEAF의 middle gates는 produce/consume engine이다. Gate 3 Criteria는 답이 존재하기 전에 의도한
+효과와 관찰 가능한 기준을 적는 arbiter이자 test이고 `03-criteria.md`에 둔다. Gate 4 Wireframe은
+criteria가 통과해야 하는 concrete instance와 contract이므로, 의미 있는 mock data, placeholder,
+variation point, structure decision이 있으면 `04-wireframe.md` 또는 `04-wireframe/`로 분리한다.
+Gate 5 Design은 그 contract를 consume해서 empty/overflow/edge/timing/failure를 포함한 전체
+variation range로 일반화하는 generator다. 세 파일(`03-criteria.md`, `04-wireframe.md`,
+`05-design.md`)은 합치지 않는다.
+
+`wt scaffold <slug> --spec`은 새 spec에 phase folders를 seed한다:
+`00-status.md`, `01-Learn/01-intent.md`, `01-Learn/02-unknowns.md`,
+`01-Learn/02-references/README.md`, `02-Example/03-criteria.md`,
+`02-Example/04-wireframe.md`, `03-Architect/05-design.md`,
+`03-Architect/06-tasks.md`. `02-references/`는 더 이상 lazy가 아니라 항상 README
+템플릿과 함께 seed되는 보관 슬롯이다. lazy artifact인
+`03-Architect/07-execution.md`, `04-Feedback/08-review.md`, `04-Feedback/09-retrospect.md`는
+seed하지 않고 handoff/review/retrospect 시점에 만든다. 이전 numbering(`03-context.md`,
+`04+05-requirements.md`, `04+05+06-requirements.md`, `06-wireframe.md`, `07-design.md`,
+`08-tasks.md`, `09-execution.md`, `10-review.md`, `11-retrospect.md`)은 pre-9-gate
+legacy/starter artifact로만 취급한다. 새 spec이나 새 docs는 그 이름을 만들지 않고, scaffold는
+그런 파일이 남아 있으면 nine-gate 파일을 만들기 전에 정리하도록 거부한다.
+
+`planning/specs/<slug>/02-Example/03-criteria.md`는 purpose/success criteria,
+requirements/principles, output form을 담는다. 첫 줄은 한국어 사용자 스토리 line으로 시작한다.
 
 ```text
 사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.
@@ -204,7 +255,7 @@ WHEN <조건> THE SYSTEM SHALL <관찰 가능한 동작>
 GIVEN <전제> WHEN <트리거> THE SYSTEM SHALL <응답>
 ```
 
-`04+05+06-requirements.md`는 목적 / 성공 기준, 원칙 / 제약, 출력 형태, 기능 요구사항(EARS),
+`03-criteria.md`는 목적 / 성공 기준, 원칙 / 제약, 출력 형태, 기능 요구사항(EARS),
 비기능 요구사항, 회귀 보존 section을 둔다. 비기능 요구사항은 성능, 보안, 호환성, 또는 해당
 작업에 적용되는 cross-cutting constraint를 명시적으로 이름 붙인다. Regression-sensitive work는
 preserved behavior를 다음 형태로 적는다.
@@ -213,23 +264,41 @@ preserved behavior를 다음 형태로 적는다.
 WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>
 ```
 
-`planning/specs/<slug>/07-design.md`는 결정사항, 영향받는 컴포넌트, 제약을 적는다.
-Brownfield work에서는 새 design 전에 Static Model section(Purpose, Components, Business
-Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw code dump가
-아니라 intent와 component responsibility 중심으로 설명한다.
+`planning/specs/<slug>/02-Example/04-wireframe.md` 또는 `02-Example/04-wireframe/`는 Gate
+4의 concrete instance와 contract를 담는다. 먼저 requirements를 pages, flows, states,
+commands, document sections 같은 실제 나타날 bucket으로 묶고, text-first wireframe을 만든다:
+ASCII layout, command transcript, sequence sketch, table/state matrix, 또는 placeholder
+evidence가 있는 outline. 각 placeholder나 mock value는 어떤 contract를 instantiates하는지,
+무엇이 어떤 axis/range 안에서 변할 수 있는지 기록한다. User/operator walkthrough가 통과하기
+전에는 `03-Architect/05-design.md`가 구조를 일반화하면 안 된다.
 
-`planning/specs/<slug>/08-tasks.md`는 작업 목록 section 아래에 sequenced atomic unit을 checkbox item으로 나열한다. 각 item은
-dependency를 적고, dependency가 없는 item은 parallel 가능하다고 표시할 수 있다.
+`planning/specs/<slug>/03-Architect/05-design.md`는 결정사항, 영향받는 컴포넌트, 제약을 적는다.
+Gate 5 design은 Gate 4 contract와 variation points를 input으로 consume하고, concrete instance를
+모든 valid instance를 생성할 수 있는 reusable generator로 일반화한다. Empty, overflow, edge,
+timing, failure case처럼 단일 mock instance가 보여주지 못한 variation range를 다룬다. Design이
+artifact shape, schema, placeholder meaning을 새로 발명해야 한다면 Gate 4로 돌아간다.
+Gate 5는 principles, decision drivers, viable options, steelman antithesis를 durable rationale로
+남긴다. Brownfield work에서는 새 design 전에 Static Model section(Purpose, Components, Business
+Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw code dump가 아니라
+intent와 component responsibility 중심으로 설명한다.
 
-`planning/specs/<slug>/09-execution.md`는 `08-tasks.md`에서 드러난 slice graph를 어떤 execution shape로
-실행할지와 그 이유, `wt-start` target, TaskDocument path, optional saved Workflow TOML path,
-PR/landing policy, acceptance checks를 prose로 기록하는 lazy prep/execution artifact다. 실제
-saved execution plan은 계속 `<repo-root>/.wt/execution/workflows/<id>.toml`에 있고,
-`09-execution.md`는 executable Workflow TOML이 아니다.
+`planning/specs/<slug>/03-Architect/06-tasks.md`는 작업 목록 section 아래에 sequenced
+atomic unit을 checkbox item으로 나열한다. 각 item은 dependency를 적고, dependency가 없는
+item은 parallel 가능하다고 표시할 수 있다.
 
-Canonical `08-tasks.md` slice graph → execution decision mapping:
+`planning/specs/<slug>/03-Architect/07-execution.md`는 `03-Architect/06-tasks.md`에서
+드러난 slice graph를 어떤 execution shape로 실행할지와 그 이유, `wt-work` target,
+TaskDocument path, optional saved Workflow TOML path, PR/landing policy, acceptance checks를
+prose로 기록하는 lazy prep/execution artifact다. 실제 handoff에는 file path, module/symbol,
+issue/task id, acceptance criteria, numbered implementation step, command/config transcript,
+representative example/mock data, named output artifact, or user-accepted residual risk 같은
+concrete execution signal이 있어야 한다. Saved execution plan은 계속
+`<repo-root>/.wt/execution/workflows/<id>.toml`에 있고, `03-Architect/07-execution.md`는
+executable Workflow TOML이 아니다.
 
-| 08-tasks.md slice graph | Execution decision |
+Canonical `06-tasks.md` slice graph → execution decision mapping:
+
+| 06-tasks.md slice graph | Execution decision |
 | --- | --- |
 | All sequential, single agent | `single` |
 | All independent, same base | `batch` |
@@ -241,25 +310,26 @@ Canonical `08-tasks.md` slice graph → execution decision mapping:
 prep 판단이다. 이 값은 direct `wt run task`로 충분하거나, slice들이 서로 다른 lifecycle에서
 실행되어 하나의 saved Workflow로 표현하면 오히려 모델이 흐려지는 경우를 뜻한다.
 
-Spec은 `wt-ready` exit 시점에 frozen되지 않는다. Execution 중 `wt-coordinate` phase에서
+Spec은 `wt-ready` exit 시점에 frozen되지 않는다. Execution 중 `wt-work` phase에서
 findings가 나오면 design, task list, execution shape rationale을 in place로 업데이트할 수
 있다. 선택한 mode가 더 이상 맞지 않거나 실제 Workflow TOML과 spec이 갈라지면
-`09-execution.md`를 rationale과 함께 업데이트한다. Review/check evidence, spec drift, and
-mid-process discoveries는 `planning/specs/<slug>/10-review.md`에 기록한다. Spec과 implementation이
-drift하면 조용히 갈라지게 두지 말고 spec을 업데이트해 다시 맞춘다.
+`03-Architect/07-execution.md`를 rationale과 함께 업데이트한다. Review/check evidence, spec
+drift, and mid-process discoveries는 `planning/specs/<slug>/04-Feedback/08-review.md`에
+기록한다. Spec과 implementation이 drift하면 조용히 갈라지게 두지 말고 spec을 업데이트해
+다시 맞춘다.
 
-Spec-backed work의 retrospective는 기본적으로 `planning/specs/<slug>/11-retrospect.md`에 둔다.
+Spec-backed work의 retrospective는 기본적으로 `planning/specs/<slug>/04-Feedback/09-retrospect.md`에 둔다.
 `<repo-root>/.wt/planning/retrospectives/`는 여러 work item을 가로지르는 cross-work learning,
 spec이 없는 legacy/direct work, 또는 의도적으로 한 spec에 묶이지 않는 회고의 fallback이다.
 새 per-work retrospective를 전역 `retrospectives/` 아래에 만들지 않는다.
 
-`11-retrospect.md`는 작업별 timing record를 포함한다. 최소한 TaskDocument의 expected
+`04-Feedback/09-retrospect.md`는 작업별 timing record를 포함한다. 최소한 TaskDocument의 expected
 duration, estimate basis, 실제 시작/종료/elapsed, 최초 meaningful signal, 사용한
 `wt agent watch` cadence, `needs_input`/report 전이, 개입 이유, 다음 추정 조정을 적는다.
 Spec-backed workflow는 workflow 전체 요약만 쓰지 말고 task/slice별 timing entry를 둔다.
 Cross-work timing 보정은 `<repo-root>/.wt/planning/retrospectives/timing.md` 같은 rolling
 retrospective에 축약할 수 있지만, 이것은 여러 작업을 가로지르는 학습 기록이지 per-work
-`11-retrospect.md`의 대체물이 아니다. `runtime/agents/<name>/observations/wait-observations.jsonl`과
+`04-Feedback/09-retrospect.md`의 대체물이 아니다. `runtime/agents/<name>/observations/wait-observations.jsonl`과
 `wt agent wait-stats`는 watch heartbeat/timeout 관측 증거로 인용할 수 있으나, 실제 작업
 소요시간의 canonical source로 보지 않는다.
 
@@ -465,7 +535,9 @@ wt task review <task-run-id> --accept|--reject|--block "<message>"
 `task_run:<task-run-id>` scope. It records `last_review_status`, `last_review_message_id`,
 `last_reviewed_at`, and `updated_at` on the TaskRun. `--reject` and `--block` reopen a passed
 TaskRun to `running` after sending feedback; `--accept` records metadata only and does not pass a
-running TaskRun. Task-agent hooks may claim `task_run:<id>` messages only when both `WT_AGENT_ID`
+running TaskRun. `--accept --codex-base <parent>` additionally records dedicated
+`codex_base_review_*` evidence for required Codex base-diff review gates; generic `--accept`
+metadata alone does not satisfy those gates. Task-agent hooks may claim `task_run:<id>` messages only when both `WT_AGENT_ID`
 matches `TaskRun.agent_id` and `WT_TASK_RUN_ID` matches the scoped TaskRun id. Passing `--agent` to
 the low-level hook consumer is not by itself task-run ownership evidence.
 
@@ -847,10 +919,40 @@ merge된 layer, convention file, built-in default를 사용자가 복사해 수�
 활성 section의 runtime default는 `wt config` 출력에 materialize한다. 예를 들어 active
 `[site]` provider는 name/root/secure/url과 Traefik target default까지 보여주고,
 `[workspace.browser]`는 setup/open 때 browser를 띄울지와 어떤 URL을 열지 결정한다.
+`[workspace.browser.chrome_devtools]`는 `mode = "chrome_devtools"`일 때만 쓰는 Chrome
+DevTools launch detail(`port`, `user_data_dir`)을 소유한다. 이 detail은 browser mode의
+하위 설정이지 `[workspace]`의 형제 section이 아니다. 예전 `[workspace.chrome_devtools]`는
+canonical path가 아니며, 자동 migrate나 alias 없이 새 위치로 옮기라는 parse error로 거부한다.
 `[site]`는 `site_url`을 만들고, browser launch policy를 소유하지 않는다. active `[editor]`
-설정은 생략된 placement의 `cmux_surface` default를 보여준다. 반대로
+설정은 생략된 placement의 `cmux_surface` default를 보여준다. cmux에서 이 default는
+caller surface 오른쪽 split pane에 editor를 연다. 반대로
 `provider = "none"`처럼 feature가 inactive인 section은 effective output에 unrelated section으로
 내보내지 않는다.
+
+### Config Source Namespace
+
+`wt config edit`, `wt config extract`, `wt config inline`의 typed `SOURCE`는 wt-managed
+config 파일의 닫힌 네임스페이스만 받는다. 유효한 shorthand는 다음 세 형태뿐이다.
+
+| shorthand | canonical target |
+|---|---|
+| `shared` | `.wt.toml` |
+| `local` | `<repo-root>/.wt/config/local.toml` |
+| `profiles/<name>` | `<repo-root>/.wt/config/profiles/<name>/profile.toml` |
+
+`wt config edit SOURCE`는 위 managed target이 아직 없어도 받는다. Parent directory를 준비한 뒤
+editor가 해당 파일을 만들 수 있게 한다. `wt config extract SOURCE`와 `wt config inline SOURCE`는
+refactor 대상이므로 이미 존재하는 managed file만 받는다. 이 파일들을 가리키는 절대 경로나
+repo-relative canonical path도 같은 대상으로 받는다.
+
+그 외 경로, 오타, bare profile name(`codex` 같은 이름)은 editor나 refactor 작업 전에
+비0 종료로 거부하고, 에러에는 유효한 대상 목록과 `SOURCE` 없이 실행하면 selector를 쓸 수
+있다는 안내를 포함한다. `SOURCE` 없이 실행하는 selector는 기존 managed config file을 보여주며,
+아직 아무 파일도 없을 때는 personal `local` target을 기본 생성 대상으로 삼는다.
+
+Profile prompt convention file은 `SOURCE` 네임스페이스가 아니다. Prompt file을 inline할 때도
+`profiles/<name>` 또는 해당 `profile.toml`을 `SOURCE`로 넘긴 뒤 그 profile 안의 prompt file
+candidate를 선택한다.
 
 `[workspace].colors`는 workspace를 시작하는 command surface의 기본 cmux 색상이다.
 Canonical 색상 key는 `task`, `issue`, `branch`, `pr`이다. `task`는 TaskDocument에
@@ -929,9 +1031,9 @@ layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 
 | `worktree.copy_as` | extend, `(from, to)` 쌍 dedupe | 같은 from/to 쌍은 한 번만. 다른 from이면 둘 다 살아남는다. |
 | `setup.deps` | extend (현재 dedupe 없음) | 같은 dep을 두 layer가 적으면 두 번 실행된다. dep script는 idempotent하게 짠다. |
 | `setup.env`, `setup.env_files[path]`, `workspace.colors` | HashMap extend (key-level overwrite) | 같은 key를 윗 layer가 덮어쓴다. |
-| `workflow.pull_request`, `workflow.landing`, `editor.command`, `editor.placement`, `workspace.browser`, `workspace.chrome_devtools` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. |
+| `workflow.pull_request`, `workflow.landing`, `review.codex_base`, `editor.command`, `editor.placement`, `workspace.browser` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. `workspace.browser.chrome_devtools`는 `workspace.browser`의 하위 설정이므로 browser section과 함께 교체된다. |
 | `workspace` (Option 섹션) | deep-merge (both Some) | 두 layer가 모두 `[workspace]`를 가지면 필드별로 위 규칙대로 합친다. |
-| `site`, `test`, `issues` (Option 섹션) | wholesale REPLACE if Some | 윗 layer가 `[site]`/`[test]`/`[issues]`를 가지면 아랫 layer의 같은 섹션이 통째로 사라진다. 한 필드만 바꾸려면 base의 모든 필드를 다시 적는다. |
+| `site`, `issues` (Option 섹션) | wholesale REPLACE if Some | 윗 layer가 `[site]`/`[issues]`를 가지면 아랫 layer의 같은 섹션이 통째로 사라진다. 한 필드만 바꾸려면 base의 모든 필드를 다시 적는다. |
 | `agent.{cli, args, command, ready, submit, timeout, send_after}` | per-field presence-based REPLACE | 윗 layer가 명시한 필드만 덮어쓴다. |
 | `agent.prompt[mode]` | REPLACE per mode unless `[agent.prompt.append].<mode>` | 같은 mode를 적으면 덮어쓴다. append-key form은 기존 prompt에 `\n\n`으로 이어붙인다. |
 
@@ -948,8 +1050,8 @@ profile convention(`scaffold/`, `prompts/`)은 effective config에 합쳐지지 
 피하려면 둘 중 하나는 명시한다.
 
 `[profile] name`과 inline `[profile.agent]`, `[profile.worktree]`, `[profile.setup]`,
-`[profile.workspace]`, `[profile.site]`, `[profile.test]`를 같이 쓸 수 없다. parse 단계에서
-hard error로 막는다. 한 곳만 골라서 적는다.
+`[profile.workspace]`, `[profile.site]`를 같이 쓸 수 없다. parse 단계에서 hard error로
+막는다. 한 곳만 골라서 적는다.
 
 ### Omission Means Default Behavior
 *North star: [Direction-Driven Design](north-star.md#direction-driven-design).*
@@ -1023,8 +1125,10 @@ Keyboard behavior는 prompt마다 다시 해석하지 않는다.
   skip section rows. They stop at the first/last selectable option unless a future selector contract
   explicitly adds wrapping.
 - Space toggles the active option only for multiselect prompts. It never toggles a section header.
-- Enter submits the active option for single-select, or the current selected set for multiselect.
-  Whether an empty multiselect is valid is command-specific and must be documented at that command.
+- Enter submits the active option for single-select. For multiselect, Enter submits the current
+  selected set; when that set is empty and an active selectable option exists, Enter first selects
+  that active option and submits it as a one-item selection. If no active option exists, whether an
+  empty multiselect is valid is command-specific and must be documented at that command.
 - Escape and ctrl-c cancel cleanly, restore terminal state, and surface the same cancelled prompt
   error shape as other wt prompt cancellation.
 - Backspace edits the filter text and must not alter selection state.
@@ -1117,7 +1221,7 @@ bundle 이름을 고르게 하지 않는다. `--preset`과 `--minimal`은 primar
 않고, 새 parser surface에서는 legacy 입력으로 실패한다.
 
 `wt init --yes`는 non-interactive project recommendation을 받아들이는 자동화 경로다. Repo
-manifest를 scan해 setup command, dev tab, test command 후보를 active config에 반영한다.
+manifest를 scan해 setup command와 dev tab 후보를 active config에 반영한다.
 Issue/site integration은 explicit flag 또는 `.linear.toml`, Laravel app처럼 concrete repo
 signal이 있을 때만 active config에 쓴다. Agent runtime은 explicit flag나 기존 config default가
 있을 때만 쓴다. Interactive wizard에서는 agent runtime도 작은 selector로 물으며, agent를 선택하면
@@ -1185,7 +1289,7 @@ expected duration, estimate basis, suggested watch cadence, blocked by/dependenc
 execution shape, size class, acceptance checks를 적는다. Provider issue import처럼 외부
 본문을 그대로 보존하는 TaskDocument는 이 section이 없을 수 있으므로 CLI는 단순 TOML read
 중에 planning body를 자동 생성하거나 provider body를 덮어쓰지 않는다. `wt-ready` /
-`wt-start` coordinator flow가 launch 전에 부족한 planning 정보를 채우는 소유자다.
+`wt-work` flow가 launch 전에 부족한 planning 정보를 채우는 소유자다.
 
 `wt task list`는 `<repo-root>/.wt/execution/tasks/<task>.toml`에 저장된 TaskDocument file 중
 actionable working set을 보여주는 canonical read-only list다. Bare `wt task list`는
@@ -1359,6 +1463,9 @@ Canonical config shape:
 [workflow]
 pull_request = "none"  # none | draft | ready
 landing = "manual"     # manual | auto
+
+[review]
+codex_base = "none"    # none | advisory | required
 ```
 
 `pull_request` is the default pull-request handoff intent for workflow tasks. `none`
@@ -1367,13 +1474,27 @@ draft pull requests and leave them draft. `ready` means agents open pull request
 are ready for review immediately. `ready` is the canonical name; `open`, `review`,
 boolean `true`, and boolean `false` are not aliases.
 
-`landing` is the coordinator preference after review passes. Review is always part of
-the coordinator flow, and config cannot disable review. `manual` means review completes
-and the coordinator stops before merge or cleanup until the user explicitly directs
-landing. `auto` means review passing is enough approval for the coordinator to proceed
-to landing and cleanup. `auto` does not bypass dirty-worktree checks, configured check
-commands, required pull-request checks, unresolved review threads, branch ancestry
-checks, workflow mode ordering, or any other landing safety gate.
+`landing` is the coordinator preference after review passes. Coordinator review is
+always part of the flow, and config cannot disable that review. `manual` means review
+completes and the coordinator stops before merge or cleanup until the user explicitly
+directs landing. `auto` means review passing is enough approval for the coordinator to
+proceed to landing and cleanup. `auto` does not bypass dirty-worktree checks,
+configured check commands, required pull-request checks, unresolved review threads,
+branch ancestry checks, workflow mode ordering, or any other landing safety gate.
+
+`review.codex_base` is an additional Codex-native base-diff evidence policy for the
+coordinator. `none` means no Codex base-diff review evidence is required. `advisory`
+asks the coordinator to open a Codex surface and run
+`/review --base <resolved-parent>` when practical, with
+`codex review --base <resolved-parent>` as the non-interactive fallback, and record
+concise evidence; a missing/unavailable run is not by itself a blocker if reported.
+`required` means the coordinator must run that review against the resolved workflow
+base or stack parent and record concise evidence before `wt workflow pass`, landing,
+or cleanup. Required Codex base review is enforced by `wt workflow pass`: the TaskRun
+must also have dedicated accepted Codex base review metadata from
+`wt task review <task-run-id> --accept --codex-base <resolved-parent>` after the
+latest Agent Completion Report and after the coordinator records the evidence note.
+This key does not replace normal coordinator review or pull-request review gates.
 
 If a pull request exists, "review passes" is an evidence-backed pull-request review
 gate, not an inferred state from green checks or an agent completion report. The
@@ -1411,6 +1532,9 @@ The Workflow file stores the effective policy snapshot once at workflow level:
 [policy]
 pull_request = "none"
 landing = "manual"
+
+[policy.review]
+codex_base = "none"
 ```
 
 Workflow policy is intent, not state: actual pull-request review result, merge status,
@@ -1419,14 +1543,19 @@ TaskDocument cleanup remain outside Workflow policy. `wt inspect`, pull-request 
 Git commands, `wt workflow pass`, and `wt done` continue to own those checks and
 transitions explicitly.
 
-The built-in config defaults are `pull_request = "none"` and `landing = "manual"`.
+The built-in config defaults are `pull_request = "none"`, `landing = "manual"`, and
+`review.codex_base = "none"`.
 Explicit workflow preparation flags override the config for one run while keeping the
 same value names and failing early for conflicting forms instead of introducing aliases.
-`wt config` shows the effective `[workflow]` policy, including built-in defaults, so
-scripts and humans can inspect the actual policy that new workflow preparation will use.
+`wt config` shows the effective `[workflow]` and `[review]` policy, including built-in
+defaults, so scripts and humans can inspect the actual policy that new workflow
+preparation will use.
 `wt init` does not write a commented optional `[workflow]` tutorial block; generated config
 writes an explicit starter `[workflow]` policy with `pull_request = "none"` and `landing = "manual"`
 unless it is preserving an existing explicit workflow policy from the target config.
+It writes `[review]` only when preserving an existing explicit review policy, so local
+init does not materialize `codex_base = "none"` as an accidental override of a shared
+or root requirement.
 `wt workflow show` displays the prepared policy snapshot from the workflow file, not the
 current `.wt.toml` value.
 
@@ -1450,6 +1579,16 @@ rewrite them into the canonical title/body/origin shape instead of preserving
 Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
 두 번째 task source를 만들지 않는다.
+Workflow coordinator는 `wt workflow task`가 Workflow와 linked TaskRun을 준비하는 생성
+시점에 한 번 바인딩된다. 우선순위는 명시 `--coordinator <id>`가 있으면 그것을 쓰고,
+없으면 `WT_AGENT_ID`, current live identity anchor, auto-created identity anchor 순서다.
+`<id>`는 `wt as`와 같은 `NAME` 또는 `agents/NAME` 단일 agent-name segment만 허용한다.
+생성 출력은 항상 저장된 `coordinator: agents/<name>`을 보여주고, auto-created identity
+anchor로 떨어진 경우에만 다른 coordinator로 묶으려면 `--coordinator <id>` 또는
+`WT_AGENT_ID=<id>`로 다시 생성하라는 hint를 보여준다. `wt run workflow`는 이 바인딩을
+다시 결정하지 않고 linked TaskRun의 저장된 `coordinator_id`를 보존한다. legacy 또는
+incomplete TaskRun처럼 `coordinator_id`가 비어 있는 경우에만 현재 actor 우선순위로 누락
+route를 repair하고 그 fallback 사용 사실을 출력한다.
 
 `<repo-root>/.wt/execution/workflows`는 `<repo-root>/.wt/batches`와 `<repo-root>/.wt/stacks`를 대체한다. 이유는 batch와 stack이
 저장소 noun이 아니라 하나의 Workflow 안에서 고르는 execution mode이기 때문이다. 새
@@ -1493,6 +1632,18 @@ text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계
 값일 뿐이므로 `wt list workflow`, top-level `batch`/`stack` 같은 symmetry
 command를 추가하지 않는다. `wt task list`는 symmetry command가 아니라 별도 TaskDocument
 inventory surface이며 Workflow, TaskRun, branch, worktree 목록 의미를 갖지 않는다.
+
+`wt workflow show <id>`는 한 Workflow file을 읽는 canonical one-shot observation surface다.
+기본 human 출력은 Workflow meta(path, mode, base, title/body/origin, policy, task count)와
+번호 매긴 task row, task file path, branch, parent를 보여준다. `--json`은 같은 대상에 대해
+`path`, `mode`, `base`, `title`, `pull_request`, `landing`, `review.codex_base`, `tasks[]`를 출력하며,
+`tasks[]` 각 record는 `order`, `task`, `status`, `branch`, `parent`, `title`을 가진다.
+`status`는 linked TaskRun의 durable lifecycle 값(`prepared`, `running`, `passed`, `failed`,
+`skipped`)만 사용하고, JSON mode에서 linked TaskRun이나 TaskDocument를 판독할 수 없으면
+가짜 status를 만들지 않고 비0으로 실패한다. 이 명령은 polling이나 gate verdict를 소유하지
+않으므로 exit code는 command 성공/실패만 뜻한다. Workflow 전체 top-level `status`는 만들지
+않고, 전체 terminal 여부와 실패 verdict는 별도 반복 관찰 command가 소유한다.
+
 `wt profile list`는 named profile inventory를 위한 canonical surface이고,
 `<repo-root>/.wt/config/profiles/<name>/profile.toml`을 config/profile loader로 읽어 정렬된 valid
 profile 목록과 함께 invalid profile 레코드를 text warning 또는 JSON
@@ -1548,11 +1699,18 @@ own TaskRun mutation.
 both that session cookie and an `Origin` header matching the bound `http://127.0.0.1:<port>` origin;
 failed auth returns 401 and must not touch files.
 
+`wt studio --dev` is the canonical frontend development mode. It keeps the write-capable API on the
+same loopback Studio server, but treats the Vite dev-server origin as the browser origin so HMR can
+serve `src/studio/web` directly. The default dev origin is `http://127.0.0.1:5173`; `--dev-origin`
+may override it only with an explicit loopback `http://host:port` origin. In dev mode, `/auth` and
+`/api` traffic must be proxied from Vite back to the printed Studio API origin with cookies and the
+browser `Origin` preserved.
+
 Unlike `wt ui`, Studio may use a frontend build pipeline. The canonical Studio frontend location is
 `src/studio/web/` with Vite, Preact, and TypeScript. `cargo build` runs `npm ci && npm run build`
 when the frontend inputs are stale, fails clearly if `node` or `npm` is unavailable, and embeds the
 resulting `src/studio/web/dist/` assets in the `wt` binary with `include_dir!`. Runtime use of
-`wt studio` must not depend on Node.
+normal `wt studio` must not depend on Node; only explicit `wt studio --dev` development mode does.
 
 The Studio bootstrap layer exposes non-mutating routes such as the embedded page, `/auth`, and
 authenticated `GET /api/ping`; mutation routes are added only with an operation-specific contract.
@@ -1662,9 +1820,15 @@ transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow�
 task agent에게 전달하는 canonical feedback은
 `wt task review <task-run-id> --accept|--reject|--block "<message>"`이며, 이 명령은
 TaskRun의 `agent_id`로 `task_run:<id>` scope 메시지를 보내고 TaskRun review metadata를
-갱신한다. Late review after pass는 정상 flow다. `--reject`와 `--block`은 passed TaskRun을
+갱신한다. Review를 보내는 actor가 TaskRun의 저장된 `coordinator_id`와 다르면 feedback은
+거부되어야 하며, 교정 경로는 기록된 coordinator로 재실행하는
+`wt as agents/<recorded> -- wt task review <task-run-id> --accept|--reject|--block "<message>"`
+형태다. Late review after pass는 정상 flow다. `--reject`와 `--block`은 passed TaskRun을
 `running`으로 되열고, task agent는 같은 TaskRun route로 다시 `wt task report`를 보낼 수
-있다. `--accept`는 metadata-only이며 running TaskRun을 `passed`로 만들지 않는다. Pull request
+있다. `--accept`는 metadata-only이며 running TaskRun을 `passed`로 만들지 않는다.
+`--accept --codex-base <parent>`는 required Codex base-diff review gate를 위한
+`codex_base_review_*` evidence도 별도로 기록하며, 일반 `--accept` metadata만으로는 그 gate를
+충족하지 않는다. Pull request
 review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한 check를 다시 돌린 뒤
 commit/push하고 PR 본문이 stale해졌을 때만 PR 본문과 Agent Completion Report를 갱신한다.
 실행자나 coordinator가 `wt inspect`, 필요한 경우 pull request, 보고를 확인한 뒤
@@ -1777,6 +1941,19 @@ Agent observation exit code는 agent command에만 속한다. `wt agent status`�
 `wt agent watch`는 0을 observable/not blocked, 1을 target/session/cmux unavailable, 2를
 `needs_input`, 3을 `failed`로 유지한다. cmux 자체를 사용할 수 없으면 성공한 `no_session`처럼
 보이지 않도록 실패한다.
+
+`wt workflow watch [<workflow>]`는 Workflow file과 linked TaskRun durable status를 반복 관찰하는
+workflow-level terminal block이다. `wt agent watch`가 한 task agent의 Layer 2 runtime state를
+관찰하는 것과 달리, `wt workflow watch`는 cmux runtime 관찰이나 delivery loop가 아니며 모든 workflow
+task가 terminal(`passed`, `failed`, `skipped`)이 될 때까지 기다린다. 출력은 기본 transition-only이고,
+긴 unchanged 대기는 `--heartbeat <SECONDS>`를 명시해야 반복 출력한다. `--timeout <SECONDS>` 뒤에도
+아직 non-terminal task가 남아 있으면 timeout 메시지와 현재 상태를 출력하고 0으로 종료한다.
+종료 코드는 agent watch 관찰 계약을 workflow durable status에 맞춰 재사용한다: workflow state가
+unavailable이면 1, terminal task 중 `failed`가 하나라도 있으면 3, 그 외 all passed/skipped 또는
+timeout-still-running은 0이다. `--json`은 종료 시 `wt workflow show --json`과 같은 final snapshot
+스키마를 출력한다. 이 command는 `<repo-root>/.wt/runtime/agents/<name>/observations/wait-observations.jsonl`
+에 쓰지 않는다. `<workflow>` 생략은 interactive TTY human mode에서만 selector를 열며, `--json`,
+`--quiet`, non-TTY automation에서는 explicit workflow path나 id를 요구해야 한다.
 
 Agent별 상태 신호 준비도는 `agent status`나 `agent watch`가 고치는 대상이 아니라 관찰의
 신뢰도 조건이다. Claude Code는 cmux의 Claude 통합에서 status/sidebar 신호가 나오고, Codex는

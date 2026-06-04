@@ -1,22 +1,27 @@
+use crate::config::{Config, ProfileConfig, validate_profile_name};
 use crate::context::Ctx;
 use crate::storage::StorageRoot;
 use crate::studio::auth::{COOKIE_NAME, StudioSession, mint_session_token};
+use crate::studio::resource::{
+    FileFingerprint, ResourceError, ResourceErrorOrPrecondition, atomic_write, check_precondition,
+    diff_text, empty_fingerprint, read_fingerprint,
+};
+use crate::studio::workflow::{validate_workflow_candidate, validate_workflow_id};
 use crate::task::{self, TaskDocument};
+use crate::workflow as workflow_model;
 use anyhow::{Context, Result, bail};
 use axum::body::Body;
-use axum::extract::{Query, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fmt::Display;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::UNIX_EPOCH;
 use tokio::net::TcpListener;
 
 static WEB_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/studio/web/dist");
@@ -25,6 +30,7 @@ static WEB_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/studio/web/dist
 pub struct ServerOptions {
     pub host: String,
     pub port: u16,
+    pub dev_asset_origin: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -33,25 +39,50 @@ pub struct StudioState {
     repo_root: Arc<PathBuf>,
     storage_root: StorageRoot,
     task_document_apply_lock: Arc<Mutex<()>>,
+    personal_config_apply_lock: Arc<Mutex<()>>,
+    profile_config_apply_lock: Arc<Mutex<()>>,
+    profile_prompt_apply_lock: Arc<Mutex<()>>,
+    workflow_apply_lock: Arc<Mutex<()>>,
+    dev_asset_origin: Option<String>,
 }
 
 impl StudioState {
-    fn new(ctx: &Ctx, origin: String, token: String) -> Self {
+    fn new(
+        ctx: &Ctx,
+        browser_origin: String,
+        token: String,
+        dev_asset_origin: Option<String>,
+    ) -> Self {
         Self {
-            session: Arc::new(StudioSession::new(origin, token)),
+            session: Arc::new(StudioSession::new(browser_origin, token)),
             repo_root: Arc::new(ctx.repo_root.clone()),
             storage_root: ctx.storage_root.clone(),
             task_document_apply_lock: Arc::new(Mutex::new(())),
+            personal_config_apply_lock: Arc::new(Mutex::new(())),
+            profile_config_apply_lock: Arc::new(Mutex::new(())),
+            profile_prompt_apply_lock: Arc::new(Mutex::new(())),
+            workflow_apply_lock: Arc::new(Mutex::new(())),
+            dev_asset_origin,
         }
     }
 
     #[cfg(test)]
-    fn for_tests(origin: &str, token: &str, repo_root: &Path) -> Self {
+    fn for_tests(
+        browser_origin: &str,
+        token: &str,
+        repo_root: &Path,
+        dev_asset_origin: Option<String>,
+    ) -> Self {
         Self {
-            session: Arc::new(StudioSession::new(origin.into(), token.into())),
+            session: Arc::new(StudioSession::new(browser_origin.into(), token.into())),
             repo_root: Arc::new(repo_root.to_path_buf()),
             storage_root: StorageRoot::from_git_common_dir(repo_root.join(".git")),
             task_document_apply_lock: Arc::new(Mutex::new(())),
+            personal_config_apply_lock: Arc::new(Mutex::new(())),
+            profile_config_apply_lock: Arc::new(Mutex::new(())),
+            profile_prompt_apply_lock: Arc::new(Mutex::new(())),
+            workflow_apply_lock: Arc::new(Mutex::new(())),
+            dev_asset_origin,
         }
     }
 
@@ -66,10 +97,39 @@ impl StudioState {
     fn api_authorized(&self, headers: &HeaderMap) -> bool {
         self.session.validate_api_headers(headers)
     }
+
+    fn read_api_authorized(&self, headers: &HeaderMap) -> bool {
+        self.session.validate_read_headers(headers)
+    }
+
+    fn dev_asset_origin(&self) -> Option<&str> {
+        self.dev_asset_origin.as_deref()
+    }
+
+    fn dev_asset_auth_url(&self) -> Option<String> {
+        self.dev_asset_origin()
+            .map(|origin| format!("{origin}/auth?token={}", self.token()))
+    }
+
+    fn dev_asset_url(&self, path: &str) -> Option<String> {
+        self.dev_asset_origin().map(|origin| {
+            let path = if path.starts_with('/') {
+                path.to_string()
+            } else {
+                format!("/{path}")
+            };
+            format!("{origin}{path}")
+        })
+    }
 }
 
 pub async fn serve(ctx: &Ctx, options: ServerOptions) -> Result<()> {
     validate_loopback_host(&options.host)?;
+    let dev_asset_origin = options
+        .dev_asset_origin
+        .as_deref()
+        .map(validate_dev_asset_origin)
+        .transpose()?;
     let listener = TcpListener::bind((options.host.as_str(), options.port))
         .await
         .with_context(|| {
@@ -79,22 +139,42 @@ pub async fn serve(ctx: &Ctx, options: ServerOptions) -> Result<()> {
             )
         })?;
     let addr = listener.local_addr()?;
-    let origin = format!("http://{addr}");
+    let api_origin = format!("http://{addr}");
+    let browser_origin = dev_asset_origin
+        .clone()
+        .unwrap_or_else(|| api_origin.clone());
     let token = mint_session_token()?;
-    let auth_url = format!("{origin}/auth?token={token}");
+    let auth_url = format!("{browser_origin}/auth?token={token}");
 
     if ctx.quiet {
         println!("{auth_url}");
     } else {
         ctx.ui.print_step(&format!("wt studio: {auth_url}"));
+        if let Some(dev_asset_origin) = &dev_asset_origin {
+            ctx.ui
+                .print_dim(&format!("Serving wt studio API at {api_origin}."));
+            ctx.ui
+                .print_dim(&format!("Using Vite dev assets from {dev_asset_origin}."));
+            ctx.ui.print_dim(&format!(
+                "Start assets with: cd src/studio/web && WT_STUDIO_API_TARGET={api_origin} npm run dev"
+            ));
+        }
         ctx.ui.print_dim("Serving wt studio. Press Ctrl-C to stop.");
     }
 
     maybe_open_browser(ctx, &auth_url, |url| opener::open_browser(url));
 
-    axum::serve(listener, app(StudioState::new(ctx, origin, token)))
-        .await
-        .context("wt studio server failed")
+    axum::serve(
+        listener,
+        app(StudioState::new(
+            ctx,
+            browser_origin,
+            token,
+            dev_asset_origin,
+        )),
+    )
+    .await
+    .context("wt studio server failed")
 }
 
 pub fn app(state: StudioState) -> Router {
@@ -108,6 +188,26 @@ pub fn app(state: StudioState) -> Router {
         )
         .route("/api/task-documents/plan", post(api_task_document_plan))
         .route("/api/task-documents/apply", post(api_task_document_apply))
+        .route("/api/personal-config/plan", post(api_personal_config_plan))
+        .route(
+            "/api/personal-config/apply",
+            post(api_personal_config_apply),
+        )
+        .route("/api/profiles", get(api_profiles))
+        .route("/api/profiles/{name}/plan", post(api_profile_config_plan))
+        .route("/api/profiles/{name}/apply", post(api_profile_config_apply))
+        .route(
+            "/api/profile-prompts/{name}/{mode}/plan",
+            post(api_profile_prompt_plan),
+        )
+        .route(
+            "/api/profile-prompts/{name}/{mode}/apply",
+            post(api_profile_prompt_apply),
+        )
+        .route("/api/workflows", get(api_workflows))
+        .route("/api/workflows/{id}", get(api_workflow))
+        .route("/api/workflows/{id}/plan", post(api_workflow_plan))
+        .route("/api/workflows/{id}/apply", post(api_workflow_apply))
         .route("/favicon.ico", get(favicon))
         .fallback(static_or_not_found)
         .with_state(state)
@@ -119,6 +219,32 @@ fn validate_loopback_host(host: &str) -> Result<()> {
     } else {
         bail!("wt studio only binds to 127.0.0.1; refusing {host}")
     }
+}
+
+fn validate_dev_asset_origin(origin: &str) -> Result<String> {
+    let uri: Uri = origin
+        .parse()
+        .with_context(|| format!("invalid --dev-origin `{origin}`"))?;
+    if uri.scheme_str() != Some("http") {
+        bail!("--dev-origin must use http on loopback; got `{origin}`");
+    }
+    if uri
+        .path_and_query()
+        .is_some_and(|path| path.as_str() != "/")
+    {
+        bail!("--dev-origin must be an origin without a path; got `{origin}`");
+    }
+    let Some(authority) = uri.authority() else {
+        bail!("--dev-origin must include a host and port; got `{origin}`");
+    };
+    let host = authority.host();
+    if host != "127.0.0.1" && host != "localhost" {
+        bail!("--dev-origin only supports loopback hosts; got `{origin}`");
+    }
+    let Some(port) = authority.port_u16() else {
+        bail!("--dev-origin must include an explicit port; got `{origin}`");
+    };
+    Ok(format!("http://{host}:{port}"))
 }
 
 fn maybe_open_browser<F, E>(ctx: &Ctx, url: &str, open: F)
@@ -136,7 +262,10 @@ where
     }
 }
 
-async fn index() -> Response {
+async fn index(State(state): State<StudioState>) -> Response {
+    if let Some(auth_url) = state.dev_asset_auth_url() {
+        return redirect_response(&auth_url);
+    }
     embedded_file_response("index.html")
 }
 
@@ -223,6 +352,171 @@ async fn api_task_document_apply(
     }
 }
 
+async fn api_personal_config_plan(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    Json(request): Json<PersonalConfigPlanRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match plan_personal_config_edit(&state, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_personal_config_apply(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    Json(request): Json<PersonalConfigApplyRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match apply_personal_config_edit(&state, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_profiles(State(state): State<StudioState>, headers: HeaderMap) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match profile_inventory(&state) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_profile_config_plan(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath(name): AxumPath<String>,
+    Json(request): Json<ProfileConfigPlanRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match plan_profile_config_edit(&state, &name, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_profile_config_apply(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath(name): AxumPath<String>,
+    Json(request): Json<ProfileConfigApplyRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match apply_profile_config_edit(&state, &name, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_profile_prompt_plan(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath((name, mode)): AxumPath<(String, String)>,
+    Json(request): Json<ProfilePromptPlanRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match plan_profile_prompt_edit(&state, &name, &mode, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_profile_prompt_apply(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath((name, mode)): AxumPath<(String, String)>,
+    Json(request): Json<ProfilePromptApplyRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match apply_profile_prompt_edit(&state, &name, &mode, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_workflows(State(state): State<StudioState>, headers: HeaderMap) -> Response {
+    if !state.read_api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match workflow_inventory(&state) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("{err:#}")).into_response()
+        }
+    }
+}
+
+async fn api_workflow(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    if !state.read_api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match read_workflow_detail(&state, &id) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_workflow_plan(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<WorkflowPlanRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match plan_workflow_edit(&state, &id, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_workflow_apply(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<WorkflowApplyRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match apply_workflow_edit(&state, &id, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
 async fn favicon() -> StatusCode {
     StatusCode::NO_CONTENT
 }
@@ -237,6 +531,9 @@ async fn static_or_not_found(
             return unauthorized();
         }
         return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    if let Some(location) = state.dev_asset_url(uri.path()) {
+        return redirect_response(&location);
     }
 
     let path = uri.path().trim_start_matches('/');
@@ -257,6 +554,14 @@ fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
 }
 
+fn redirect_response(location: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::TEMPORARY_REDIRECT)
+        .header(header::LOCATION, location)
+        .body(Body::empty())
+        .expect("redirect response should be valid")
+}
+
 fn content_type(path: &str) -> &'static str {
     match path.rsplit_once('.').map(|(_, extension)| extension) {
         Some("css") => "text/css; charset=utf-8",
@@ -270,6 +575,7 @@ fn content_type(path: &str) -> &'static str {
 }
 
 const TASK_DOCUMENT_PATH_PREFIX: &str = "<repo-root>/.wt/execution/tasks/";
+const WORKFLOW_PATH_PREFIX: &str = "<repo-root>/.wt/execution/workflows/";
 
 #[derive(Debug, Serialize)]
 struct TaskDocumentInventoryResponse {
@@ -290,6 +596,58 @@ struct TaskDocumentInventoryItem {
 struct InvalidTaskDocument {
     path: String,
     error: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowInventoryResponse {
+    items: Vec<WorkflowInventoryItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowInventoryItem {
+    id: String,
+    path: String,
+    title: Option<String>,
+    mode: &'static str,
+    color: Option<String>,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowDetailResponse {
+    id: String,
+    path: String,
+    #[serde(flatten)]
+    workflow: workflow_model::WorkflowMetadata,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowPlanRequest {
+    candidate: String,
+    baseline_fingerprint: Option<FileFingerprint>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowPlanResponse {
+    before: String,
+    after: String,
+    diff: String,
+    validation_errors: Vec<String>,
+    fingerprint: FileFingerprint,
+    baseline_stale: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowApplyRequest {
+    candidate: String,
+    precondition: FileFingerprint,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowApplyResponse {
+    committed_fingerprint: FileFingerprint,
 }
 
 #[derive(Debug, Deserialize)]
@@ -345,10 +703,103 @@ struct TaskDocumentApplyResponse {
     fingerprint: FileFingerprint,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-struct FileFingerprint {
-    mtime_ns: Option<String>,
-    hash: String,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersonalConfigPlanRequest {
+    candidate: String,
+    baseline_fingerprint: Option<FileFingerprint>,
+}
+
+#[derive(Debug, Serialize)]
+struct PersonalConfigPlanResponse {
+    before: String,
+    after: String,
+    diff: String,
+    validation_errors: Vec<String>,
+    fingerprint: FileFingerprint,
+    baseline_stale: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersonalConfigApplyRequest {
+    candidate: String,
+    precondition: FileFingerprint,
+}
+
+#[derive(Debug, Serialize)]
+struct PersonalConfigApplyResponse {
+    committed_fingerprint: FileFingerprint,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfileInventoryResponse {
+    items: Vec<ProfileInventoryItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfileInventoryItem {
+    name: String,
+    path: String,
+    has_profile_toml: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileConfigPlanRequest {
+    candidate: String,
+    baseline_fingerprint: Option<FileFingerprint>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfileConfigPlanResponse {
+    before: String,
+    after: String,
+    diff: String,
+    validation_errors: Vec<String>,
+    fingerprint: FileFingerprint,
+    baseline_stale: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileConfigApplyRequest {
+    candidate: String,
+    precondition: FileFingerprint,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfileConfigApplyResponse {
+    committed_fingerprint: FileFingerprint,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePromptPlanRequest {
+    candidate: String,
+    baseline_fingerprint: Option<FileFingerprint>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfilePromptPlanResponse {
+    before: String,
+    after: String,
+    diff: String,
+    validation_errors: Vec<String>,
+    fingerprint: FileFingerprint,
+    baseline_stale: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePromptApplyRequest {
+    candidate: String,
+    precondition: FileFingerprint,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfilePromptApplyResponse {
+    committed_fingerprint: FileFingerprint,
 }
 
 #[derive(Debug)]
@@ -384,6 +835,10 @@ fn api_error(status: StatusCode, message: impl Into<String>) -> StudioApiError {
     }
 }
 
+fn resource_error(err: ResourceError) -> StudioApiError {
+    api_error(err.status, err.message)
+}
+
 fn task_document_inventory(state: &StudioState) -> Result<TaskDocumentInventoryResponse> {
     task::ensure_task_document_store_available(&state.storage_root, &state.repo_root)?;
     let mut items = Vec::new();
@@ -417,6 +872,178 @@ fn task_document_inventory(state: &StudioState) -> Result<TaskDocumentInventoryR
     }
 
     Ok(TaskDocumentInventoryResponse { items, invalid })
+}
+
+fn workflow_inventory(state: &StudioState) -> Result<WorkflowInventoryResponse> {
+    let workflows_dir = workflow_dir(state);
+    if !workflows_dir.exists() {
+        return Ok(WorkflowInventoryResponse { items: Vec::new() });
+    }
+
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&workflows_dir).with_context(|| {
+        format!(
+            "Failed to read workflow directory: {}",
+            state.storage_root.display_path(&workflows_dir)
+        )
+    })? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let mut items = Vec::new();
+    for path in paths {
+        let id = workflow_model::id_from_path(&path)?;
+        let workflow = workflow_model::read(&path)?;
+        items.push(WorkflowInventoryItem {
+            id,
+            path: state.storage_root.display_path(&path),
+            title: workflow.title,
+            mode: workflow.mode.as_str(),
+            color: workflow.color,
+            updated_at: workflow.updated_at,
+        });
+    }
+
+    Ok(WorkflowInventoryResponse { items })
+}
+
+fn read_workflow_detail(
+    state: &StudioState,
+    id: &str,
+) -> std::result::Result<WorkflowDetailResponse, StudioApiError> {
+    validate_workflow_id(id)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, format!("{err:#}")))?;
+    let path = workflow_path(state, id);
+    if !path.exists() {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            format!("Workflow does not exist: {WORKFLOW_PATH_PREFIX}{id}.toml"),
+        ));
+    }
+    let workflow = workflow_model::read(&path)
+        .map_err(|err| api_error(StatusCode::UNPROCESSABLE_ENTITY, format!("{err:#}")))?;
+    Ok(WorkflowDetailResponse {
+        id: id.to_string(),
+        path: state.storage_root.display_path(&path),
+        workflow,
+    })
+}
+
+fn plan_workflow_edit(
+    state: &StudioState,
+    id: &str,
+    request: WorkflowPlanRequest,
+) -> std::result::Result<WorkflowPlanResponse, StudioApiError> {
+    let path = existing_workflow_path(state, id)?;
+    let display_path = state.storage_root.display_path(&path);
+    let before = read_fingerprint(&path, "workflow").map_err(resource_error)?;
+    let disk = parse_workflow_metadata(&before.content)?;
+    let validation = validate_workflow_candidate(&disk, &request.candidate);
+    let baseline_stale = request
+        .baseline_fingerprint
+        .as_ref()
+        .is_some_and(|baseline| baseline != &before.fingerprint);
+
+    let (after, diff, validation_errors) = match validation {
+        Ok(mut candidate) => {
+            workflow_model::touch(&mut candidate);
+            let after = workflow_model::render_workflow_metadata(&candidate);
+            let diff = diff_text(&display_path, &before.content, &after);
+            (after, diff, Vec::new())
+        }
+        Err(errors) => (String::new(), String::new(), errors),
+    };
+
+    Ok(WorkflowPlanResponse {
+        before: before.content,
+        after,
+        diff,
+        validation_errors,
+        fingerprint: before.fingerprint,
+        baseline_stale,
+    })
+}
+
+fn apply_workflow_edit(
+    state: &StudioState,
+    id: &str,
+    request: WorkflowApplyRequest,
+) -> std::result::Result<WorkflowApplyResponse, StudioApiError> {
+    let path = existing_workflow_path(state, id)?;
+    let _apply_guard = state.workflow_apply_lock.lock().map_err(|_| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Workflow apply lock is poisoned",
+        )
+    })?;
+
+    let current = match check_precondition(&path, &request.precondition, "workflow") {
+        Ok(current) => current,
+        Err(ResourceErrorOrPrecondition::Error(err)) => return Err(resource_error(err)),
+        Err(ResourceErrorOrPrecondition::Precondition(stale)) => {
+            return Err(StudioApiError {
+                status: StatusCode::CONFLICT,
+                body: serde_json::json!({
+                    "error": "Workflow precondition failed",
+                    "current_fingerprint": stale.current.fingerprint,
+                }),
+            });
+        }
+    };
+
+    let disk = parse_workflow_metadata(&current.content)?;
+    let mut candidate =
+        validate_workflow_candidate(&disk, &request.candidate).map_err(|errors| {
+            StudioApiError {
+                status: StatusCode::UNPROCESSABLE_ENTITY,
+                body: serde_json::json!({
+                    "error": "Workflow validation failed",
+                    "validation_errors": errors,
+                }),
+            }
+        })?;
+    workflow_model::touch(&mut candidate);
+    let after = workflow_model::render_workflow_metadata(&candidate);
+    let committed_fingerprint = atomic_write(&path, &after, "workflow").map_err(resource_error)?;
+
+    Ok(WorkflowApplyResponse {
+        committed_fingerprint,
+    })
+}
+
+fn existing_workflow_path(
+    state: &StudioState,
+    id: &str,
+) -> std::result::Result<PathBuf, StudioApiError> {
+    validate_workflow_id(id)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, format!("{err:#}")))?;
+    let path = workflow_path(state, id);
+    if !path.exists() {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            format!("Workflow does not exist: {WORKFLOW_PATH_PREFIX}{id}.toml"),
+        ));
+    }
+    Ok(path)
+}
+
+fn parse_workflow_metadata(
+    content: &str,
+) -> std::result::Result<workflow_model::WorkflowMetadata, StudioApiError> {
+    toml::from_str::<workflow_model::WorkflowMetadata>(content)
+        .map_err(|err| api_error(StatusCode::UNPROCESSABLE_ENTITY, err.to_string()))
+}
+
+fn workflow_dir(state: &StudioState) -> PathBuf {
+    state.repo_root.join(".wt/execution/workflows")
+}
+
+fn workflow_path(state: &StudioState, id: &str) -> PathBuf {
+    workflow_dir(state).join(format!("{id}.toml"))
 }
 
 fn api_error_message(err: &StudioApiError) -> String {
@@ -462,7 +1089,7 @@ fn plan_task_document_edit(
     };
 
     let validation_errors = validate_task_document_content(&after);
-    let diff = unified_diff(&resolved.display_path, &before_disk.content, &after);
+    let diff = diff_text(&resolved.display_path, &before_disk.content, &after);
 
     Ok(TaskDocumentPlanResponse {
         path: resolved.display_path,
@@ -507,7 +1134,7 @@ fn apply_task_document_edit(
                 "path": resolved.display_path,
                 "current": current.content,
                 "current_fingerprint": current.fingerprint,
-                "diff": unified_diff(&resolved.display_path, &request.before, &current.content),
+                "diff": diff_text(&resolved.display_path, &request.before, &current.content),
             }),
         });
     }
@@ -525,6 +1152,343 @@ fn apply_task_document_edit(
         path: resolved.display_path,
         fingerprint: written.fingerprint,
     })
+}
+
+fn plan_personal_config_edit(
+    state: &StudioState,
+    request: PersonalConfigPlanRequest,
+) -> std::result::Result<PersonalConfigPlanResponse, StudioApiError> {
+    let path = personal_config_path(state);
+    let display_path = personal_config_display_path(state);
+    let before = read_fingerprint(&path, "personal config").map_err(resource_error)?;
+    let validation_errors = validate_personal_config_content(&request.candidate);
+    let baseline_stale = request
+        .baseline_fingerprint
+        .as_ref()
+        .is_some_and(|baseline| baseline != &before.fingerprint);
+
+    let (after, diff) = if validation_errors.is_empty() {
+        let diff = diff_text(&display_path, &before.content, &request.candidate);
+        (request.candidate, diff)
+    } else {
+        (String::new(), String::new())
+    };
+
+    Ok(PersonalConfigPlanResponse {
+        before: before.content,
+        after,
+        diff,
+        validation_errors,
+        fingerprint: before.fingerprint,
+        baseline_stale,
+    })
+}
+
+fn apply_personal_config_edit(
+    state: &StudioState,
+    request: PersonalConfigApplyRequest,
+) -> std::result::Result<PersonalConfigApplyResponse, StudioApiError> {
+    let validation_errors = validate_personal_config_content(&request.candidate);
+    if !validation_errors.is_empty() {
+        return Err(StudioApiError {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body: serde_json::json!({
+                "error": "Personal config validation failed",
+                "validation_errors": validation_errors,
+            }),
+        });
+    }
+
+    let _apply_guard = state.personal_config_apply_lock.lock().map_err(|_| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Personal config apply lock is poisoned",
+        )
+    })?;
+    let path = personal_config_path(state);
+    match check_precondition(&path, &request.precondition, "personal config") {
+        Ok(_) => {}
+        Err(ResourceErrorOrPrecondition::Error(err)) => return Err(resource_error(err)),
+        Err(ResourceErrorOrPrecondition::Precondition(stale)) => {
+            return Err(StudioApiError {
+                status: StatusCode::CONFLICT,
+                body: serde_json::json!({
+                    "error": "Personal config precondition failed",
+                    "current_fingerprint": stale.current.fingerprint,
+                }),
+            });
+        }
+    }
+
+    let committed_fingerprint =
+        atomic_write(&path, &request.candidate, "personal config").map_err(resource_error)?;
+    Ok(PersonalConfigApplyResponse {
+        committed_fingerprint,
+    })
+}
+
+fn profile_inventory(
+    state: &StudioState,
+) -> std::result::Result<ProfileInventoryResponse, StudioApiError> {
+    let profiles_dir = state.storage_root.profiles_dir();
+    if !profiles_dir.exists() {
+        return Ok(ProfileInventoryResponse { items: Vec::new() });
+    }
+
+    let entries = std::fs::read_dir(&profiles_dir).map_err(|err| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to read profile directory: {err}"),
+        )
+    })?;
+    let mut items = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read profile entry: {err}"),
+            )
+        })?;
+        let file_type = entry.file_type().map_err(|err| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to inspect profile entry: {err}"),
+            )
+        })?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if validate_profile_name(&name).is_err() {
+            continue;
+        }
+        let profile_toml = entry.path().join("profile.toml");
+        if !profile_toml.exists() {
+            continue;
+        }
+        items.push(ProfileInventoryItem {
+            name,
+            path: state.storage_root.display_path(&profile_toml),
+            has_profile_toml: true,
+        });
+    }
+    items.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(ProfileInventoryResponse { items })
+}
+
+fn plan_profile_config_edit(
+    state: &StudioState,
+    name: &str,
+    request: ProfileConfigPlanRequest,
+) -> std::result::Result<ProfileConfigPlanResponse, StudioApiError> {
+    let path = profile_config_path(state, name)?;
+    let display_path = profile_config_display_path(state, name)?;
+    let before = read_fingerprint(&path, "profile config").map_err(resource_error)?;
+    let validation_errors = validate_profile_config_content(&request.candidate);
+    let baseline_stale = request
+        .baseline_fingerprint
+        .as_ref()
+        .is_some_and(|baseline| baseline != &before.fingerprint);
+
+    let (after, diff) = if validation_errors.is_empty() {
+        let diff = diff_text(&display_path, &before.content, &request.candidate);
+        (request.candidate, diff)
+    } else {
+        (String::new(), String::new())
+    };
+
+    Ok(ProfileConfigPlanResponse {
+        before: before.content,
+        after,
+        diff,
+        validation_errors,
+        fingerprint: before.fingerprint,
+        baseline_stale,
+    })
+}
+
+fn apply_profile_config_edit(
+    state: &StudioState,
+    name: &str,
+    request: ProfileConfigApplyRequest,
+) -> std::result::Result<ProfileConfigApplyResponse, StudioApiError> {
+    let validation_errors = validate_profile_config_content(&request.candidate);
+    if !validation_errors.is_empty() {
+        return Err(StudioApiError {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body: serde_json::json!({
+                "error": "Profile config validation failed",
+                "validation_errors": validation_errors,
+            }),
+        });
+    }
+
+    let _apply_guard = state.profile_config_apply_lock.lock().map_err(|_| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Profile config apply lock is poisoned",
+        )
+    })?;
+    let path = profile_config_path(state, name)?;
+    match check_precondition(&path, &request.precondition, "profile config") {
+        Ok(_) => {}
+        Err(ResourceErrorOrPrecondition::Error(err)) => return Err(resource_error(err)),
+        Err(ResourceErrorOrPrecondition::Precondition(stale)) => {
+            return Err(StudioApiError {
+                status: StatusCode::CONFLICT,
+                body: serde_json::json!({
+                    "error": "Profile config precondition failed",
+                    "current_fingerprint": stale.current.fingerprint,
+                }),
+            });
+        }
+    }
+
+    let committed_fingerprint =
+        atomic_write(&path, &request.candidate, "profile config").map_err(resource_error)?;
+    Ok(ProfileConfigApplyResponse {
+        committed_fingerprint,
+    })
+}
+
+fn plan_profile_prompt_edit(
+    state: &StudioState,
+    name: &str,
+    mode: &str,
+    request: ProfilePromptPlanRequest,
+) -> std::result::Result<ProfilePromptPlanResponse, StudioApiError> {
+    let resolved = resolve_profile_prompt_path(state, name, mode)?;
+    let before = read_fingerprint(&resolved.path, "profile prompt").map_err(resource_error)?;
+    let baseline_stale = request
+        .baseline_fingerprint
+        .as_ref()
+        .is_some_and(|baseline| baseline != &before.fingerprint);
+
+    Ok(ProfilePromptPlanResponse {
+        before: before.content.clone(),
+        after: request.candidate.clone(),
+        diff: diff_text(&resolved.display_path, &before.content, &request.candidate),
+        validation_errors: Vec::new(),
+        fingerprint: before.fingerprint,
+        baseline_stale,
+    })
+}
+
+fn apply_profile_prompt_edit(
+    state: &StudioState,
+    name: &str,
+    mode: &str,
+    request: ProfilePromptApplyRequest,
+) -> std::result::Result<ProfilePromptApplyResponse, StudioApiError> {
+    let resolved = resolve_profile_prompt_path(state, name, mode)?;
+    let _apply_guard = state.profile_prompt_apply_lock.lock().map_err(|_| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Profile prompt apply lock is poisoned",
+        )
+    })?;
+    match check_precondition(&resolved.path, &request.precondition, "profile prompt") {
+        Ok(_) => {}
+        Err(ResourceErrorOrPrecondition::Error(err)) => return Err(resource_error(err)),
+        Err(ResourceErrorOrPrecondition::Precondition(stale)) => {
+            return Err(StudioApiError {
+                status: StatusCode::CONFLICT,
+                body: serde_json::json!({
+                    "error": "Profile prompt precondition failed",
+                    "current_fingerprint": stale.current.fingerprint,
+                }),
+            });
+        }
+    }
+
+    let committed_fingerprint = atomic_write(&resolved.path, &request.candidate, "profile prompt")
+        .map_err(resource_error)?;
+    Ok(ProfilePromptApplyResponse {
+        committed_fingerprint,
+    })
+}
+
+fn personal_config_path(state: &StudioState) -> PathBuf {
+    state.repo_root.join(".wt/config/local.toml")
+}
+
+fn personal_config_display_path(state: &StudioState) -> String {
+    state
+        .storage_root
+        .display_path(&personal_config_path(state))
+}
+
+fn validate_personal_config_content(content: &str) -> Vec<String> {
+    toml::from_str::<Config>(content)
+        .map(|_| Vec::new())
+        .unwrap_or_else(|err| vec![err.to_string()])
+}
+
+fn profile_config_path(
+    state: &StudioState,
+    name: &str,
+) -> std::result::Result<PathBuf, StudioApiError> {
+    validate_profile_name(name)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, format!("{err:#}")))?;
+    Ok(state
+        .storage_root
+        .profiles_dir()
+        .join(name)
+        .join("profile.toml"))
+}
+
+fn profile_config_display_path(
+    state: &StudioState,
+    name: &str,
+) -> std::result::Result<String, StudioApiError> {
+    profile_config_path(state, name).map(|path| state.storage_root.display_path(&path))
+}
+
+fn validate_profile_config_content(content: &str) -> Vec<String> {
+    toml::from_str::<ProfileConfig>(content)
+        .map(|_| Vec::new())
+        .unwrap_or_else(|err| vec![err.to_string()])
+}
+
+#[derive(Debug)]
+struct ProfilePromptPath {
+    path: PathBuf,
+    display_path: String,
+}
+
+fn resolve_profile_prompt_path(
+    state: &StudioState,
+    name: &str,
+    mode: &str,
+) -> std::result::Result<ProfilePromptPath, StudioApiError> {
+    validate_profile_name(name)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, err.to_string()))?;
+    let mode = prompt_mode_file_stem(mode)?;
+    let path = state
+        .storage_root
+        .profiles_dir()
+        .join(name)
+        .join("prompts")
+        .join(format!("{mode}.md"));
+    Ok(ProfilePromptPath {
+        display_path: state.storage_root.display_path(&path),
+        path,
+    })
+}
+
+fn prompt_mode_file_stem(mode: &str) -> std::result::Result<&'static str, StudioApiError> {
+    match mode {
+        "workflow" => Ok("workflow"),
+        "issue" => Ok("issue"),
+        "branch" => Ok("branch"),
+        "pr" => Ok("pr"),
+        "common" => Ok("common"),
+        _ => Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Prompt mode must be one of workflow, issue, branch, pr, common",
+        )),
+    }
 }
 
 fn resolve_task_document_path(
@@ -619,174 +1583,23 @@ fn validate_task_document_content(content: &str) -> Vec<String> {
 }
 
 fn read_disk_task_document(path: &Path) -> std::result::Result<DiskTaskDocument, StudioApiError> {
-    match fs::read(path) {
-        Ok(bytes) => {
-            let content = String::from_utf8(bytes).map_err(|err| {
-                api_error(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    format!("TaskDocument is not UTF-8: {err}"),
-                )
-            })?;
-            let metadata = fs::metadata(path).map_err(|err| {
-                api_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to stat TaskDocument: {err}"),
-                )
-            })?;
-            Ok(DiskTaskDocument {
-                fingerprint: fingerprint(&content, Some(&metadata)),
-                content,
-                exists: true,
-            })
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(DiskTaskDocument {
-            content: String::new(),
-            fingerprint: empty_fingerprint(),
-            exists: false,
-        }),
-        Err(err) => Err(api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read TaskDocument: {err}"),
-        )),
-    }
-}
-
-fn empty_fingerprint() -> FileFingerprint {
-    fingerprint("", None)
-}
-
-fn fingerprint(content: &str, metadata: Option<&fs::Metadata>) -> FileFingerprint {
-    FileFingerprint {
-        mtime_ns: metadata.and_then(mtime_ns),
-        hash: sha256_hex(content.as_bytes()),
-    }
-}
-
-fn mtime_ns(metadata: &fs::Metadata) -> Option<String> {
-    let modified = metadata.modified().ok()?;
-    let elapsed = modified.duration_since(UNIX_EPOCH).ok()?;
-    let nanos = u64::from(elapsed.subsec_nanos());
-    elapsed
-        .as_secs()
-        .checked_mul(1_000_000_000)
-        .and_then(|secs| secs.checked_add(nanos))
-        .map(|mtime| mtime.to_string())
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
-}
-
-fn unified_diff(path: &str, before: &str, after: &str) -> String {
-    if before == after {
-        return String::new();
-    }
-
-    let old_lines = split_lines(before);
-    let new_lines = split_lines(after);
-    let ops = diff_ops(&old_lines, &new_lines);
-    let old_start = if old_lines.is_empty() { 0 } else { 1 };
-    let new_start = if new_lines.is_empty() { 0 } else { 1 };
-    let mut diff = format!(
-        "--- a/{path}\n+++ b/{path}\n@@ -{old_start},{} +{new_start},{} @@\n",
-        old_lines.len(),
-        new_lines.len()
-    );
-    for op in ops {
-        match op {
-            DiffOp::Equal(line) => push_diff_line(&mut diff, ' ', line),
-            DiffOp::Delete(line) => push_diff_line(&mut diff, '-', line),
-            DiffOp::Insert(line) => push_diff_line(&mut diff, '+', line),
-        }
-    }
-    diff
-}
-
-fn split_lines(content: &str) -> Vec<&str> {
-    if content.is_empty() {
-        Vec::new()
-    } else {
-        content.split_inclusive('\n').collect()
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum DiffOp<'a> {
-    Equal(&'a str),
-    Delete(&'a str),
-    Insert(&'a str),
-}
-
-fn diff_ops<'a>(old_lines: &[&'a str], new_lines: &[&'a str]) -> Vec<DiffOp<'a>> {
-    let old_len = old_lines.len();
-    let new_len = new_lines.len();
-    let mut lcs = vec![0usize; (old_len + 1) * (new_len + 1)];
-    for old_idx in (0..old_len).rev() {
-        for new_idx in (0..new_len).rev() {
-            let idx = lcs_index(new_idx, new_len, old_idx);
-            lcs[idx] = if old_lines[old_idx] == new_lines[new_idx] {
-                lcs[lcs_index(new_idx + 1, new_len, old_idx + 1)] + 1
-            } else {
-                lcs[lcs_index(new_idx, new_len, old_idx + 1)]
-                    .max(lcs[lcs_index(new_idx + 1, new_len, old_idx)])
-            };
-        }
-    }
-
-    let mut ops = Vec::new();
-    let mut old_idx = 0;
-    let mut new_idx = 0;
-    while old_idx < old_len && new_idx < new_len {
-        if old_lines[old_idx] == new_lines[new_idx] {
-            ops.push(DiffOp::Equal(old_lines[old_idx]));
-            old_idx += 1;
-            new_idx += 1;
-        } else if lcs[lcs_index(new_idx, new_len, old_idx + 1)]
-            >= lcs[lcs_index(new_idx + 1, new_len, old_idx)]
-        {
-            ops.push(DiffOp::Delete(old_lines[old_idx]));
-            old_idx += 1;
-        } else {
-            ops.push(DiffOp::Insert(new_lines[new_idx]));
-            new_idx += 1;
-        }
-    }
-    while old_idx < old_len {
-        ops.push(DiffOp::Delete(old_lines[old_idx]));
-        old_idx += 1;
-    }
-    while new_idx < new_len {
-        ops.push(DiffOp::Insert(new_lines[new_idx]));
-        new_idx += 1;
-    }
-    ops
-}
-
-fn lcs_index(new_idx: usize, new_len: usize, old_idx: usize) -> usize {
-    old_idx * (new_len + 1) + new_idx
-}
-
-fn push_diff_line(diff: &mut String, prefix: char, line: &str) {
-    diff.push(prefix);
-    diff.push_str(line);
-    if !line.ends_with('\n') {
-        diff.push('\n');
-    }
+    read_fingerprint(path, "TaskDocument")
+        .map(|snapshot| DiskTaskDocument {
+            content: snapshot.content,
+            fingerprint: snapshot.fingerprint,
+            exists: snapshot.exists,
+        })
+        .map_err(resource_error)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CtxOptions, OutputMode};
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
+    use std::fs;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -795,6 +1608,30 @@ mod tests {
         assert!(validate_loopback_host("127.0.0.1").is_ok());
         let err = validate_loopback_host("0.0.0.0").unwrap_err();
         assert!(format!("{err:#}").contains("only binds to 127.0.0.1"));
+    }
+
+    #[test]
+    fn validates_dev_asset_origin_as_loopback_http_origin() {
+        assert_eq!(
+            validate_dev_asset_origin("http://127.0.0.1:5173").unwrap(),
+            "http://127.0.0.1:5173"
+        );
+        assert_eq!(
+            validate_dev_asset_origin("http://localhost:5173/").unwrap(),
+            "http://localhost:5173"
+        );
+
+        for origin in [
+            "https://127.0.0.1:5173",
+            "http://0.0.0.0:5173",
+            "http://127.0.0.1",
+            "http://127.0.0.1:5173/studio",
+        ] {
+            assert!(
+                validate_dev_asset_origin(origin).is_err(),
+                "{origin} should be rejected"
+            );
+        }
     }
 
     #[tokio::test]
@@ -808,6 +1645,38 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&body).contains("TaskDocument authoring"));
+    }
+
+    #[tokio::test]
+    async fn dev_asset_mode_redirects_shell_to_vite_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let response = app(test_dev_state(dir.path()))
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            response.headers()[header::LOCATION],
+            "http://127.0.0.1:5173/auth?token=secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn dev_asset_mode_authorizes_vite_origin_for_api() {
+        let dir = tempfile::tempdir().unwrap();
+        let response = app(test_dev_state(dir.path()))
+            .oneshot(
+                Request::get("/api/ping")
+                    .header(header::ORIGIN, "http://127.0.0.1:5173")
+                    .header(header::COOKIE, "wt_studio_session=secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -846,6 +1715,36 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn profile_api_requires_cookie_and_matching_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(test_state(dir.path()));
+
+        let missing_cookie = app
+            .clone()
+            .oneshot(
+                Request::get("/api/profiles")
+                    .header(header::ORIGIN, "http://127.0.0.1:8424")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_cookie.status(), StatusCode::UNAUTHORIZED);
+
+        let origin_mismatch = app
+            .oneshot(
+                Request::get("/api/profiles")
+                    .header(header::ORIGIN, "http://127.0.0.1:9999")
+                    .header(header::COOKIE, "wt_studio_session=secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(origin_mismatch.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -1132,6 +2031,1002 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn personal_config_plan_reads_hardcoded_local_toml_and_reports_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".wt/config");
+        fs::create_dir_all(&config_dir).unwrap();
+        let before = "[workflow]\npull_request = \"draft\"\n";
+        fs::write(config_dir.join("local.toml"), before).unwrap();
+
+        let response = app(test_state(dir.path()))
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\npull_request = \"ready\"\nlanding = \"auto\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+        assert_eq!(value["before"], before);
+        assert_eq!(
+            value["after"],
+            "[workflow]\npull_request = \"ready\"\nlanding = \"auto\"\n"
+        );
+        assert_eq!(value["baseline_stale"], false);
+        assert!(value["fingerprint"]["mtime_ns"].is_string());
+        assert!(
+            value["diff"]
+                .as_str()
+                .unwrap()
+                .contains("+landing = \"auto\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn personal_config_apply_writes_only_local_toml_with_matching_precondition() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".wt/config");
+        fs::create_dir_all(config_dir.join("profiles")).unwrap();
+        fs::write(
+            config_dir.join("local.toml"),
+            "[workflow]\nlanding = \"manual\"\n",
+        )
+        .unwrap();
+        fs::write(
+            config_dir.join("profiles/dev.toml"),
+            "[agent]\ncli = \"codex\"\n",
+        )
+        .unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"auto\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/personal-config/apply",
+                serde_json::json!({
+                    "candidate": plan["after"],
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::OK);
+        let applied = json_body(apply_response).await;
+        assert!(applied["committed_fingerprint"]["mtime_ns"].is_string());
+        assert_eq!(
+            fs::read_to_string(config_dir.join("local.toml")).unwrap(),
+            "[workflow]\nlanding = \"auto\"\n"
+        );
+        assert_eq!(
+            fs::read_to_string(config_dir.join("profiles/dev.toml")).unwrap(),
+            "[agent]\ncli = \"codex\"\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn personal_config_apply_rejects_stale_precondition() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".wt/config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("local.toml"),
+            "[workflow]\nlanding = \"manual\"\n",
+        )
+        .unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"auto\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+        fs::write(
+            config_dir.join("local.toml"),
+            "[workflow]\npull_request = \"ready\"\n",
+        )
+        .unwrap();
+
+        let response = server
+            .oneshot(authorized_json_request(
+                "/api/personal-config/apply",
+                serde_json::json!({
+                    "candidate": plan["after"],
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let value = json_body(response).await;
+        assert_eq!(value["error"], "Personal config precondition failed");
+        assert!(value["current_fingerprint"]["mtime_ns"].is_string());
+        assert_eq!(
+            fs::read_to_string(config_dir.join("local.toml")).unwrap(),
+            "[workflow]\npull_request = \"ready\"\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn personal_config_validation_errors_do_not_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"after_review\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(plan_response.status(), StatusCode::OK);
+        let plan = json_body(plan_response).await;
+        assert_eq!(plan["after"], "");
+        assert_eq!(plan["diff"], "");
+        assert!(
+            plan["validation_errors"][0]
+                .as_str()
+                .unwrap()
+                .contains("manual")
+        );
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/personal-config/apply",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"after_review\"\n",
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!dir.path().join(".wt/config/local.toml").exists());
+    }
+
+    #[tokio::test]
+    async fn personal_config_plan_marks_baseline_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".wt/config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("local.toml"),
+            "[workflow]\nlanding = \"manual\"\n",
+        )
+        .unwrap();
+        let server = app(test_state(dir.path()));
+        let first_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"auto\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let first = json_body(first_response).await;
+        fs::write(
+            config_dir.join("local.toml"),
+            "[workflow]\npull_request = \"ready\"\n",
+        )
+        .unwrap();
+
+        let stale_response = server
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"auto\"\n",
+                    "baseline_fingerprint": first["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(stale_response.status(), StatusCode::OK);
+        let stale = json_body(stale_response).await;
+        assert_eq!(stale["baseline_stale"], true);
+    }
+
+    #[tokio::test]
+    async fn profile_inventory_lists_only_valid_profile_toml_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let profiles_dir = dir.path().join(".wt/config/profiles");
+        fs::create_dir_all(profiles_dir.join("codex/prompts")).unwrap();
+        fs::create_dir_all(profiles_dir.join("claude")).unwrap();
+        fs::create_dir_all(profiles_dir.join("prompt-only/prompts")).unwrap();
+        fs::create_dir_all(profiles_dir.join("default")).unwrap();
+        fs::create_dir_all(profiles_dir.join("bad name")).unwrap();
+        fs::write(
+            profiles_dir.join("codex/profile.toml"),
+            "[agent]\ncli = \"codex\"\n",
+        )
+        .unwrap();
+        fs::write(
+            profiles_dir.join("claude/profile.toml"),
+            "[agent]\ncli = \"claude\"\n",
+        )
+        .unwrap();
+        fs::write(profiles_dir.join("codex/prompts/workflow.md"), "work").unwrap();
+        fs::write(profiles_dir.join("codex/prompts/common.md"), "common").unwrap();
+        fs::write(profiles_dir.join("prompt-only/prompts/workflow.md"), "work").unwrap();
+
+        let response = app(test_state(dir.path()))
+            .oneshot(authorized_get_request("/api/profiles"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+        let items = value["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["name"], "claude");
+        assert_eq!(items[1]["name"], "codex");
+        assert_eq!(items[1]["has_profile_toml"], true);
+        assert!(items[1].get("has_prompts").is_none());
+    }
+
+    #[tokio::test]
+    async fn profile_config_plan_reads_named_profile_toml_and_reports_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".wt/config/profiles/codex");
+        fs::create_dir_all(&profile_dir).unwrap();
+        let before = "[agent]\ncli = \"codex\"\n";
+        fs::write(profile_dir.join("profile.toml"), before).unwrap();
+
+        let response = app(test_state(dir.path()))
+            .oneshot(authorized_json_request(
+                "/api/profiles/codex/plan",
+                serde_json::json!({
+                    "candidate": "[agent]\ncli = \"codex\"\nargs = [\"--sandbox\", \"danger-full-access\"]\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+        assert_eq!(value["before"], before);
+        assert_eq!(value["baseline_stale"], false);
+        assert!(
+            value["diff"]
+                .as_str()
+                .unwrap()
+                .contains("+args = [\"--sandbox\", \"danger-full-access\"]")
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_config_apply_writes_only_selected_profile_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let profiles_dir = dir.path().join(".wt/config/profiles");
+        fs::create_dir_all(profiles_dir.join("codex")).unwrap();
+        fs::create_dir_all(profiles_dir.join("claude")).unwrap();
+        fs::write(
+            profiles_dir.join("codex/profile.toml"),
+            "[agent]\ncli = \"codex\"\n",
+        )
+        .unwrap();
+        fs::write(
+            profiles_dir.join("claude/profile.toml"),
+            "[agent]\ncli = \"claude\"\n",
+        )
+        .unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/profiles/codex/plan",
+                serde_json::json!({
+                    "candidate": "[agent]\ncli = \"codex\"\nready = \"auto\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/profiles/codex/apply",
+                serde_json::json!({
+                    "candidate": plan["after"],
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::OK);
+        let applied = json_body(apply_response).await;
+        assert!(applied["committed_fingerprint"]["mtime_ns"].is_string());
+        assert_eq!(
+            fs::read_to_string(profiles_dir.join("codex/profile.toml")).unwrap(),
+            "[agent]\ncli = \"codex\"\nready = \"auto\"\n"
+        );
+        assert_eq!(
+            fs::read_to_string(profiles_dir.join("claude/profile.toml")).unwrap(),
+            "[agent]\ncli = \"claude\"\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_config_apply_rejects_stale_precondition() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".wt/config/profiles/codex");
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::write(
+            profile_dir.join("profile.toml"),
+            "[agent]\ncli = \"codex\"\n",
+        )
+        .unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/profiles/codex/plan",
+                serde_json::json!({
+                    "candidate": "[agent]\ncli = \"codex\"\nready = \"auto\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+        fs::write(
+            profile_dir.join("profile.toml"),
+            "[agent]\ncli = \"codex\"\nsubmit = \"newline\"\n",
+        )
+        .unwrap();
+
+        let response = server
+            .oneshot(authorized_json_request(
+                "/api/profiles/codex/apply",
+                serde_json::json!({
+                    "candidate": plan["after"],
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let value = json_body(response).await;
+        assert_eq!(value["error"], "Profile config precondition failed");
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("profile.toml")).unwrap(),
+            "[agent]\ncli = \"codex\"\nsubmit = \"newline\"\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_config_rejects_invalid_or_reserved_profile_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = app(test_state(dir.path()));
+        for path in [
+            &format!(
+                "/api/profiles/{}/plan",
+                crate::config::RESERVED_PROFILE_NAME
+            ),
+            "/api/profiles/bad%20name/plan",
+            "/api/profiles/../plan",
+            "/api/profiles/..%2Fescape/plan",
+            "/api/profiles/codex%2Fescape/plan",
+            "/api/profiles/codex..escape/plan",
+            "/api/profiles/codex%2E%2Eescape/plan",
+        ] {
+            let response = server
+                .clone()
+                .oneshot(authorized_json_request(
+                    path,
+                    serde_json::json!({
+                        "candidate": "[agent]\ncli = \"codex\"\n",
+                        "baseline_fingerprint": null
+                    }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
+    async fn profile_config_validation_errors_do_not_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/profiles/codex/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"auto\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(plan_response.status(), StatusCode::OK);
+        let plan = json_body(plan_response).await;
+        assert_eq!(plan["after"], "");
+        assert_eq!(plan["diff"], "");
+        assert!(
+            plan["validation_errors"][0]
+                .as_str()
+                .unwrap()
+                .contains("unknown field")
+        );
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/profiles/codex/apply",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"auto\"\n",
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            !dir.path()
+                .join(".wt/config/profiles/codex/profile.toml")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_prompt_plan_routes_all_modes_and_missing_file_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join(".wt/config/profiles/codex/prompts");
+        fs::create_dir_all(&prompts_dir).unwrap();
+        for mode in ["workflow", "issue", "branch", "pr"] {
+            fs::write(
+                prompts_dir.join(format!("{mode}.md")),
+                format!("{mode} prompt\n"),
+            )
+            .unwrap();
+        }
+        let server = app(test_state(dir.path()));
+
+        for mode in ["workflow", "issue", "branch", "pr", "common"] {
+            let candidate = format!("updated {mode}\n");
+            let response = server
+                .clone()
+                .oneshot(authorized_json_request(
+                    &format!("/api/profile-prompts/codex/{mode}/plan"),
+                    serde_json::json!({
+                        "candidate": candidate,
+                        "baseline_fingerprint": null
+                    }),
+                ))
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let value = json_body(response).await;
+            assert_eq!(value["validation_errors"].as_array().unwrap().len(), 0);
+            assert_eq!(value["after"], format!("updated {mode}\n"));
+            if mode == "common" {
+                assert_eq!(value["before"], "");
+                assert_eq!(value["fingerprint"]["mtime_ns"], serde_json::Value::Null);
+            } else {
+                assert_eq!(value["before"], format!("{mode} prompt\n"));
+            }
+            assert!(
+                value["diff"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&format!("prompts/{mode}.md"))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn profile_prompt_apply_creates_parent_dir_for_missing_mode_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/codex/common/plan",
+                serde_json::json!({
+                    "candidate": "shared prompt\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/codex/common/apply",
+                serde_json::json!({
+                    "candidate": plan["after"],
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::OK);
+        let applied = json_body(apply_response).await;
+        assert!(applied["committed_fingerprint"]["mtime_ns"].is_string());
+        assert_eq!(
+            fs::read_to_string(
+                dir.path()
+                    .join(".wt/config/profiles/codex/prompts/common.md")
+            )
+            .unwrap(),
+            "shared prompt\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_prompt_rejects_invalid_mode_and_profile_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = app(test_state(dir.path()));
+
+        let invalid_mode = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/codex/new/plan",
+                serde_json::json!({
+                    "candidate": "legacy new prompt\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(invalid_mode.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            json_body(invalid_mode).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("workflow, issue, branch, pr, common")
+        );
+
+        let invalid_profile = server
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/default/common/plan",
+                serde_json::json!({
+                    "candidate": "default prompt\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(invalid_profile.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            json_body(invalid_profile).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("reserved")
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_prompt_apply_rejects_stale_precondition() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join(".wt/config/profiles/codex/prompts");
+        fs::create_dir_all(&prompts_dir).unwrap();
+        fs::write(prompts_dir.join("issue.md"), "original\n").unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/codex/issue/plan",
+                serde_json::json!({
+                    "candidate": "planned\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+        fs::write(prompts_dir.join("issue.md"), "external\n").unwrap();
+
+        let response = server
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/codex/issue/apply",
+                serde_json::json!({
+                    "candidate": plan["after"],
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let value = json_body(response).await;
+        assert_eq!(value["error"], "Profile prompt precondition failed");
+        assert!(value["current_fingerprint"]["mtime_ns"].is_string());
+        assert_eq!(
+            fs::read_to_string(prompts_dir.join("issue.md")).unwrap(),
+            "external\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_list_reads_workflow_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("2026-05-28-001.toml"),
+            sample_workflow("Workflow one", "single", "run-one"),
+        )
+        .unwrap();
+
+        let response = app(test_state(dir.path()))
+            .oneshot(authorized_get_request("/api/workflows"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+        assert_eq!(value["items"][0]["id"], "2026-05-28-001");
+        assert_eq!(value["items"][0]["title"], "Workflow one");
+        assert_eq!(value["items"][0]["mode"], "single");
+    }
+
+    #[tokio::test]
+    async fn workflow_list_accepts_cookie_only_same_origin_get() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("2026-05-28-004.toml"),
+            sample_workflow("Workflow four", "single", "run-four"),
+        )
+        .unwrap();
+
+        let response = app(test_state(dir.path()))
+            .oneshot(cookie_get_request("/api/workflows"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+        assert_eq!(value["items"][0]["id"], "2026-05-28-004");
+    }
+
+    #[tokio::test]
+    async fn workflow_detail_reads_valid_id_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("2026-05-28-002.toml"),
+            sample_workflow("Workflow two", "single", "run-two"),
+        )
+        .unwrap();
+
+        let response = app(test_state(dir.path()))
+            .oneshot(authorized_get_request("/api/workflows/2026-05-28-002"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+        assert_eq!(value["id"], "2026-05-28-002");
+        assert_eq!(value["title"], "Workflow two");
+        assert_eq!(value["tasks"][0]["run"], "run-two");
+    }
+
+    #[tokio::test]
+    async fn workflow_detail_rejects_traversal_and_missing_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = app(test_state(dir.path()));
+
+        let invalid = server
+            .clone()
+            .oneshot(authorized_get_request("/api/workflows/abc"))
+            .await
+            .unwrap();
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+        let traversal = server
+            .clone()
+            .oneshot(authorized_get_request("/api/workflows/abc%2F..%2Fetc"))
+            .await
+            .unwrap();
+        assert_eq!(traversal.status(), StatusCode::BAD_REQUEST);
+
+        let missing = server
+            .oneshot(authorized_get_request("/api/workflows/2026-05-28-003"))
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn workflow_plan_and_apply_update_hot_fields_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let path = workflows_dir.join("2026-05-28-005.toml");
+        let before = sample_workflow("Workflow five", "single", "run-five");
+        fs::write(&path, &before).unwrap();
+        let candidate = before
+            .replace("title = \"Workflow five\"", "title = \"Workflow edited\"")
+            .replace("color = \"blue\"", "color = \"green\"")
+            .replace("pull_request = \"ready\"", "pull_request = \"draft\"")
+            .replace("landing = \"auto\"", "landing = \"manual\"");
+        let server = app(test_state(dir.path()));
+
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-005/plan",
+                serde_json::json!({
+                    "candidate": candidate,
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(plan_response.status(), StatusCode::OK);
+        let plan = json_body(plan_response).await;
+        assert_eq!(plan["before"], before);
+        assert_eq!(plan["validation_errors"].as_array().unwrap().len(), 0);
+        assert_eq!(plan["baseline_stale"], false);
+        assert!(
+            plan["diff"]
+                .as_str()
+                .unwrap()
+                .contains("+title = \"Workflow edited\"")
+        );
+        assert!(
+            plan["diff"]
+                .as_str()
+                .unwrap()
+                .contains("-updated_at = \"2026-05-28T00:00:00Z\"")
+        );
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-005/apply",
+                serde_json::json!({
+                    "candidate": candidate,
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::OK);
+        let applied = json_body(apply_response).await;
+        assert!(applied["committed_fingerprint"]["mtime_ns"].is_string());
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.contains("title = \"Workflow edited\""));
+        assert!(written.contains("color = \"green\""));
+        assert!(written.contains("pull_request = \"draft\""));
+        assert!(written.contains("landing = \"manual\""));
+        assert!(!written.contains("updated_at = \"2026-05-28T00:00:00Z\""));
+        let workflow = workflow_model::read(&path).unwrap();
+        assert_eq!(workflow.tasks[0].run, "run-five");
+    }
+
+    #[tokio::test]
+    async fn workflow_apply_rejects_stale_precondition() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let path = workflows_dir.join("2026-05-28-006.toml");
+        let before = sample_workflow("Workflow six", "single", "run-six");
+        fs::write(&path, &before).unwrap();
+        let candidate = before.replace("title = \"Workflow six\"", "title = \"Workflow stale\"");
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-006/plan",
+                serde_json::json!({
+                    "candidate": candidate,
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+        fs::write(
+            &path,
+            sample_workflow("Workflow external", "single", "run-six"),
+        )
+        .unwrap();
+
+        let response = server
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-006/apply",
+                serde_json::json!({
+                    "candidate": candidate,
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let value = json_body(response).await;
+        assert_eq!(value["error"], "Workflow precondition failed");
+        assert!(value["current_fingerprint"]["mtime_ns"].is_string());
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("Workflow external")
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_plan_rejects_read_only_field_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let before = sample_workflow("Workflow seven", "single", "run-seven");
+        fs::write(workflows_dir.join("2026-05-28-007.toml"), &before).unwrap();
+        let server = app(test_state(dir.path()));
+        let cases = [
+            (
+                "created_at",
+                before.replace(
+                    "created_at = \"2026-05-28T00:00:00Z\"",
+                    "created_at = \"2026-05-28T00:00:01Z\"",
+                ),
+            ),
+            (
+                "updated_at",
+                before.replace(
+                    "updated_at = \"2026-05-28T00:00:00Z\"",
+                    "updated_at = \"2026-05-28T00:00:01Z\"",
+                ),
+            ),
+            (
+                "mode",
+                before.replace("mode = \"single\"", "mode = \"batch\""),
+            ),
+            (
+                "base_mode",
+                before.replace("base_mode = \"explicit\"", "base_mode = \"default\""),
+            ),
+            (
+                "base",
+                before.replace("base = \"develop\"", "base = \"main\""),
+            ),
+            (
+                "profile",
+                before.replace(
+                    "mode = \"single\"\n",
+                    "mode = \"single\"\nprofile = \"codex\"\n",
+                ),
+            ),
+            (
+                "profiles",
+                before.replace(
+                    "mode = \"single\"\n",
+                    "mode = \"single\"\nprofiles = [\"codex\"]\n",
+                ),
+            ),
+            (
+                "tasks",
+                before.replace("run = \"run-seven\"", "run = \"run-other\""),
+            ),
+            (
+                "origin",
+                before.replace(
+                    "\n[policy]\n",
+                    "\n[origin]\nprovider = \"github\"\nid = \"1\"\n\n[policy]\n",
+                ),
+            ),
+        ];
+
+        for (field, candidate) in cases {
+            let response = server
+                .clone()
+                .oneshot(authorized_json_request(
+                    "/api/workflows/2026-05-28-007/plan",
+                    serde_json::json!({
+                        "candidate": candidate,
+                        "baseline_fingerprint": null
+                    }),
+                ))
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let value = json_body(response).await;
+            assert!(
+                value["validation_errors"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|error| error == &format!("field '{field}' is read-only in studio")),
+                "{field} should be rejected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn workflow_apply_rejects_read_only_and_invalid_color_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let before = sample_workflow("Workflow eight", "single", "run-eight");
+        fs::write(workflows_dir.join("2026-05-28-008.toml"), &before).unwrap();
+        let server = app(test_state(dir.path()));
+        let invalid_color = before.replace("color = \"blue\"", "color = \"ultraviolet\"");
+
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-008/plan",
+                serde_json::json!({
+                    "candidate": invalid_color,
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(plan_response.status(), StatusCode::OK);
+        let plan = json_body(plan_response).await;
+        assert_eq!(plan["validation_errors"][0], "invalid color: ultraviolet");
+        assert_eq!(plan["after"], "");
+        assert_eq!(plan["diff"], "");
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-008/apply",
+                serde_json::json!({
+                    "candidate": before.replace("mode = \"single\"", "mode = \"batch\""),
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let value = json_body(apply_response).await;
+        assert_eq!(value["error"], "Workflow validation failed");
+        assert_eq!(
+            value["validation_errors"][0],
+            "field 'mode' is read-only in studio"
+        );
+    }
+
     #[test]
     fn browser_open_is_skipped_in_quiet_mode() {
         let (ctx, ui) = test_ctx(true);
@@ -1165,7 +3060,16 @@ mod tests {
     }
 
     fn test_state(repo_root: &Path) -> StudioState {
-        StudioState::for_tests("http://127.0.0.1:8424", "secret", repo_root)
+        StudioState::for_tests("http://127.0.0.1:8424", "secret", repo_root, None)
+    }
+
+    fn test_dev_state(repo_root: &Path) -> StudioState {
+        StudioState::for_tests(
+            "http://127.0.0.1:5173",
+            "secret",
+            repo_root,
+            Some("http://127.0.0.1:5173".into()),
+        )
     }
 
     fn authorized_json_request(path: &str, value: serde_json::Value) -> Request<Body> {
@@ -1175,6 +3079,27 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(serde_json::to_vec(&value).unwrap()))
             .unwrap()
+    }
+
+    fn authorized_get_request(path: &str) -> Request<Body> {
+        Request::get(path)
+            .header(header::ORIGIN, "http://127.0.0.1:8424")
+            .header(header::COOKIE, "wt_studio_session=secret")
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn cookie_get_request(path: &str) -> Request<Body> {
+        Request::get(path)
+            .header(header::COOKIE, "wt_studio_session=secret")
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn sample_workflow(title: &str, mode: &str, run: &str) -> String {
+        format!(
+            "title = \"{title}\"\nmode = \"{mode}\"\nbase_mode = \"explicit\"\nbase = \"develop\"\ncolor = \"blue\"\ncreated_at = \"2026-05-28T00:00:00Z\"\nupdated_at = \"2026-05-28T00:00:00Z\"\n\n[policy]\npull_request = \"ready\"\nlanding = \"auto\"\n\n[[tasks]]\ntask = \"sample-task\"\nrun = \"{run}\"\n"
+        )
     }
 
     async fn json_body(response: Response) -> serde_json::Value {

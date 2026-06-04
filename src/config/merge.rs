@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use super::schema::{PROMPT_COMMON_SCOPE, PROMPT_RUNTIME_MODES, prompt_append_mode};
 use super::{
-    AgentConfig, Config, CopyAsEntry, EditorConfig, SetupConfig, WorkflowConfig, WorkspaceConfig,
-    WorktreeConfig,
+    AgentConfig, Config, CopyAsEntry, EditorConfig, ReviewConfig, SetupConfig, WorkflowConfig,
+    WorkspaceConfig, WorktreeConfig,
 };
 
 pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
@@ -17,6 +17,9 @@ pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
     }
     if profile.workflow != WorkflowConfig::default() {
         merge_workflow_config(&mut merged.workflow, profile.workflow);
+    }
+    if profile.review != ReviewConfig::default() {
+        merge_review_config(&mut merged.review, profile.review);
     }
     if profile.profile.is_some() {
         merged.profile = profile.profile;
@@ -45,9 +48,6 @@ pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
                 agent
             }
         });
-    }
-    if profile.test.is_some() {
-        merged.test = profile.test;
     }
     if profile.issues.is_some() {
         merged.issues = profile.issues;
@@ -203,15 +203,18 @@ fn merge_workflow_config(base: &mut WorkflowConfig, profile: WorkflowConfig) {
     }
 }
 
+fn merge_review_config(base: &mut ReviewConfig, profile: ReviewConfig) {
+    if profile.codex_base.is_some() {
+        base.codex_base = profile.codex_base;
+    }
+}
+
 fn merge_workspace_config(base: &mut WorkspaceConfig, profile: WorkspaceConfig) {
     extend_unique(&mut base.tabs, profile.tabs);
     extend_unique(&mut base.post_deps_tabs, profile.post_deps_tabs);
     base.colors.extend(profile.colors);
     if profile.browser.is_some() {
         base.browser = profile.browser;
-    }
-    if profile.chrome_devtools.is_some() {
-        base.chrome_devtools = profile.chrome_devtools;
     }
 }
 

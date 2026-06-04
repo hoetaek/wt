@@ -11,8 +11,11 @@ static CMUX_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub(crate) const PASTE_SUBMIT_SETTLE: Duration = Duration::from_millis(500);
 pub(crate) const CODEX_PASTE_MARKER_TIMEOUT: Duration = Duration::from_secs(3);
 pub(crate) const CODEX_PASTE_MARKER_POLL: Duration = Duration::from_millis(100);
+#[allow(dead_code)]
 const CODEX_PASTE_MARKER: &str = "[Pasted Content ";
+#[allow(dead_code)]
 const CODEX_LONG_PROMPT_MIN_BYTES: usize = 1000;
+#[allow(dead_code)]
 const CODEX_LONG_PROMPT_MIN_LINES: usize = 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +141,7 @@ pub(crate) fn unique_cmux_buffer_name(prefix: &str, surface: &str) -> String {
     format!("{prefix}-{suffix}-{}-{nanos}-{counter}", std::process::id())
 }
 
+#[allow(dead_code)]
 pub(crate) fn codex_prompt_expects_pasted_content_marker(prompt: &str) -> bool {
     prompt.len() >= CODEX_LONG_PROMPT_MIN_BYTES
         || prompt.lines().count() >= CODEX_LONG_PROMPT_MIN_LINES
@@ -167,6 +171,10 @@ impl<'a> CmuxService<'a> {
 
     pub fn is_available(&self) -> bool {
         self.runner.has_command("cmux")
+    }
+
+    pub(crate) fn runner(&self) -> &dyn CommandRunner {
+        self.runner
     }
 
     pub fn new_workspace(&self, cwd: &Path, name: &str, command: &str) -> Result<String> {
@@ -300,20 +308,31 @@ impl<'a> CmuxService<'a> {
         let caller = self
             .caller_context()
             .ok_or_else(|| anyhow::anyhow!("cmux caller context not found"))?;
-        let workspace = caller
-            .workspace
+        let CmuxCaller {
+            workspace,
+            pane,
+            surface,
+            ..
+        } = caller;
+        let workspace = workspace
             .filter(|workspace| !workspace.trim().is_empty())
             .ok_or_else(|| anyhow::anyhow!("cmux caller workspace not found"))?;
-        let pane = match caller.pane.filter(|pane| !pane.trim().is_empty()) {
-            Some(pane) => pane,
-            None => self
-                .list_panes(&workspace)?
-                .into_iter()
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("cmux caller pane not found"))?,
+        let surface = match surface.filter(|surface| !surface.trim().is_empty()) {
+            Some(surface) => self.new_right_split_surface(&surface, &workspace)?,
+            None => {
+                let pane = match pane.filter(|pane| !pane.trim().is_empty()) {
+                    Some(pane) => pane,
+                    None => self
+                        .list_panes(&workspace)?
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("cmux caller pane not found"))?,
+                };
+                let surface = self.new_surface(&pane, &workspace)?;
+                self.split_surface_right(&surface, &workspace)?
+            }
         };
 
-        let surface = self.new_surface(&pane, &workspace)?;
         self.send(&surface, &workspace, &format!("{command}\n"))?;
         Ok(surface)
     }
@@ -450,6 +469,44 @@ impl<'a> CmuxService<'a> {
             bail!("cmux new-surface failed: {}", command_error(&out));
         }
         extract_handle(&out.stdout, "surface:", "new-surface")
+    }
+
+    pub fn new_right_split_surface(&self, source_surface: &str, workspace: &str) -> Result<String> {
+        let out = self.runner.run(
+            "cmux",
+            &[
+                "new-split",
+                "right",
+                "--workspace",
+                workspace,
+                "--surface",
+                source_surface,
+            ],
+            None,
+        )?;
+        if !out.success {
+            bail!("cmux new-split failed: {}", command_error(&out));
+        }
+        extract_handle(&out.stdout, "surface:", "new-split")
+    }
+
+    pub fn split_surface_right(&self, surface: &str, workspace: &str) -> Result<String> {
+        let out = self.runner.run(
+            "cmux",
+            &[
+                "split-off",
+                "--workspace",
+                workspace,
+                "--surface",
+                surface,
+                "right",
+            ],
+            None,
+        )?;
+        if !out.success {
+            bail!("cmux split-off failed: {}", command_error(&out));
+        }
+        extract_handle(&out.stdout, "surface:", "split-off")
     }
 
     pub fn close_surface(&self, surface: &str, workspace: Option<&str>) -> Result<()> {
@@ -1324,6 +1381,54 @@ mod tests {
     }
 
     #[test]
+    fn new_right_split_surface_extracts_handle() {
+        let mut runner = MockRunner::new();
+        runner.add_response("OK surface:5 workspace:2", true);
+
+        let svc = CmuxService::new(&runner);
+        let surface = svc
+            .new_right_split_surface("surface:3", "workspace:2")
+            .unwrap();
+        assert_eq!(surface, "surface:5");
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "new-split",
+                "right",
+                "--workspace",
+                "workspace:2",
+                "--surface",
+                "surface:3"
+            ]
+        );
+    }
+
+    #[test]
+    fn split_surface_right_extracts_handle() {
+        let mut runner = MockRunner::new();
+        runner.add_response("OK surface:5 pane:6 workspace:2", true);
+
+        let svc = CmuxService::new(&runner);
+        let surface = svc.split_surface_right("surface:5", "workspace:2").unwrap();
+        assert_eq!(surface, "surface:5");
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "split-off",
+                "--workspace",
+                "workspace:2",
+                "--surface",
+                "surface:5",
+                "right"
+            ]
+        );
+    }
+
+    #[test]
     fn close_surface_passes_workspace_when_known() {
         let mut runner = MockRunner::new();
         runner.add_response("", true);
@@ -1374,13 +1479,55 @@ mod tests {
     }
 
     #[test]
-    fn open_command_surface_uses_caller_workspace_and_pane() {
+    fn open_command_surface_splits_from_caller_surface() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:2","pane_ref":"pane:3","surface_ref":"surface:3"}}"#,
+            true,
+        );
+        runner.add_response("OK surface:4 workspace:2", true);
+        runner.add_response("", true);
+
+        let svc = CmuxService::new(&runner);
+        let surface = svc.open_command_surface("vi file.toml").unwrap();
+
+        assert_eq!(surface, "surface:4");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["identify"]);
+        assert_eq!(
+            calls[1].1,
+            vec![
+                "new-split",
+                "right",
+                "--workspace",
+                "workspace:2",
+                "--surface",
+                "surface:3"
+            ]
+        );
+        assert_eq!(
+            calls[2].1,
+            vec![
+                "send",
+                "--surface",
+                "surface:4",
+                "--workspace",
+                "workspace:2",
+                "--",
+                "vi file.toml\n"
+            ]
+        );
+    }
+
+    #[test]
+    fn open_command_surface_splits_created_surface_when_caller_surface_is_missing() {
         let mut runner = MockRunner::new();
         runner.add_response(
             r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:2","pane_ref":"pane:3"}}"#,
             true,
         );
-        runner.add_response("surface:4 surface:4", true);
+        runner.add_response("OK surface:4", true);
+        runner.add_response("OK surface:4 pane:5 workspace:2", true);
         runner.add_response("", true);
 
         let svc = CmuxService::new(&runner);
@@ -1401,6 +1548,17 @@ mod tests {
         );
         assert_eq!(
             calls[2].1,
+            vec![
+                "split-off",
+                "--workspace",
+                "workspace:2",
+                "--surface",
+                "surface:4",
+                "right"
+            ]
+        );
+        assert_eq!(
+            calls[3].1,
             vec![
                 "send",
                 "--surface",

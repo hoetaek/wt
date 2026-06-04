@@ -1,4 +1,5 @@
 use super::chrome_devtools;
+use super::chrome_devtools::ChromeDevtoolsMcpConfig;
 use crate::config::{Config, WorkspaceBrowserConfig, WorkspaceBrowserMode};
 use crate::context::Ctx;
 use crate::template;
@@ -9,6 +10,15 @@ use std::path::Path;
 pub(crate) enum BrowserLaunch {
     System { url: String, app: Option<String> },
     ChromeDevtools(chrome_devtools::ChromeDevtoolsSession),
+}
+
+impl BrowserLaunch {
+    pub(crate) fn chrome_devtools_mcp_config(&self) -> Option<ChromeDevtoolsMcpConfig> {
+        match self {
+            BrowserLaunch::ChromeDevtools(session) => Some(session.mcp_config()),
+            BrowserLaunch::System { .. } => None,
+        }
+    }
 }
 
 pub(crate) fn prepare_browser_launch(
@@ -30,7 +40,7 @@ pub(crate) fn prepare_browser_launch(
             app: browser.app.clone(),
         })),
         WorkspaceBrowserMode::ChromeDevtools => {
-            let chrome_devtools = workspace.chrome_devtools.clone().unwrap_or_default();
+            let chrome_devtools = browser.chrome_devtools.clone().unwrap_or_default();
             Ok(Some(BrowserLaunch::ChromeDevtools(
                 chrome_devtools::prepare_chrome_devtools_session(
                     &chrome_devtools,

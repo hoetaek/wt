@@ -467,6 +467,12 @@ fn message_path_with_summary(dir: &Path, summary: &str) -> PathBuf {
         .unwrap()
 }
 
+fn new_message_with_summary(root: &Path, agent_name: &str, summary: &str) -> toml::Value {
+    let inbox = root.join(format!(".wt/runtime/agents/{agent_name}/inbox/new"));
+    let path = message_path_with_summary(&inbox, summary);
+    toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
 fn claim_message_file(new_path: &Path, claimed_by: &str, lease_expires_at: &str) -> PathBuf {
     let mut message: toml::Value =
         toml::from_str(&std::fs::read_to_string(new_path).unwrap()).unwrap();
@@ -744,7 +750,7 @@ fn session_set_rejects_invalid_ids_without_stdout() {
 }
 
 #[test]
-fn session_whoami_reports_identity_anchor_and_json() {
+fn session_show_reports_identity_anchor_and_json() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -762,7 +768,7 @@ fn session_whoami_reports_identity_anchor_and_json() {
         .success();
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "session", "whoami"])
+        .args(["-C", temp.path().to_str().unwrap(), "session", "show"])
         .env("CMUX_SURFACE_ID", "surface-1")
         .env("CMUX_WORKSPACE_ID", "workspace:1")
         .assert()
@@ -779,7 +785,7 @@ fn session_whoami_reports_identity_anchor_and_json() {
             "-C",
             temp.path().to_str().unwrap(),
             "session",
-            "whoami",
+            "show",
             "--json",
         ])
         .env("CMUX_SURFACE_ID", "surface-1")
@@ -802,7 +808,7 @@ fn session_whoami_reports_identity_anchor_and_json() {
 }
 
 #[test]
-fn session_unset_removes_identity_anchor_and_whoami_reports_none() {
+fn session_unset_removes_identity_anchor_and_show_reports_none() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -829,7 +835,7 @@ fn session_unset_removes_identity_anchor_and_whoami_reports_none() {
     assert!(toml_files(&anchor_dir(temp.path(), "my-coord")).is_empty());
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "session", "whoami"])
+        .args(["-C", temp.path().to_str().unwrap(), "session", "show"])
         .env("CMUX_SURFACE_ID", "surface-1")
         .assert()
         .success()
@@ -838,7 +844,7 @@ fn session_unset_removes_identity_anchor_and_whoami_reports_none() {
 }
 
 #[test]
-fn session_whoami_reports_corrupt_identity_anchor_but_unset_can_recover() {
+fn session_show_reports_corrupt_identity_anchor_but_unset_can_recover() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -859,7 +865,7 @@ fn session_whoami_reports_corrupt_identity_anchor_but_unset_can_recover() {
     std::fs::write(&files[0], "not valid toml = [").unwrap();
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "session", "whoami"])
+        .args(["-C", temp.path().to_str().unwrap(), "session", "show"])
         .env("CMUX_SURFACE_ID", "surface-1")
         .assert()
         .failure()
@@ -1822,6 +1828,87 @@ fn msg_send_writes_to_agent_inbox_and_normalizes_agent_id() {
 }
 
 #[test]
+fn msg_send_without_wt_agent_id_uses_current_identity_anchor_sender() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-send-anchor")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "anchor",
+            "sender",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-send-anchor")
+        .assert()
+        .success();
+
+    let message = new_message_with_summary(temp.path(), "codex", "anchor sender");
+    assert_eq!(
+        message["meta"]["from"].as_str(),
+        Some("agents/marker-coord")
+    );
+    assert_eq!(message["meta"]["to"].as_str(), Some("agents/codex"));
+}
+
+#[test]
+fn msg_send_prefers_wt_agent_id_over_identity_anchor_sender() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-send-precedence")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "env",
+            "sender",
+        ])
+        .env("WT_AGENT_ID", "agents/runtime-agent")
+        .env("CMUX_SURFACE_ID", "surface-send-precedence")
+        .assert()
+        .success();
+
+    let message = new_message_with_summary(temp.path(), "codex", "env sender");
+    assert_eq!(
+        message["meta"]["from"].as_str(),
+        Some("agents/runtime-agent")
+    );
+    assert_eq!(message["meta"]["to"].as_str(), Some("agents/codex"));
+}
+
+#[test]
 fn msg_send_to_bare_coordinator_writes_to_ordinary_coordinator_inbox() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -1877,6 +1964,7 @@ fn msg_send_accepts_explicit_workflow_scope() {
             "workflow",
             "owned",
         ])
+        .env("WT_AGENT_ID", "agents/scope-sender")
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -1889,6 +1977,10 @@ fn msg_send_accepts_explicit_workflow_scope() {
 
     let content = std::fs::read_to_string(&files[0]).unwrap();
     let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(
+        message["meta"]["from"].as_str(),
+        Some("agents/scope-sender")
+    );
     assert_eq!(message["meta"]["to"].as_str(), Some("agents/coord-a"));
     assert_eq!(message["scope"]["kind"].as_str(), Some("workflow"));
     assert_eq!(message["scope"]["id"].as_str(), Some("2026-05-20-001"));
@@ -3619,7 +3711,7 @@ fn msg_uses_git_common_runtime_inbox_from_linked_worktree() {
 }
 
 #[test]
-fn run_workflow_requires_coordinator_session_when_agent_env_unset() {
+fn run_workflow_reaches_workflow_resolution_when_agent_env_unset() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     wt_init_yes(temp.path());
@@ -3634,14 +3726,12 @@ fn run_workflow_requires_coordinator_session_when_agent_env_unset() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "wt workflow run requires a coordinator session.",
-        ))
-        .stderr(predicate::str::contains("eval \"$(wt session set"));
+        .stderr(predicate::str::contains("Workflow not found"))
+        .stderr(predicate::str::contains("wt workflow run requires a coordinator session").not());
 }
 
 #[test]
-fn run_workflow_requires_coordinator_session_when_agent_env_empty() {
+fn run_workflow_reaches_workflow_resolution_when_agent_env_empty() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     wt_init_yes(temp.path());
@@ -3657,10 +3747,8 @@ fn run_workflow_requires_coordinator_session_when_agent_env_empty() {
         .env("WT_AGENT_ID", "")
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "wt workflow run requires a coordinator session.",
-        ))
-        .stderr(predicate::str::contains("eval \"$(wt session set"));
+        .stderr(predicate::str::contains("Workflow not found"))
+        .stderr(predicate::str::contains("wt workflow run requires a coordinator session").not());
 }
 
 #[test]
@@ -3682,6 +3770,55 @@ fn run_workflow_with_agent_env_reaches_workflow_resolution() {
         .failure()
         .stderr(predicate::str::contains("Workflow not found"))
         .stderr(predicate::str::contains("wt workflow run requires a coordinator session").not());
+}
+
+#[test]
+fn run_workflow_without_agent_env_echoes_recorded_coordinator() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    wt_init_yes(temp.path());
+    write_task_document(temp.path(), "echo-task", "echo-task");
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-echo",
+        "echo-task",
+        "echo-task",
+        "passed",
+        "2026-05-18-020",
+        (
+            Some("agents/run-1-echo-task"),
+            Some("agents/coord-recorded"),
+        ),
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-020",
+        "batch",
+        "title = \"Echo workflow\"\n",
+        r#"[[tasks]]
+task = "echo-task"
+run = "run-echo"
+"#,
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "workflow",
+            "2026-05-18-020",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Running workflow: 2026-05-18-020 (batch, 1 tasks)",
+        ))
+        .stdout(predicate::str::contains(
+            "coordinator: agents/coord-recorded",
+        ))
+        .stdout(predicate::str::contains("run preserves the stored route"))
+        .stdout(predicate::str::contains("No prepared or failed tasks"));
 }
 
 #[test]
@@ -3866,6 +4003,401 @@ run = "run-2026-05-18-001-schema"
 }
 
 #[test]
+fn workflow_show_supports_json_and_reports_task_statuses() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_document(temp.path(), "worker", "feature/worker");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "passed",
+        "2026-05-18-010",
+    );
+    write_task_run_file(
+        temp.path(),
+        "run-worker",
+        "worker",
+        "feature/worker",
+        "running",
+        "2026-05-18-010",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-010",
+        "stack",
+        r#"title = "Workflow JSON"
+"#,
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+
+[[tasks]]
+task = "worker"
+run = "run-worker"
+parent = "feature/api"
+"#,
+    );
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "show",
+            "2026-05-18-010",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("JSON output is supported").not())
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["path"],
+        "<repo-root>/.wt/execution/workflows/2026-05-18-010.toml"
+    );
+    assert_eq!(value["mode"], "stack");
+    assert_eq!(value["base"], "main");
+    assert_eq!(value["title"], "Workflow JSON");
+    assert_eq!(value["pull_request"], "draft");
+    assert_eq!(value["landing"], "manual");
+
+    let tasks = value["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks[0]["order"].as_u64(), Some(1));
+    assert_eq!(tasks[0]["task"], "api");
+    assert_eq!(tasks[0]["status"], "passed");
+    assert_eq!(tasks[0]["branch"], "feature/api");
+    assert!(tasks[0]["parent"].is_null());
+    assert_eq!(tasks[0]["title"], "api");
+    assert_eq!(tasks[1]["order"].as_u64(), Some(2));
+    assert_eq!(tasks[1]["task"], "worker");
+    assert_eq!(tasks[1]["status"], "running");
+    assert_eq!(tasks[1]["branch"], "feature/worker");
+    assert_eq!(tasks[1]["parent"], "feature/api");
+    assert_eq!(tasks[1]["title"], "worker");
+}
+
+#[test]
+fn workflow_show_json_missing_workflow_fails_without_support_error() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "show",
+            "missing",
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("Workflow not found: missing"))
+        .stderr(predicate::str::contains("JSON output is supported").not());
+}
+
+#[test]
+fn workflow_show_without_json_preserves_human_output_shape() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "running",
+        "2026-05-18-011",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-011",
+        "stack",
+        r#"title = "Workflow text"
+"#,
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+parent = "main"
+"#,
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "show",
+            "2026-05-18-011",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Workflow: <repo-root>/.wt/execution/workflows/2026-05-18-011.toml",
+        ))
+        .stdout(predicate::str::contains("Mode: stack"))
+        .stdout(predicate::str::contains("Base: main"))
+        .stdout(predicate::str::contains("Title: Workflow text"))
+        .stdout(predicate::str::contains("Pull request: draft"))
+        .stdout(predicate::str::contains("Landing: manual"))
+        .stdout(predicate::str::contains("Tasks: 1"))
+        .stdout(predicate::str::contains("1. api [running] api"))
+        .stdout(predicate::str::contains(
+            "Task: <repo-root>/.wt/execution/tasks/api.toml",
+        ))
+        .stdout(predicate::str::contains("Branch: feature/api"))
+        .stdout(predicate::str::contains("Parent: main"));
+}
+
+#[test]
+fn workflow_watch_exits_zero_when_all_terminal_without_failures() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_document(temp.path(), "worker", "feature/worker");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "passed",
+        "2026-05-18-012",
+    );
+    write_task_run_file(
+        temp.path(),
+        "run-worker",
+        "worker",
+        "feature/worker",
+        "skipped",
+        "2026-05-18-012",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-012",
+        "stack",
+        r#"title = "Workflow watch success"
+"#,
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+
+[[tasks]]
+task = "worker"
+run = "run-worker"
+parent = "feature/api"
+"#,
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "watch",
+            "2026-05-18-012",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Workflow watch: 2026-05-18-012"))
+        .stdout(predicate::str::contains("[done] all passed/skipped (2/2)"));
+}
+
+#[test]
+fn workflow_watch_exits_three_when_any_task_failed() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_document(temp.path(), "worker", "feature/worker");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "passed",
+        "2026-05-18-013",
+    );
+    write_task_run_file(
+        temp.path(),
+        "run-worker",
+        "worker",
+        "feature/worker",
+        "failed",
+        "2026-05-18-013",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-013",
+        "stack",
+        "",
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+
+[[tasks]]
+task = "worker"
+run = "run-worker"
+parent = "feature/api"
+"#,
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "watch",
+            "2026-05-18-013",
+        ])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains(
+            "[done] terminal with failure: worker=failed",
+        ));
+}
+
+#[test]
+fn workflow_watch_missing_workflow_exits_unavailable() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "watch",
+            "missing",
+        ])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains("Workflow not found: missing"));
+}
+
+#[test]
+fn workflow_watch_timeout_still_running_exits_zero_without_wait_observations() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "running",
+        "2026-05-18-014",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-014",
+        "stack",
+        "",
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+"#,
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "watch",
+            "2026-05-18-014",
+            "--interval",
+            "1",
+            "--timeout",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Workflow watch timeout after 1s"))
+        .stdout(predicate::str::contains("api=running"));
+
+    assert!(!temp.path().join(".wt/runtime/agents").exists());
+}
+
+#[test]
+fn workflow_watch_json_outputs_final_show_snapshot() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "api", "feature/api");
+    write_task_run_file(
+        temp.path(),
+        "run-api",
+        "api",
+        "feature/api",
+        "passed",
+        "2026-05-18-015",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-015",
+        "stack",
+        r#"title = "Workflow watch JSON"
+"#,
+        r#"[[tasks]]
+task = "api"
+run = "run-api"
+"#,
+    );
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "watch",
+            "2026-05-18-015",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("JSON output is supported").not())
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["path"],
+        "<repo-root>/.wt/execution/workflows/2026-05-18-015.toml"
+    );
+    assert_eq!(value["title"], "Workflow watch JSON");
+    assert_eq!(value["tasks"][0]["task"], "api");
+    assert_eq!(value["tasks"][0]["status"], "passed");
+}
+
+#[test]
+fn workflow_watch_without_target_noninteractive_requires_guidance() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "workflow", "watch"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "wt workflow watch requires WORKFLOW",
+        ))
+        .stderr(predicate::str::contains(
+            "wt workflow show <workflow> --json",
+        ))
+        .stderr(predicate::str::contains("wt workflow watch <workflow>"))
+        .stderr(predicate::str::contains("wt agent watch <target>"));
+}
+
+#[test]
 fn workflow_list_empty_inventory_uses_plain_output() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -4014,12 +4546,12 @@ fn scaffold_supports_json_global_flag() {
     assert_eq!(value["feature"], "demo");
     assert_eq!(
         value["created"][0],
-        "<repo-root>/.wt/planning/specs/demo/11-retrospect.md"
+        "<repo-root>/.wt/planning/specs/demo/04-Feedback/09-retrospect.md"
     );
     assert!(value["skipped"].as_array().unwrap().is_empty());
     assert!(
         temp.path()
-            .join(".wt/planning/specs/demo/11-retrospect.md")
+            .join(".wt/planning/specs/demo/04-Feedback/09-retrospect.md")
             .is_file()
     );
 }
@@ -4060,13 +4592,16 @@ fn workflow_prepare_accepts_pr_on_non_stack_modes() {
             "single",
             "--pr",
             "draft",
+            "--coordinator",
+            "coord-pr",
             "workflow-docs",
             "--base",
             "main",
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Prepared workflow:"));
+        .stdout(predicate::str::contains("Prepared workflow:"))
+        .stdout(predicate::str::contains("coordinator: agents/coord-pr"));
 
     let workflows = std::fs::read_dir(temp.path().join(".wt/execution/workflows"))
         .unwrap()
@@ -4184,6 +4719,24 @@ fn agent_watch_help_explains_polling_target() {
         .stdout(predicate::str::contains("unchanged running observations"))
         .stdout(predicate::str::contains(
             "Omit TARGET in an interactive terminal",
+        ));
+}
+
+#[test]
+fn workflow_watch_help_explains_durable_workflow_observation() {
+    wt_command()
+        .args(["workflow", "watch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("linked TaskRun is terminal"))
+        .stdout(predicate::str::contains("separate from `wt agent watch`"))
+        .stdout(predicate::str::contains("--interval"))
+        .stdout(predicate::str::contains("--timeout"))
+        .stdout(predicate::str::contains("--heartbeat"))
+        .stdout(predicate::str::contains("exit-code contract"))
+        .stdout(predicate::str::contains("wait-observations.jsonl"))
+        .stdout(predicate::str::contains(
+            "Omit WORKFLOW in an interactive terminal",
         ));
 }
 
@@ -5785,11 +6338,13 @@ fn studio_help_explains_authoring_server_contract() {
         .stdout(predicate::str::contains("127.0.0.1"))
         .stdout(predicate::str::contains("--port <PORT>"))
         .stdout(predicate::str::contains("0 selects an available port"))
-        .stdout(predicate::str::contains("Vite-built Preact frontend"))
+        .stdout(predicate::str::contains("embedded Vite production bundle"))
+        .stdout(predicate::str::contains("--dev"))
+        .stdout(predicate::str::contains("HMR assets"))
+        .stdout(predicate::str::contains("--dev-origin <ORIGIN>"))
         .stdout(predicate::str::contains("session cookie"))
-        .stdout(predicate::str::contains("matching Origin header"))
-        .stdout(predicate::str::contains("GET /api/ping"))
-        .stdout(predicate::str::contains("does not add mutation routes"));
+        .stdout(predicate::str::contains("browser Origin header"))
+        .stdout(predicate::str::contains("Vite dev-server assets"));
 }
 
 #[test]
@@ -6179,7 +6734,7 @@ fn init_dry_run_previews_plan_without_writing_config() {
         .stdout(predicate::str::contains("저장 범위: 개인 설정"))
         .stdout(predicate::str::contains("작업: 새 설정 생성"))
         .stdout(predicate::str::contains(
-            "저장될 설정: workflow, worktree, setup, test, workspace",
+            "저장될 설정: workflow, worktree, setup, workspace",
         ))
         .stdout(predicate::str::contains("감지된 신호:").not())
         .stdout(predicate::str::contains("[ok] 감지됨:").not())
@@ -6192,9 +6747,7 @@ fn init_dry_run_previews_plan_without_writing_config() {
             "colors = { task = \"blue\", issue = \"blue\", branch = \"green\", pr = \"magenta\" }",
         ))
         .stdout(predicate::str::contains("run = \"npm install\""))
-        .stdout(predicate::str::contains("run = \"npm test\""))
-        .stdout(predicate::str::contains("[setup]"))
-        .stdout(predicate::str::contains("[test]"));
+        .stdout(predicate::str::contains("[setup]"));
 
     assert!(!temp.path().join(".wt.toml").exists());
     assert!(!temp.path().join(".wt/config/local.toml").exists());
@@ -6765,7 +7318,9 @@ fn config_renders_workspace_chrome_devtools_browser_policy_defaults() {
         .stdout(predicate::str::contains("[workspace.browser]"))
         .stdout(predicate::str::contains("mode = \"chrome_devtools\""))
         .stdout(predicate::str::contains("url = \"{{site_url}}/dashboard\""))
-        .stdout(predicate::str::contains("[workspace.chrome_devtools]"))
+        .stdout(predicate::str::contains(
+            "[workspace.browser.chrome_devtools]",
+        ))
         .stdout(predicate::str::contains(
             "user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"",
         ))

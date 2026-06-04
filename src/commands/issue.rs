@@ -734,7 +734,12 @@ fn run_resolved_issue<'a>(
     }
 
     // 4. Create worktree
-    git.fetch()?;
+    // Refresh remote-tracking refs so we can detect/track an already-pushed
+    // branch. Skip when there is no `origin` remote (local-only repos) — a
+    // bare `git fetch origin` would otherwise hard-fail with no remote to read.
+    if git.has_remote("origin")? {
+        git.fetch()?;
+    }
     let create_type = create_worktree(
         ctx,
         &git,
@@ -1399,12 +1404,21 @@ mod tests {
 
     struct IssueParallelRunner {
         calls: Mutex<Vec<CommandCall>>,
+        has_origin: bool,
     }
 
     impl IssueParallelRunner {
         fn new() -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
+                has_origin: true,
+            }
+        }
+
+        fn without_origin() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                has_origin: false,
             }
         }
     }
@@ -1445,6 +1459,10 @@ mod tests {
                     "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n".into(),
                     true,
                 )),
+                ("git", ["remote", "get-url", "origin"]) => {
+                    Ok(output(String::new(), self.has_origin))
+                }
+                ("git", ["rev-parse", "--abbrev-ref", "HEAD"]) => Ok(output("main".into(), true)),
                 ("git", ["fetch", "origin"]) => Ok(output(String::new(), true)),
                 ("git", ["worktree", "add", "-b", _, _, _]) => Ok(output(String::new(), true)),
                 ("git", ["config", _, _]) => Ok(output(String::new(), true)),
@@ -1953,6 +1971,8 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        // has_remote (origin present)
+        runner.add_response("", true);
         // fetch
         runner.add_response("", true);
         // local_branch_exists
@@ -2000,6 +2020,7 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true); // fetch
         runner.add_response("", false); // local_branch_exists
         runner.add_response("", false); // remote_branch_exists
@@ -2019,6 +2040,7 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true); // fetch
         runner.add_response("", false); // local_branch_exists
         runner.add_response("", false); // remote_branch_exists
@@ -2098,6 +2120,42 @@ mod tests {
     }
 
     #[test]
+    fn run_skips_fetch_in_local_only_repo() {
+        // Reproduces `wt run task <id> --base .` in a repo with no `origin`
+        // remote: fetch must be skipped (not hard-fail) and the worktree still
+        // created from the local current branch.
+        let repo = tempfile::tempdir().unwrap();
+        let runner = Arc::new(IssueParallelRunner::without_origin());
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            linear_config(),
+            Box::new(Arc::clone(&runner)),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        super::run(&ctx, &["1".to_string()], &Some(".".into()), None, false, 1).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(
+            !calls.iter().any(|(cmd, args, _)| cmd == "git"
+                && args.len() == 2
+                && args[0] == "fetch"
+                && args[1] == "origin"),
+            "fetch must be skipped when the origin remote is absent"
+        );
+        assert!(
+            calls.iter().any(|(cmd, args, _)| cmd == "git"
+                && args.len() >= 6
+                && args[0] == "worktree"
+                && args[1] == "add"
+                && args[2] == "-b"),
+            "worktree should still be created in a local-only repo"
+        );
+    }
+
+    #[test]
     fn issue_without_target_multi_selects_provider_issues() {
         let repo = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
@@ -2117,6 +2175,7 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true); // fetch
         runner.add_response("", false); // local_branch_exists
         runner.add_response("", false); // remote_branch_exists
@@ -2132,6 +2191,7 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true); // fetch
         runner.add_response("", false); // local_branch_exists
         runner.add_response("", false); // remote_branch_exists
@@ -2265,6 +2325,8 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        // has_remote (origin present)
+        runner.add_response("", true);
         // fetch
         runner.add_response("", true);
         // local_branch_exists → true
@@ -2315,6 +2377,8 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        // has_remote (origin present)
+        runner.add_response("", true);
         // fetch
         runner.add_response("", true);
         // local_branch_exists
@@ -2427,6 +2491,8 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        // has_remote (origin present)
+        runner.add_response("", true);
         // fetch
         runner.add_response("", true);
         // local_branch_exists
@@ -2522,6 +2588,7 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true);
         runner.add_response("", false);
         runner.add_response("", false);
@@ -2589,6 +2656,7 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        runner.add_response("", true); // has_remote (origin present)
         runner.add_response("", true);
         runner.add_response("", false);
         runner.add_response("", true);
@@ -2833,6 +2901,8 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        // has_remote (origin present)
+        runner.add_response("", true);
         // fetch
         runner.add_response("", true);
         // local_branch_exists → true

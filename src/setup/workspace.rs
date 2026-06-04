@@ -1,4 +1,5 @@
-use super::{SetupOptions, agent_launch_command};
+use super::SetupOptions;
+use super::agent::agent_launch_command_with_options;
 use crate::config::Config;
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
@@ -77,7 +78,7 @@ pub(super) fn open_workspace(
     names: &WorktreeNames,
     template_vars: &HashMap<String, String>,
     color: &str,
-    options: SetupOptions,
+    options: &SetupOptions,
 ) -> Result<Option<OpenedWorkspace>> {
     let cmux = CmuxService::new_with_workspace_focus(ctx.runner.as_ref(), options.focus_workspace);
     if !cmux.is_available() {
@@ -98,7 +99,11 @@ pub(super) fn open_workspace(
     ctx.ui
         .print_step(&format!("Opening cmux workspace: {}", names.workspace));
 
-    let command = agent_launch_command(config.agent.as_ref(), template_vars)?;
+    let command = agent_launch_command_with_options(
+        config.agent.as_ref(),
+        template_vars,
+        &options.agent_launch_options,
+    )?;
     let should_probe_workspace_start = options.focus_restore_if_workspace_cold
         && (!command.trim().is_empty() || !ws_config.tabs.is_empty());
     let identity_context = cmux.identity_context();

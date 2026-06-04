@@ -1,4 +1,4 @@
 interface:
   display_name: "WT Work"
-  short_description: "Run the full wt work loop"
-  default_prompt: "Use $wt-work to locate the current Explore/Demonstrate/Generalize/Evolve phase, require text-first wireframe before Generalize design, then route through the wt lifecycle skills as needed."
+  short_description: "Launch and coordinate wt work"
+  default_prompt: "Use $wt-work to launch prepared wt task or workflow runs, capture the inspect target, coordinate feedback/review/checks, pass workflow tasks when applicable, and hand accepted work to $wt-land."

@@ -41,7 +41,7 @@ fn try_main() -> Result<()> {
 
     if cli.json && !supports_json(command) {
         bail!(
-            "JSON output is supported for: wt version, wt list, wt inspect, wt scaffold, wt task list, wt workflow list, wt workflow archive, wt agent status, wt agent watch, wt agent wait-stats, wt agent supervisor status, wt msg list, wt msg read, wt msg check-inbox, wt msg watch, wt session whoami, wt doctor, wt profile"
+            "JSON output is supported for: wt version, wt list, wt inspect, wt scaffold, wt task list, wt workflow list, wt workflow archive, wt workflow show, wt workflow watch, wt agent status, wt agent watch, wt agent wait-stats, wt agent supervisor status, wt msg list, wt msg read, wt msg check-inbox, wt msg watch, wt session show, wt doctor, wt profile"
         );
     }
 
@@ -423,6 +423,12 @@ fn supports_json(command: &Commands) -> bool {
                 | Commands::Workflow {
                     command: WorkflowCommand::Archive { .. },
                 }
+                | Commands::Workflow {
+                    command: WorkflowCommand::Show { .. },
+                }
+                | Commands::Workflow {
+                    command: WorkflowCommand::Watch { .. },
+                }
                 | Commands::Task {
                     command: TaskCommand::List { .. },
                 }
@@ -447,7 +453,7 @@ fn supports_json(command: &Commands) -> bool {
                         | MsgCommand::Watch { .. },
                 }
                 | Commands::Session {
-                    command: SessionCommand::Whoami { .. },
+                    command: SessionCommand::Show { .. },
                 }
                 | Commands::Doctor { .. }
                 | Commands::Profile { .. }

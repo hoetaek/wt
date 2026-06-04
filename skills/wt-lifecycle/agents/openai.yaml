@@ -1,0 +1,4 @@
+interface:
+  display_name: "WT Lifecycle"
+  short_description: "Prepare, run, land, and settle wt work"
+  default_prompt: "Use $wt-lifecycle to prepare work with wt-ready, launch and coordinate execution, land or discard safely, and settle reusable lessons into retrospect or harness updates."

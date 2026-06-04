@@ -13,6 +13,9 @@ use crate::workflow::run::{
 use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask};
 use anyhow::{Result, bail};
 
+use super::codex_base_review::validate_required_codex_base_review;
+use super::task_match::{workflow_matrix_task_matches, workflow_task_matches};
+
 pub(super) fn pass_workflow(
     ctx: &Ctx,
     workflow: &str,
@@ -35,6 +38,9 @@ pub(super) fn pass_workflow(
         return Ok(());
     }
 
+    for idx in &pass_indices {
+        validate_required_codex_base_review(&metadata, &states[*idx])?;
+    }
     if metadata.mode == WorkflowMode::Stack {
         for idx in &pass_indices {
             validate_completable_stack_task(ctx, &metadata.tasks[*idx])?;
@@ -84,6 +90,9 @@ fn pass_matrix_workflow(
         return Ok(());
     }
 
+    for state in &passed {
+        validate_required_codex_base_review(metadata, state)?;
+    }
     for state in &passed {
         let profile = state
             .profile
@@ -191,32 +200,6 @@ fn pass_indices(
             Ok(vec![running[0].idx])
         }
     }
-}
-
-fn workflow_matrix_task_matches(ctx: &Ctx, state: &WorkflowTaskState, target: &str) -> bool {
-    let profile = state.profile.as_deref();
-    if profile.is_some_and(|profile| target == profile) {
-        return true;
-    }
-    if profile.is_some_and(|profile| target == format!("{}:{profile}", state.row.task)) {
-        return true;
-    }
-    if target == state.run.branch {
-        return true;
-    }
-    workflow_task_matches(ctx, &state.row, target)
-}
-
-fn workflow_task_matches(ctx: &Ctx, row: &WorkflowTask, target: &str) -> bool {
-    if row.task == target {
-        return true;
-    }
-    let Ok(task_doc) = task_store::read_task_document(ctx, &row.task) else {
-        return false;
-    };
-    task_doc.title == target
-        || task_store::prepared_branch_name(&task_doc.branch) == Some(target)
-        || task_doc.branch.rsplit('/').next() == Some(target)
 }
 
 fn validate_completable_stack_task(ctx: &Ctx, row: &WorkflowTask) -> Result<()> {
