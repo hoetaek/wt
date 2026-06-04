@@ -547,7 +547,7 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
             retrospecs: ctx
                 .storage_root
                 .display_path(&ctx.storage_root.retrospectives_dir())
-                + " + <repo-root>/.wt/planning/specs/*/04-Feedback/09-retrospect.md",
+                + " + <repo-root>/.wt/planning/specs/*/04-Feedback/10-retrospect.md",
             config_paths: config_source_paths(&ctx),
         },
         config: config_summary(&ctx),
@@ -1290,7 +1290,7 @@ fn retrospec_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
         {
             let path = entry?.path();
             if path.is_dir() {
-                let retrospec = path.join("04-Feedback/09-retrospect.md");
+                let retrospec = path.join("04-Feedback/10-retrospect.md");
                 if retrospec.exists() {
                     paths.push(retrospec);
                 }
@@ -1311,7 +1311,7 @@ fn retrospec_identity(ctx: &Ctx, path: &Path) -> (String, String, Option<String>
             .and_then(|component| component.as_os_str().to_str())
         {
             return (
-                format!("{spec}/09-retrospect"),
+                format!("{spec}/10-retrospect"),
                 "spec-local".into(),
                 Some(spec.to_string()),
             );
@@ -1882,7 +1882,7 @@ fn is_known_state_or_config_path(relative: &str) -> bool {
                 Some("toml" | "md" | "markdown")
             ))
         || (relative.starts_with("<repo-root>/.wt/planning/specs/")
-            && relative.ends_with("/04-Feedback/09-retrospect.md"))
+            && relative.ends_with("/04-Feedback/10-retrospect.md"))
         || (relative.starts_with("<repo-root>/.wt/execution/tasks/") && relative.ends_with(".toml"))
         || (relative.starts_with("<repo-root>/.wt/execution/workflows/")
             && relative.ends_with(".toml"))
@@ -2264,7 +2264,7 @@ mod tests {
             Some("Context\nGoal: Retro goal\n\nKeep\n- Keep this")
         );
         assert_eq!(snapshot.retrospecs.items[0].scope, "cross-work");
-        assert_eq!(snapshot.retrospecs.items[1].key, "demo-spec/09-retrospect");
+        assert_eq!(snapshot.retrospecs.items[1].key, "demo-spec/10-retrospect");
         assert_eq!(snapshot.retrospecs.items[1].scope, "spec-local");
         assert_eq!(
             snapshot.retrospecs.items[1].spec.as_deref(),
@@ -2272,7 +2272,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.retrospecs.items[1].path,
-            "<repo-root>/.wt/planning/specs/demo-spec/04-Feedback/09-retrospect.md"
+            "<repo-root>/.wt/planning/specs/demo-spec/04-Feedback/10-retrospect.md"
         );
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
@@ -2526,6 +2526,6 @@ mod tests {
             .join(spec)
             .join("04-Feedback");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("09-retrospect.md"), content).unwrap();
+        fs::write(dir.join("10-retrospect.md"), content).unwrap();
     }
 }

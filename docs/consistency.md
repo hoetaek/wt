@@ -90,11 +90,12 @@ Canonical personal storage layout:
 │   │       │   └── 04-wireframe.md
 │   │       ├── 03-Architect/
 │   │       │   ├── 05-design.md
-│   │       │   ├── 06-tasks.md
-│   │       │   └── 07-execution.md    # lazy, when launch handoff exists
+│   │       │   ├── 06-critic.md      # lazy, when critic triggers fire
+│   │       │   ├── 07-tasks.md
+│   │       │   └── 08-execution.md    # lazy, when launch handoff exists
 │   │       └── 04-Feedback/
-│   │           ├── 08-review.md       # lazy, when review/sync evidence exists
-│   │           └── 09-retrospect.md   # lazy, for spec-backed work retrospectives
+│   │           ├── 09-review.md       # lazy, when review/sync evidence exists
+│   │           └── 10-retrospect.md   # lazy, for spec-backed work retrospectives
 │   └── retrospectives/
 │       └── <slug>.md         # cross-work/spec-less retrospectives only
 ├── execution/
@@ -182,14 +183,20 @@ valid local task로 남는다.
 Spec 내부의 canonical layout은 LEAF phase folder다. `planning/specs/<slug>/` bucket은
 wt의 personal-state ownership을 유지하고, 그 안에서 `01-Learn/`, `02-Example/`,
 `03-Architect/`, `04-Feedback/`이 사고 과정의 phase를 표현한다. 일반 leaf-work는 여러
-artifact를 담기 위해 `05-design-<artifact>.md`, `07-execution-<artifact>.md`,
-`08-review-<artifact>-vN.md`, `09-retrospect-<topic>.md` 같은 suffix를 권장하지만, wt spec은
+artifact를 담기 위해 `05-design-<artifact>.md`, `08-execution-<artifact>.md`,
+`09-review-<artifact>-vN.md`, `10-retrospect-<topic>.md` 같은 suffix를 권장하지만, wt spec은
 slug 하나가 하나의 work item을 소유하므로 canonical file은 `05-design.md`,
-`07-execution.md`, `08-review.md`, `09-retrospect.md`처럼 deterministic하게 둔다.
+`06-critic.md`, `08-execution.md`, `09-review.md`, `10-retrospect.md`처럼 deterministic하게 둔다.
+`06-critic.md`는 critic trigger가 실제로 발동할 때만 만드는 lazy artifact이고, skip/low-risk
+판단은 `05-design.md`에 기록한다.
 
 `wt scaffold`가 만드는 idea/spec/task/workflow/retrospect template의 사람이 읽는 제목과
 section heading은 한국어를 기본으로 한다. TOML field name(`title`, `branch`, `mode` 등)은
 schema contract이므로 영어로 유지하지만, 값과 body template은 한국어로 읽히게 한다.
+
+Committed spec prep은 scaffold가 첫 동작이다. `wt scaffold <slug> --spec`은 `00-status.md`와
+`01-Learn/`, `02-Example/`, `03-Architect/`, `04-Feedback/` 네 phase directory를 보장한 뒤
+gate file을 채운다. 너무 작아서 이 body가 필요 없는 작업은 LEAF spec prep으로 승격하지 않는다.
 
 `planning/specs/<slug>/00-status.md`는 spec을 재개 가능하게 하는 dashboard다. 현재 phase/gate,
 첫 미충족 gate, 다음 액션, 최근 return, return 횟수, gate별 progress를 적는다. progress 값은
@@ -207,9 +214,12 @@ Intent는 core noun과 topology도 기록할 수 있다. Core noun은 사용자�
 
 `planning/specs/<slug>/01-Learn/02-unknowns.md`는 domain concepts, standards/conventions, external facts,
 internal facts를 구분하고 각 항목을 `blocking now` 또는 `useful later`로 표시한다. Evidence
-gathering은 이 unknown list를 agenda로 삼는다. Gate 1-3 prep에서는 intent, topology, success,
-constraints, output form 중 현재 가장 약한 clarity row를 표시해서 다음 질문이나 evidence pass가
-그 gap을 줄이도록 한다.
+gathering은 이 unknown list를 agenda로 삼는다. Clarity ledger는 gate마다 역할이 다르다.
+Gate 1은 desired effect와 core noun으로 Intent row를 잠그고, Gate 2는 ledger를 learning lens로만
+써서 가장 약한 row를 판단할 수 있게 해 줄 domain / standards-conventions / external / internal
+unknown 또는 inventory를 겨냥한다. Gate 2에서 row를 억지로 닫지 않는다. Gate 3은 intent,
+topology, success, constraints, output form 전체를 score하고, purpose / requirements /
+principles / acceptance checks / explicit assumptions-or-risks로 잠근다.
 
 Gate 2는 unknown surfacing과 context/reference 탐색을 하나의 gate로 합친다. 같은
 `02-unknowns.md`에 verified facts, inventoried user/team material, flagged assumptions,
@@ -231,14 +241,16 @@ variation range로 일반화하는 generator다. 세 파일(`03-criteria.md`, `0
 `00-status.md`, `01-Learn/01-intent.md`, `01-Learn/02-unknowns.md`,
 `01-Learn/02-references/README.md`, `02-Example/03-criteria.md`,
 `02-Example/04-wireframe.md`, `03-Architect/05-design.md`,
-`03-Architect/06-tasks.md`. `02-references/`는 더 이상 lazy가 아니라 항상 README
+`03-Architect/07-tasks.md`. `02-references/`는 더 이상 lazy가 아니라 항상 README
 템플릿과 함께 seed되는 보관 슬롯이다. lazy artifact인
-`03-Architect/07-execution.md`, `04-Feedback/08-review.md`, `04-Feedback/09-retrospect.md`는
+`03-Architect/08-execution.md`, `04-Feedback/09-review.md`, `04-Feedback/10-retrospect.md`는
 seed하지 않고 handoff/review/retrospect 시점에 만든다. 이전 numbering(`03-context.md`,
 `04+05-requirements.md`, `04+05+06-requirements.md`, `06-wireframe.md`, `07-design.md`,
-`08-tasks.md`, `09-execution.md`, `10-review.md`, `11-retrospect.md`)은 pre-9-gate
+`08-tasks.md`, `09-execution.md`, `10-review.md`, `11-retrospect.md`)과 이전 wt 9-gate
+파일(`03-Architect/06-tasks.md`, `03-Architect/07-execution.md`,
+`04-Feedback/08-review.md`, `04-Feedback/09-retrospect.md`)은 pre-10-gate
 legacy/starter artifact로만 취급한다. 새 spec이나 새 docs는 그 이름을 만들지 않고, scaffold는
-그런 파일이 남아 있으면 nine-gate 파일을 만들기 전에 정리하도록 거부한다.
+그런 파일이 남아 있으면 ten-gate 파일을 만들기 전에 정리하도록 거부한다.
 
 `planning/specs/<slug>/02-Example/03-criteria.md`는 purpose/success criteria,
 requirements/principles, output form을 담는다. 첫 줄은 한국어 사용자 스토리 line으로 시작한다.
@@ -282,23 +294,28 @@ Gate 5는 principles, decision drivers, viable options, steelman antithesis를 d
 Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw code dump가 아니라
 intent와 component responsibility 중심으로 설명한다.
 
-`planning/specs/<slug>/03-Architect/06-tasks.md`는 작업 목록 section 아래에 sequenced
+`planning/specs/<slug>/03-Architect/06-critic.md`는 public CLI/config/state shape, migration,
+security, cross-module coupling, large UI/workflow behavior shift, weak alternatives처럼 critic trigger가
+발동할 때만 만든다. Verdict는 `APPROVE`, `ITERATE`, `REJECT` 중 하나이고, `ITERATE`/`REJECT`는
+Gate 7 tasking 전에 필요한 가장 작은 design revision을 적는다.
+
+`planning/specs/<slug>/03-Architect/07-tasks.md`는 작업 목록 section 아래에 sequenced
 atomic unit을 checkbox item으로 나열한다. 각 item은 dependency를 적고, dependency가 없는
 item은 parallel 가능하다고 표시할 수 있다.
 
-`planning/specs/<slug>/03-Architect/07-execution.md`는 `03-Architect/06-tasks.md`에서
+`planning/specs/<slug>/03-Architect/08-execution.md`는 `03-Architect/07-tasks.md`에서
 드러난 slice graph를 어떤 execution shape로 실행할지와 그 이유, `wt-work` target,
 TaskDocument path, optional saved Workflow TOML path, PR/landing policy, acceptance checks를
 prose로 기록하는 lazy prep/execution artifact다. 실제 handoff에는 file path, module/symbol,
 issue/task id, acceptance criteria, numbered implementation step, command/config transcript,
 representative example/mock data, named output artifact, or user-accepted residual risk 같은
 concrete execution signal이 있어야 한다. Saved execution plan은 계속
-`<repo-root>/.wt/execution/workflows/<id>.toml`에 있고, `03-Architect/07-execution.md`는
+`<repo-root>/.wt/execution/workflows/<id>.toml`에 있고, `03-Architect/08-execution.md`는
 executable Workflow TOML이 아니다.
 
-Canonical `06-tasks.md` slice graph → execution decision mapping:
+Canonical `07-tasks.md` slice graph → execution decision mapping:
 
-| 06-tasks.md slice graph | Execution decision |
+| 07-tasks.md slice graph | Execution decision |
 | --- | --- |
 | All sequential, single agent | `single` |
 | All independent, same base | `batch` |
@@ -313,23 +330,23 @@ prep 판단이다. 이 값은 direct `wt run task`로 충분하거나, slice들�
 Spec은 `wt-ready` exit 시점에 frozen되지 않는다. Execution 중 `wt-work` phase에서
 findings가 나오면 design, task list, execution shape rationale을 in place로 업데이트할 수
 있다. 선택한 mode가 더 이상 맞지 않거나 실제 Workflow TOML과 spec이 갈라지면
-`03-Architect/07-execution.md`를 rationale과 함께 업데이트한다. Review/check evidence, spec
-drift, and mid-process discoveries는 `planning/specs/<slug>/04-Feedback/08-review.md`에
+`03-Architect/08-execution.md`를 rationale과 함께 업데이트한다. Review/check evidence, spec
+drift, and mid-process discoveries는 `planning/specs/<slug>/04-Feedback/09-review.md`에
 기록한다. Spec과 implementation이 drift하면 조용히 갈라지게 두지 말고 spec을 업데이트해
 다시 맞춘다.
 
-Spec-backed work의 retrospective는 기본적으로 `planning/specs/<slug>/04-Feedback/09-retrospect.md`에 둔다.
+Spec-backed work의 retrospective는 기본적으로 `planning/specs/<slug>/04-Feedback/10-retrospect.md`에 둔다.
 `<repo-root>/.wt/planning/retrospectives/`는 여러 work item을 가로지르는 cross-work learning,
 spec이 없는 legacy/direct work, 또는 의도적으로 한 spec에 묶이지 않는 회고의 fallback이다.
 새 per-work retrospective를 전역 `retrospectives/` 아래에 만들지 않는다.
 
-`04-Feedback/09-retrospect.md`는 작업별 timing record를 포함한다. 최소한 TaskDocument의 expected
+`04-Feedback/10-retrospect.md`는 작업별 timing record를 포함한다. 최소한 TaskDocument의 expected
 duration, estimate basis, 실제 시작/종료/elapsed, 최초 meaningful signal, 사용한
 `wt agent watch` cadence, `needs_input`/report 전이, 개입 이유, 다음 추정 조정을 적는다.
 Spec-backed workflow는 workflow 전체 요약만 쓰지 말고 task/slice별 timing entry를 둔다.
 Cross-work timing 보정은 `<repo-root>/.wt/planning/retrospectives/timing.md` 같은 rolling
 retrospective에 축약할 수 있지만, 이것은 여러 작업을 가로지르는 학습 기록이지 per-work
-`04-Feedback/09-retrospect.md`의 대체물이 아니다. `runtime/agents/<name>/observations/wait-observations.jsonl`과
+`04-Feedback/10-retrospect.md`의 대체물이 아니다. `runtime/agents/<name>/observations/wait-observations.jsonl`과
 `wt agent wait-stats`는 watch heartbeat/timeout 관측 증거로 인용할 수 있으나, 실제 작업
 소요시간의 canonical source로 보지 않는다.
 

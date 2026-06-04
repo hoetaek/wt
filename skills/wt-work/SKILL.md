@@ -261,15 +261,15 @@ If implementation and spec disagree, update the living spec instead of letting
 them drift. Common files:
 
 - `03-Architect/05-design.md` when a design assumption changed.
-- `03-Architect/06-tasks.md` when a slice was too broad, too narrow, or misordered.
-- `03-Architect/07-execution.md` when execution shape or rationale changed.
-- `04-Feedback/08-review.md` for review evidence and mid-process discoveries.
+- `03-Architect/07-tasks.md` when a slice was too broad, too narrow, or misordered.
+- `03-Architect/08-execution.md` when execution shape or rationale changed.
+- `04-Feedback/09-review.md` for review evidence and mid-process discoveries.
 
 Do not silently rewrite approved purpose/requirements in
 `02-Example/03-criteria.md`; surface that change to the user.
 
 If unplanned research happened during execution, record it in
-`04-Feedback/08-review.md` under `## Mid-process discoveries` with a category:
+`04-Feedback/09-review.md` under `## Mid-process discoveries` with a category:
 `domain`, `standards`, `external`, or `internal`. `wt-land` uses this to improve
 future unknown surfacing.
 
@@ -284,9 +284,9 @@ Handle it by threshold, not by reflex:
 
 - **Adjust in `wt-work`** when the change is a downstream re-scope: reorder,
   shrink, split, or refine slices that are not yet running. Update
-  `03-Architect/06-tasks.md` (sequence and scope), `03-Architect/07-execution.md`
+  `03-Architect/07-tasks.md` (sequence and scope), `03-Architect/08-execution.md`
   when the execution shape or rationale moved, and record the trigger in
-  `04-Feedback/08-review.md` under `## Mid-process discoveries` (usually
+  `04-Feedback/09-review.md` under `## Mid-process discoveries` (usually
   `internal` or `domain`).
 - **Return to `wt-ready`** when the discovery changes purpose or requirements
   (`02-Example/03-criteria.md`) rather than the task graph. Surface it to the
