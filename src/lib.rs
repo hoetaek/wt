@@ -115,6 +115,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 accept,
                 reject,
                 block,
+                codex_base,
                 message,
             } => {
                 let status = match (*accept, *reject, *block) {
@@ -123,7 +124,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     (false, false, true) => task_run::REVIEW_BLOCKED,
                     _ => bail!("Pass exactly one of --accept, --reject, or --block"),
                 };
-                commands::task_review::run(ctx, task_run_id, status, message)
+                commands::task_review::run(ctx, task_run_id, status, codex_base.as_deref(), message)
             }
         },
         Commands::Workflow { command } => match command {

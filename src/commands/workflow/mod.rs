@@ -43,12 +43,14 @@ use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
 mod archive;
+mod codex_base_review;
 mod display;
 mod list_command;
 mod repair;
 mod selection;
 mod show_command;
 mod stack_completion;
+mod task_match;
 mod watch_command;
 
 use display::show_workflow;
@@ -496,6 +498,25 @@ cli = "none"
         let mut document = content.parse::<toml_edit::DocumentMut>().unwrap();
         document["last_reported_at"] = toml_edit::value(reported_at);
         document["last_reviewed_at"] = toml_edit::value(reviewed_at);
+        std::fs::write(path, document.to_string()).unwrap();
+    }
+
+    fn record_accepted_codex_base_review(
+        ctx: &Ctx,
+        run_id: &str,
+        review_base: &str,
+        reviewed_at: &str,
+    ) {
+        let run = task_run_update_record(ctx, run_id);
+        task_run::update_codex_base_review_metadata(&run, review_base, "msg-codex-review").unwrap();
+        set_task_run_codex_base_review_timestamp(ctx, run_id, reviewed_at);
+    }
+
+    fn set_task_run_codex_base_review_timestamp(ctx: &Ctx, run_id: &str, reviewed_at: &str) {
+        let path = task_run::resolve(ctx, run_id).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let mut document = content.parse::<toml_edit::DocumentMut>().unwrap();
+        document["codex_base_reviewed_at"] = toml_edit::value(reviewed_at);
         std::fs::write(path, document.to_string()).unwrap();
     }
 
@@ -2148,11 +2169,11 @@ landing = "auto"
 
         let message = err.to_string();
         assert!(message.contains("requires Codex base review evidence before pass"));
-        assert!(message.contains("last review status is missing"));
+        assert!(message.contains("latest Agent Completion Report timestamp is missing"));
         assert!(message.contains("/review --base main"));
         assert!(message.contains("codex review --base main"));
         assert!(message.contains(&format!(
-            "wt task review {} --accept",
+            "wt task review {} --accept --codex-base main",
             record.workflow.tasks[0].run
         )));
         assert_eq!(
@@ -2181,6 +2202,25 @@ landing = "auto"
             &ctx,
             &record.workflow.tasks[0].run,
             "2026-05-18T00:01:00Z",
+            "2026-05-18T00:02:00Z",
+        );
+
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("accepted Codex base review evidence is missing")
+        );
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_RUNNING
+        );
+
+        record_accepted_codex_base_review(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "main",
             "2026-05-18T00:02:00Z",
         );
 
@@ -2233,7 +2273,10 @@ landing = "auto"
         assert!(message.contains("requires Codex base review evidence before pass"));
         assert!(message.contains("/review --base main"));
         assert!(message.contains("codex review --base main"));
-        assert!(message.contains(&format!("wt task review {} --accept", row.runs[0].run)));
+        assert!(message.contains(&format!(
+            "wt task review {} --accept --codex-base main",
+            row.runs[0].run
+        )));
 
         record_accepted_review_after_report(
             &ctx,
@@ -2241,6 +2284,7 @@ landing = "auto"
             "2026-05-18T00:01:00Z",
             "2026-05-18T00:02:00Z",
         );
+        record_accepted_codex_base_review(&ctx, &row.runs[0].run, "main", "2026-05-18T00:02:00Z");
 
         pass(
             &ctx,
@@ -2275,12 +2319,18 @@ landing = "auto"
             "2026-05-18T00:03:00Z",
             "2026-05-18T00:02:00Z",
         );
+        record_accepted_codex_base_review(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "main",
+            "2026-05-18T00:02:00Z",
+        );
 
         let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
 
         let message = err.to_string();
         assert!(message.contains(
-            "accepted review at 2026-05-18T00:02:00Z is older than latest Agent Completion Report at 2026-05-18T00:03:00Z"
+            "accepted Codex base review at 2026-05-18T00:02:00Z is older than latest Agent Completion Report at 2026-05-18T00:03:00Z"
         ));
         assert_eq!(
             task_run_record(&ctx, &record.workflow.tasks[0].run)
@@ -2293,6 +2343,12 @@ landing = "auto"
             &ctx,
             &record.workflow.tasks[0].run,
             "2026-05-18T00:03:00Z",
+            "2026-05-18T00:04:00Z",
+        );
+        record_accepted_codex_base_review(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "main",
             "2026-05-18T00:04:00Z",
         );
 
@@ -2327,8 +2383,9 @@ landing = "auto"
         let expected_message =
             format!("Codex base review passed against {review_base}: <summary/evidence>");
         let expected_command = format!(
-            "wt task review {} --accept {}",
+            "wt task review {} --accept --codex-base {} {}",
             record.workflow.tasks[0].run,
+            shell_arg(review_base),
             shell_arg(&expected_message)
         );
         let unsafe_command = format!("--accept \"{expected_message}\"");
@@ -2867,7 +2924,7 @@ landing = "auto"
         assert!(content.contains("/review --base main"));
         assert!(content.contains("codex review --base main"));
         assert!(!content.contains("codex review --base <parent>"));
-        assert!(content.contains("wt task review <task-run-id> --accept"));
+        assert!(content.contains("wt task review <task-run-id> --accept --codex-base main"));
         assert!(content.contains("concise review evidence note"));
         assert!(content.contains("before passing or landing this workflow task"));
         assert!(!content.contains("record the log"));
@@ -2899,7 +2956,8 @@ landing = "auto"
         let expected_message =
             format!("Codex base review passed against {review_base}: <summary/evidence>");
         let expected_command = format!(
-            "wt task review <task-run-id> --accept {}",
+            "wt task review <task-run-id> --accept --codex-base {} {}",
+            shell_arg(review_base),
             shell_arg(&expected_message)
         );
         let unsafe_command = format!("--accept \"{expected_message}\"");
@@ -2943,6 +3001,10 @@ landing = "auto"
                     last_review_status: None,
                     last_review_message_id: None,
                     last_reviewed_at: None,
+                    codex_base_review_status: None,
+                    codex_base_review_base: None,
+                    codex_base_review_message_id: None,
+                    codex_base_reviewed_at: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                 },
@@ -2980,6 +3042,10 @@ landing = "auto"
                     last_review_status: None,
                     last_review_message_id: None,
                     last_reviewed_at: None,
+                    codex_base_review_status: None,
+                    codex_base_review_base: None,
+                    codex_base_review_message_id: None,
+                    codex_base_reviewed_at: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                 },

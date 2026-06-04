@@ -859,7 +859,7 @@ pub enum TaskCommand {
     },
     /// Send coordinator review feedback to a TaskRun agent
     #[command(
-        long_about = "Send coordinator review feedback to the task agent recorded on a TaskRun.\n\nUse `wt task review <task-run-id> --accept <message>` to accept a report, `--reject` to request changes, or `--block` when the task cannot proceed. Feedback is sent through the file inbox to TaskRun.agent_id with task_run:<id> scope and updates TaskRun review metadata. Rejecting or blocking a passed TaskRun reopens it to running; accepting records metadata only and does not pass a running TaskRun.",
+        long_about = "Send coordinator review feedback to the task agent recorded on a TaskRun.\n\nUse `wt task review <task-run-id> --accept <message>` to accept a report, `--reject` to request changes, or `--block` when the task cannot proceed. Add `--codex-base <parent>` only with `--accept` after running the required Codex base-diff review for that parent. Feedback is sent through the file inbox to TaskRun.agent_id with task_run:<id> scope and updates TaskRun review metadata. Codex base review evidence is stored separately from generic review acceptance. Rejecting or blocking a passed TaskRun reopens it to running; accepting records metadata only and does not pass a running TaskRun.",
         group(ArgGroup::new("review_status").required(true).args(["accept", "reject", "block"]))
     )]
     Review {
@@ -875,6 +875,9 @@ pub enum TaskCommand {
         /// Block the TaskRun on missing input or external state
         #[arg(long)]
         block: bool,
+        /// Record accepted Codex base-diff review evidence for this parent/base
+        #[arg(long = "codex-base", value_name = "PARENT")]
+        codex_base: Option<String>,
         /// Review feedback message to send
         #[arg(value_name = "MESSAGE", num_args = 1..)]
         message: Vec<String>,
@@ -2253,6 +2256,35 @@ mod tests {
                     jobs: 3,
                 }
             }) if workflow.as_deref() == Some("2026-05-16-001")
+        ));
+    }
+
+    #[test]
+    fn task_review_accepts_codex_base_marker() {
+        let cli = parse(&[
+            "wt",
+            "task",
+            "review",
+            "run-feature",
+            "--accept",
+            "--codex-base",
+            "main",
+            "Codex base review passed",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Review {
+                    ref task_run_id,
+                    accept: true,
+                    reject: false,
+                    block: false,
+                    ref codex_base,
+                    ref message,
+                },
+            }) if task_run_id == "run-feature"
+                && codex_base.as_deref() == Some("main")
+                && message == &vec!["Codex base review passed".to_string()]
         ));
     }
 

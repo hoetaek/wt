@@ -2,16 +2,19 @@ use super::resolve_mutating_target;
 use crate::context::Ctx;
 use crate::services::git::GitService;
 use crate::task as task_store;
-use crate::task_run::{self, REVIEW_ACCEPTED, STATUS_PASSED};
+use crate::task_run::STATUS_PASSED;
 use crate::workflow as workflow_store;
-use crate::workflow::render::{codex_base_review_accept_command, shell_arg, workflow_task_label};
+use crate::workflow::render::workflow_task_label;
 use crate::workflow::run::{
     WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
     read_single_workflow_task_states, read_stack_workflow_task_states, run_workflow,
     update_workflow_profile_task_run, update_workflow_task_run,
 };
-use crate::workflow::{WorkflowCodexBaseReview, WorkflowMetadata, WorkflowMode, WorkflowTask};
+use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask};
 use anyhow::{Result, bail};
+
+use super::codex_base_review::validate_required_codex_base_review;
+use super::task_match::{workflow_matrix_task_matches, workflow_task_matches};
 
 pub(super) fn pass_workflow(
     ctx: &Ctx,
@@ -197,123 +200,6 @@ fn pass_indices(
             Ok(vec![running[0].idx])
         }
     }
-}
-
-fn validate_required_codex_base_review(
-    metadata: &WorkflowMetadata,
-    state: &WorkflowTaskState,
-) -> Result<()> {
-    if metadata.policy.review.codex_base != WorkflowCodexBaseReview::Required {
-        return Ok(());
-    }
-    if has_fresh_accepted_codex_base_review(state) {
-        return Ok(());
-    }
-
-    let parent = codex_review_parent(metadata, &state.row)?;
-    let status = codex_base_review_status(state);
-    let accept_command = codex_base_review_accept_command(&state.run_id, &parent);
-    bail!(
-        "Workflow task {} requires Codex base review evidence before pass; {status}. Open a Codex surface and run `{}` against this task. For non-interactive runs, use `{}`. Then record acceptance with `{accept_command}` before running `wt workflow pass`.",
-        workflow_task_label(&state.row),
-        codex_surface_review_command(&parent),
-        codex_cli_review_command(&parent)
-    )
-}
-
-fn has_fresh_accepted_codex_base_review(state: &WorkflowTaskState) -> bool {
-    if state.run.last_review_status != Some(REVIEW_ACCEPTED) {
-        return false;
-    }
-    let Some(reported_at) = state.run.last_reported_at.as_deref() else {
-        return false;
-    };
-    let Some(reviewed_at) = state.run.last_reviewed_at.as_deref() else {
-        return false;
-    };
-    let Some(reported_at) = task_run::normalized_utc_timestamp(reported_at) else {
-        return false;
-    };
-    let Some(reviewed_at) = task_run::normalized_utc_timestamp(reviewed_at) else {
-        return false;
-    };
-    reviewed_at >= reported_at
-}
-
-fn codex_base_review_status(state: &WorkflowTaskState) -> String {
-    if state.run.last_review_status != Some(REVIEW_ACCEPTED) {
-        let status = state
-            .run
-            .last_review_status
-            .map(|status| status.as_str())
-            .unwrap_or("missing");
-        return format!("last review status is {status}");
-    }
-    let Some(reported_at) = state.run.last_reported_at.as_deref() else {
-        return "latest Agent Completion Report timestamp is missing".into();
-    };
-    let Some(reviewed_at) = state.run.last_reviewed_at.as_deref() else {
-        return "accepted review timestamp is missing".into();
-    };
-    let Some(reported_at_normalized) = task_run::normalized_utc_timestamp(reported_at) else {
-        return format!("latest Agent Completion Report timestamp is invalid: {reported_at}");
-    };
-    let Some(reviewed_at_normalized) = task_run::normalized_utc_timestamp(reviewed_at) else {
-        return format!("accepted review timestamp is invalid: {reviewed_at}");
-    };
-    if reviewed_at_normalized < reported_at_normalized {
-        return format!(
-            "accepted review at {reviewed_at} is older than latest Agent Completion Report at {reported_at}"
-        );
-    }
-    "accepted review evidence is incomplete".into()
-}
-
-fn codex_review_parent(metadata: &WorkflowMetadata, row: &WorkflowTask) -> Result<String> {
-    if let Some(parent) = row.parent.clone() {
-        return Ok(parent);
-    }
-    match metadata.base_mode.as_str() {
-        "explicit" => metadata
-            .base
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Workflow base_mode is explicit but base is missing")),
-        other => bail!("workflow pass only supports explicit base, found {other}"),
-    }
-}
-
-fn codex_surface_review_command(parent: &str) -> String {
-    format!("/review --base {}", shell_arg(parent))
-}
-
-fn codex_cli_review_command(parent: &str) -> String {
-    format!("codex review --base {}", shell_arg(parent))
-}
-
-fn workflow_matrix_task_matches(ctx: &Ctx, state: &WorkflowTaskState, target: &str) -> bool {
-    let profile = state.profile.as_deref();
-    if profile.is_some_and(|profile| target == profile) {
-        return true;
-    }
-    if profile.is_some_and(|profile| target == format!("{}:{profile}", state.row.task)) {
-        return true;
-    }
-    if target == state.run.branch {
-        return true;
-    }
-    workflow_task_matches(ctx, &state.row, target)
-}
-
-fn workflow_task_matches(ctx: &Ctx, row: &WorkflowTask, target: &str) -> bool {
-    if row.task == target {
-        return true;
-    }
-    let Ok(task_doc) = task_store::read_task_document(ctx, &row.task) else {
-        return false;
-    };
-    task_doc.title == target
-        || task_store::prepared_branch_name(&task_doc.branch) == Some(target)
-        || task_doc.branch.rsplit('/').next() == Some(target)
 }
 
 fn validate_completable_stack_task(ctx: &Ctx, row: &WorkflowTask) -> Result<()> {

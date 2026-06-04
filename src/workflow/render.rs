@@ -90,8 +90,9 @@ fn codex_base_review_text(
 
 pub(crate) fn codex_base_review_accept_command(task_run_id: &str, review_base: &str) -> String {
     format!(
-        "wt task review {} --accept {}",
+        "wt task review {} --accept --codex-base {} {}",
         task_run_id,
+        shell_arg(review_base),
         shell_arg(&codex_base_review_accept_message(review_base))
     )
 }

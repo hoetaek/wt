@@ -11,29 +11,35 @@ pub(crate) fn run(
     ctx: &Ctx,
     task_run_id: &str,
     status: TaskReviewStatus,
+    codex_base: Option<&str>,
     message: &[String],
 ) -> Result<()> {
     let from = current_actor::resolve_launch_coordinator(ctx, None)?;
-    run_with_actor(ctx, task_run_id, status, message, &from)
+    run_with_actor(ctx, task_run_id, status, codex_base, message, &from)
 }
 
 pub(super) fn run_with_actor(
     ctx: &Ctx,
     task_run_id: &str,
     status: TaskReviewStatus,
+    codex_base: Option<&str>,
     message: &[String],
     from: &AgentId,
 ) -> Result<()> {
     let review_text = review_message_text(message)?;
+    let codex_base = codex_base_review_base(status, codex_base)?;
     let record = resolve_review_task_run(ctx, task_run_id)?;
-    validate_review_sender(&record, from, status, &review_text)?;
+    validate_review_sender(&record, from, status, codex_base.as_deref(), &review_text)?;
     let text = review_message(status, &review_text);
     let to = required_task_agent_id(&record)?;
     let scope = MessageScope::task_run(record.id.clone())?;
 
     let store = runtime_message_store(ctx)?;
     let sent = store.send_scoped_from(from.as_str(), to.as_str(), scope, &text)?;
-    task_run::update_review_metadata(&record, status, &sent.id)?;
+    let updated = task_run::update_review_metadata(&record, status, &sent.id)?;
+    if let Some(review_base) = codex_base.as_deref() {
+        task_run::update_codex_base_review_metadata(&updated, review_base, &sent.id)?;
+    }
     let _wake_result = inbox_wake::wake_sent_message_recipient(ctx, &sent);
 
     if !ctx.quiet {
@@ -41,6 +47,23 @@ pub(super) fn run_with_actor(
     }
 
     Ok(())
+}
+
+fn codex_base_review_base(
+    status: TaskReviewStatus,
+    codex_base: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(review_base) = codex_base else {
+        return Ok(None);
+    };
+    if status != task_run::REVIEW_ACCEPTED {
+        bail!("--codex-base can only be used with --accept");
+    }
+    let review_base = review_base.trim();
+    if review_base.is_empty() {
+        bail!("--codex-base parent cannot be empty");
+    }
+    Ok(Some(review_base.to_string()))
 }
 
 fn resolve_review_task_run(ctx: &Ctx, task_run_id: &str) -> Result<TaskRunRecord> {
@@ -87,11 +110,12 @@ fn validate_review_sender(
     record: &TaskRunRecord,
     from: &AgentId,
     status: TaskReviewStatus,
+    codex_base: Option<&str>,
     message: &str,
 ) -> Result<()> {
     let expected = required_coordinator_id(record)?;
     if from.as_str() != expected.as_str() {
-        let hint = review_sender_mismatch_hint(record, &expected, status, message);
+        let hint = review_sender_mismatch_hint(record, &expected, status, codex_base, message);
         bail!(
             "Current actor id {} does not match TaskRun {} coordinator_id {}; review feedback must be sent by the TaskRun coordinator route.\nHint: {hint}",
             from.as_str(),
@@ -106,13 +130,18 @@ fn review_sender_mismatch_hint(
     record: &TaskRunRecord,
     expected: &AgentId,
     status: TaskReviewStatus,
+    codex_base: Option<&str>,
     message: &str,
 ) -> String {
+    let codex_base = codex_base
+        .map(|review_base| format!(" --codex-base {}", shell_arg(review_base)))
+        .unwrap_or_default();
     format!(
-        "wt as {} -- wt task review {} {} {}",
+        "wt as {} -- wt task review {} {}{} {}",
         shell_arg(expected.as_str()),
         shell_arg(&record.id),
         review_status_flag(status),
+        codex_base,
         shell_arg(message)
     )
 }
@@ -184,6 +213,7 @@ mod tests {
             &ctx,
             &record.id,
             task_run::REVIEW_ACCEPTED,
+            None,
             &["looks".into(), "good".into()],
             &from,
         )
@@ -212,6 +242,79 @@ mod tests {
     }
 
     #[test]
+    fn review_records_codex_base_metadata_only_with_explicit_accept_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            Some("Coordinator"),
+            STATUS_RUNNING,
+        )
+        .unwrap();
+        let from = AgentId::parse("agents/coord-a").unwrap();
+
+        run_with_actor(
+            &ctx,
+            &record.id,
+            task_run::REVIEW_ACCEPTED,
+            Some("main"),
+            &["Codex base review passed".into()],
+            &from,
+        )
+        .unwrap();
+
+        let updated = task_run::read(&record.path).unwrap();
+        assert_eq!(updated.last_review_status, Some(task_run::REVIEW_ACCEPTED));
+        assert_eq!(
+            updated.codex_base_review_status,
+            Some(task_run::REVIEW_ACCEPTED)
+        );
+        assert_eq!(updated.codex_base_review_base.as_deref(), Some("main"));
+        assert_eq!(
+            updated.codex_base_review_message_id,
+            updated.last_review_message_id
+        );
+        assert!(updated.codex_base_reviewed_at.is_some());
+    }
+
+    #[test]
+    fn review_rejects_codex_base_marker_without_accept() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            Some("Coordinator"),
+            STATUS_RUNNING,
+        )
+        .unwrap();
+        let from = AgentId::parse("agents/coord-a").unwrap();
+
+        let err = run_with_actor(
+            &ctx,
+            &record.id,
+            task_run::REVIEW_REJECTED,
+            Some("main"),
+            &["needs changes".into()],
+            &from,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("--codex-base can only be used with --accept")
+        );
+        let updated = task_run::read(&record.path).unwrap();
+        assert!(updated.last_review_status.is_none());
+        assert!(updated.codex_base_review_status.is_none());
+    }
+
+    #[test]
     fn review_reject_reopens_passed_task_run() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
@@ -230,6 +333,7 @@ mod tests {
             &ctx,
             &record.id,
             task_run::REVIEW_REJECTED,
+            None,
             &["needs changes".into()],
             &from,
         )
@@ -261,6 +365,7 @@ mod tests {
             &ctx,
             &record.id,
             task_run::REVIEW_BLOCKED,
+            None,
             &["waiting on input".into()],
             &from,
         )
@@ -299,6 +404,7 @@ mod tests {
             &ctx,
             &running.id,
             task_run::REVIEW_ACCEPTED,
+            None,
             &["accepted".into()],
             &from,
         )
@@ -307,6 +413,7 @@ mod tests {
             &ctx,
             &passed.id,
             task_run::REVIEW_ACCEPTED,
+            None,
             &["accepted".into()],
             &from,
         )
@@ -339,6 +446,7 @@ mod tests {
             &ctx,
             &record.id,
             task_run::REVIEW_REJECTED,
+            None,
             &["needs changes".into()],
             &from,
         )
@@ -391,6 +499,7 @@ mod tests {
             &ctx,
             &record.id,
             task_run::REVIEW_REJECTED,
+            None,
             &["needs changes".into()],
             &from,
         )
@@ -421,6 +530,7 @@ mod tests {
             &ctx,
             &record.id,
             task_run::REVIEW_REJECTED,
+            None,
             &["needs changes".into()],
             &from,
         )
@@ -455,6 +565,7 @@ mod tests {
             &ctx,
             &record.id,
             task_run::REVIEW_REJECTED,
+            None,
             &["needs changes".into()],
             &from,
         )
@@ -484,6 +595,7 @@ mod tests {
             &ctx,
             &record.id,
             task_run::REVIEW_REJECTED,
+            None,
             &["needs changes".into()],
             &from,
         )

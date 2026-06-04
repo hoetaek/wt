@@ -535,7 +535,9 @@ wt task review <task-run-id> --accept|--reject|--block "<message>"
 `task_run:<task-run-id>` scope. It records `last_review_status`, `last_review_message_id`,
 `last_reviewed_at`, and `updated_at` on the TaskRun. `--reject` and `--block` reopen a passed
 TaskRun to `running` after sending feedback; `--accept` records metadata only and does not pass a
-running TaskRun. Task-agent hooks may claim `task_run:<id>` messages only when both `WT_AGENT_ID`
+running TaskRun. `--accept --codex-base <parent>` additionally records dedicated
+`codex_base_review_*` evidence for required Codex base-diff review gates; generic `--accept`
+metadata alone does not satisfy those gates. Task-agent hooks may claim `task_run:<id>` messages only when both `WT_AGENT_ID`
 matches `TaskRun.agent_id` and `WT_TASK_RUN_ID` matches the scoped TaskRun id. Passing `--agent` to
 the low-level hook consumer is not by itself task-run ownership evidence.
 
@@ -1489,10 +1491,10 @@ concise evidence; a missing/unavailable run is not by itself a blocker if report
 `required` means the coordinator must run that review against the resolved workflow
 base or stack parent and record concise evidence before `wt workflow pass`, landing,
 or cleanup. Required Codex base review is enforced by `wt workflow pass`: the TaskRun
-must also have accepted review metadata from `wt task review <task-run-id> --accept`
-after the latest Agent Completion Report and after the coordinator records the
-evidence note. This key does not replace normal coordinator review or pull-request
-review gates.
+must also have dedicated accepted Codex base review metadata from
+`wt task review <task-run-id> --accept --codex-base <resolved-parent>` after the
+latest Agent Completion Report and after the coordinator records the evidence note.
+This key does not replace normal coordinator review or pull-request review gates.
 
 If a pull request exists, "review passes" is an evidence-backed pull-request review
 gate, not an inferred state from green checks or an agent completion report. The
@@ -1823,7 +1825,10 @@ TaskRun의 `agent_id`로 `task_run:<id>` scope 메시지를 보내고 TaskRun re
 `wt as agents/<recorded> -- wt task review <task-run-id> --accept|--reject|--block "<message>"`
 형태다. Late review after pass는 정상 flow다. `--reject`와 `--block`은 passed TaskRun을
 `running`으로 되열고, task agent는 같은 TaskRun route로 다시 `wt task report`를 보낼 수
-있다. `--accept`는 metadata-only이며 running TaskRun을 `passed`로 만들지 않는다. Pull request
+있다. `--accept`는 metadata-only이며 running TaskRun을 `passed`로 만들지 않는다.
+`--accept --codex-base <parent>`는 required Codex base-diff review gate를 위한
+`codex_base_review_*` evidence도 별도로 기록하며, 일반 `--accept` metadata만으로는 그 gate를
+충족하지 않는다. Pull request
 review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한 check를 다시 돌린 뒤
 commit/push하고 PR 본문이 stale해졌을 때만 PR 본문과 Agent Completion Report를 갱신한다.
 실행자나 coordinator가 `wt inspect`, 필요한 경우 pull request, 보고를 확인한 뒤
