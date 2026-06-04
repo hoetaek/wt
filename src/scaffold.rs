@@ -53,7 +53,7 @@ impl DocKind {
                     dir.join("02-Example/03-criteria.md"),
                     dir.join("02-Example/04-wireframe.md"),
                     dir.join("03-Architect/05-design.md"),
-                    dir.join("03-Architect/06-tasks.md"),
+                    dir.join("03-Architect/07-tasks.md"),
                 ]
             }
             Self::Task => vec![storage.tasks_dir().join(format!("{slug}.toml"))],
@@ -62,7 +62,7 @@ impl DocKind {
                 storage
                     .specs_dir()
                     .join(slug)
-                    .join("04-Feedback/09-retrospect.md"),
+                    .join("04-Feedback/10-retrospect.md"),
             ],
         }
     }
@@ -105,7 +105,7 @@ impl DocKind {
                     render_spec_design(),
                 ),
                 (
-                    PathBuf::from(format!("planning/specs/{slug}/03-Architect/06-tasks.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/03-Architect/07-tasks.md")),
                     render_spec_tasks(),
                 ),
             ],
@@ -119,7 +119,7 @@ impl DocKind {
             )],
             Self::Retrospect => vec![(
                 PathBuf::from(format!(
-                    "planning/specs/{slug}/04-Feedback/09-retrospect.md"
+                    "planning/specs/{slug}/04-Feedback/10-retrospect.md"
                 )),
                 render_retrospect(slug),
             )],
@@ -178,10 +178,11 @@ progress: 0 / 25 / 50 / 75 / 100, state: not-started / active / needs-approval /
 | 3 Criteria | 0 | not-started |\n\
 | 4 Wireframe | 0 | not-started |\n\
 | 5 Design | 0 | not-started |\n\
-| 6 Tasks | 0 | not-started |\n\
-| 7 Execution | 0 | not-started |\n\
-| 8 Review | 0 | not-started |\n\
-| 9 Retrospect | 0 | not-started |\n\n\
+| 6 Critic | 0 | not-started |\n\
+| 7 Tasks | 0 | not-started |\n\
+| 8 Artifact / Execution | 0 | not-started |\n\
+| 9 Review | 0 | not-started |\n\
+| 10 Retrospect | 0 | not-started |\n\n\
 ## Return Log\n\
 - \n"
     )
@@ -370,7 +371,7 @@ mod tests {
                 dir.path()
                     .join(".wt/planning/specs/foo/03-Architect/05-design.md"),
                 dir.path()
-                    .join(".wt/planning/specs/foo/03-Architect/06-tasks.md")
+                    .join(".wt/planning/specs/foo/03-Architect/07-tasks.md")
             ]
         );
         assert_eq!(
@@ -385,7 +386,7 @@ mod tests {
             DocKind::Retrospect.paths(&storage, "foo"),
             vec![
                 dir.path()
-                    .join(".wt/planning/specs/foo/04-Feedback/09-retrospect.md")
+                    .join(".wt/planning/specs/foo/04-Feedback/10-retrospect.md")
             ]
         );
     }
@@ -434,7 +435,7 @@ mod tests {
         );
         assert_eq!(
             spec[7].0,
-            PathBuf::from("planning/specs/foo/03-Architect/06-tasks.md")
+            PathBuf::from("planning/specs/foo/03-Architect/07-tasks.md")
         );
         assert!(spec[0].1.contains("## Gate 진행"));
         assert!(spec[2].1.contains("## Domain concepts"));
