@@ -36,6 +36,10 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
     ));
     ctx.ui
         .print_dim(&format!("  Landing: {}", metadata.policy.landing.as_str()));
+    ctx.ui.print_dim(&format!(
+        "  Review codex_base: {}",
+        metadata.policy.review.codex_base.as_str()
+    ));
     ctx.ui
         .print_dim(&format!("  Tasks: {}", metadata.tasks.len()));
 

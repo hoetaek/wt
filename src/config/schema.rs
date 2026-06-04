@@ -38,6 +38,7 @@ pub struct Config {
     pub worktree: WorktreeConfig,
     pub setup: SetupConfig,
     pub workflow: WorkflowConfig,
+    pub review: ReviewConfig,
     pub profile: Option<ProfileConfig>,
     pub site: Option<SiteConfig>,
     pub editor: EditorConfig,
@@ -51,6 +52,11 @@ pub struct Config {
 pub struct WorkflowConfig {
     pub pull_request: Option<WorkflowDefaultPullRequestMode>,
     pub landing: Option<WorkflowDefaultLandingPolicy>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ReviewConfig {
+    pub codex_base: Option<ReviewCodexBasePolicy>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +76,19 @@ pub enum WorkflowDefaultLandingPolicy {
 pub struct WorkflowDefaultPolicy {
     pub pull_request: WorkflowDefaultPullRequestMode,
     pub landing: WorkflowDefaultLandingPolicy,
+    pub review: ReviewDefaultPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewCodexBasePolicy {
+    None,
+    Advisory,
+    Required,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReviewDefaultPolicy {
+    pub codex_base: ReviewCodexBasePolicy,
 }
 
 impl<'de> Deserialize<'de> for WorkflowConfig {
@@ -103,6 +122,31 @@ impl<'de> Deserialize<'de> for WorkflowConfig {
                 other => {
                     return Err(D::Error::custom(format!(
                         "unknown [workflow] field `{other}`; expected `pull_request` or `landing`"
+                    )));
+                }
+            }
+        }
+
+        Ok(config)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReviewConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = HashMap::<String, toml::Value>::deserialize(deserializer)?;
+        let mut config = ReviewConfig::default();
+
+        for (key, value) in raw {
+            match key.as_str() {
+                "codex_base" => {
+                    config.codex_base = Some(parse_review_codex_base::<D::Error>(&value)?);
+                }
+                other => {
+                    return Err(D::Error::custom(format!(
+                        "unknown [review] field `{other}`; expected `codex_base`"
                     )));
                 }
             }
@@ -150,6 +194,24 @@ where
         ))),
         None => Err(E::custom(format!(
             "[workflow].landing must be a string: \"manual\" or \"auto\" ({})",
+            workflow_value_type(value)
+        ))),
+    }
+}
+
+fn parse_review_codex_base<E>(value: &toml::Value) -> std::result::Result<ReviewCodexBasePolicy, E>
+where
+    E: DeError,
+{
+    match value.as_str() {
+        Some("none") => Ok(ReviewCodexBasePolicy::None),
+        Some("advisory") => Ok(ReviewCodexBasePolicy::Advisory),
+        Some("required") => Ok(ReviewCodexBasePolicy::Required),
+        Some(other) => Err(E::custom(format!(
+            "[review].codex_base must be one of \"none\", \"advisory\", or \"required\"; `{other}` is not supported"
+        ))),
+        None => Err(E::custom(format!(
+            "[review].codex_base must be a string: \"none\", \"advisory\", or \"required\" ({})",
             workflow_value_type(value)
         ))),
     }
@@ -924,6 +986,16 @@ impl Config {
                 .workflow
                 .landing
                 .unwrap_or(WorkflowDefaultLandingPolicy::Manual),
+            review: self.review_default_policy(),
+        }
+    }
+
+    pub fn review_default_policy(&self) -> ReviewDefaultPolicy {
+        ReviewDefaultPolicy {
+            codex_base: self
+                .review
+                .codex_base
+                .unwrap_or(ReviewCodexBasePolicy::None),
         }
     }
 

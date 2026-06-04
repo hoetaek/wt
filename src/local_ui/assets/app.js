@@ -76,6 +76,8 @@ const STRINGS = {
     siteLabel: "provider",
     pullRequestLabel: "pull_request",
     landingLabel: "landing",
+    reviewLabel: "review",
+    codexBaseLabel: "codex base",
     worktreePathLabel: "path",
     namingLabel: "naming",
     namingCommandLabel: "command",
@@ -181,8 +183,10 @@ const STRINGS = {
     ifExistsHelp: "Runs only when this path exists.",
     workingDirHelp: "Runs from this directory.",
     workflowCardHelp: "Default review and landing behavior for workflow tasks.",
+    reviewCardHelp: "Default Codex native review evidence collection before coordinator pass or landing.",
     pullRequestHelp: "ready means create a PR that is immediately ready for review.",
     landingHelp: "landing means the post-review step that merges accepted work and cleans up the worktree.",
+    codexBaseHelp: "required means the coordinator must run Codex base-diff review against the resolved parent; advisory records evidence when available.",
     agentHelp: "CLI used for new agent work.",
     agentRuntimeHelp: "Agent launch and prompt delivery behavior.",
     issuesHelp: "Issue provider wt uses for issue-backed work.",
@@ -390,6 +394,8 @@ const STRINGS = {
     siteLabel: "provider",
     pullRequestLabel: "pull_request",
     landingLabel: "landing",
+    reviewLabel: "review",
+    codexBaseLabel: "codex base",
     worktreePathLabel: "path",
     namingLabel: "naming",
     namingCommandLabel: "command",
@@ -495,8 +501,10 @@ const STRINGS = {
     ifExistsHelp: "이 경로가 있을 때만 실행합니다.",
     workingDirHelp: "이 디렉터리에서 명령을 실행합니다.",
     workflowCardHelp: "워크플로우 작업의 기본 PR 생성과 landing 동작입니다.",
+    reviewCardHelp: "coordinator pass 또는 landing 전 Codex native review evidence 수집 기본값입니다.",
     pullRequestHelp: "ready는 PR을 만들 때 바로 리뷰 가능한 상태로 만든다는 뜻입니다.",
     landingHelp: "landing은 리뷰가 끝난 작업을 parent branch에 합치고 worktree를 정리하는 단계입니다.",
+    codexBaseHelp: "required는 coordinator가 resolved parent 기준 Codex base-diff review를 반드시 실행한다는 뜻이고, advisory는 가능한 경우 evidence로 남긴다는 뜻입니다.",
     agentHelp: "새 agent 작업을 시작할 때 사용할 CLI입니다.",
     agentRuntimeHelp: "agent 실행과 prompt 전달 방식입니다.",
     issuesHelp: "이슈 기반 작업에서 wt가 사용할 이슈 제공자입니다.",
@@ -1208,7 +1216,7 @@ function workflowCard(row) {
     row.profile ? pill(`profile ${row.profile}`, "violet") : "",
     row.profiles.length ? pill(`${row.profiles.length} profiles`, "violet") : "",
     row.origin ? pill(`${row.origin.provider} ${row.origin.id}`, "violet") : "",
-    pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
+    pill(`${row.policy.pull_request}/${row.policy.landing}/review:${row.policy.review_codex_base}`, "amber"),
   ], [row.path], row.body_summary || row.state_error, groupColor(workflowUiGroup(row)), [
     detail(t("body"), row.body || row.state_error, "prose", row.body_summary || row.state_error),
     detail(t("workflowTaskRuns"), formatWorkflowTaskRuns(row.task_run_groups || []), "source"),
@@ -1317,12 +1325,14 @@ function configEffectiveRecord(config) {
     listPills: [
       pill(`${t("pullRequestLabel")} ${config.workflow.pull_request}`, "green"),
       pill(`${t("landingLabel")} ${config.workflow.landing}`, "amber"),
+      config.review ? pill(`${t("reviewLabel")} ${config.review.codex_base}`, "violet") : "",
       ...configSourceLayerPills(config),
     ],
     summary: t("configAppliedSummary"),
     pills: [
       pill(`${t("pullRequestLabel")} ${config.workflow.pull_request}`, "green"),
       pill(`${t("landingLabel")} ${config.workflow.landing}`, "amber"),
+      config.review ? pill(`${t("reviewLabel")} ${config.review.codex_base}`, "violet") : "",
       ...configSourceLayerPills(config),
       config.selected_profile ? pill(`${t("selectedProfile")}: ${config.selected_profile}`, "violet") : "",
     ],
@@ -1444,6 +1454,17 @@ function configEffectiveCards(config, options = {}) {
       items: [
         { label: t("pullRequestLabel"), value: config.workflow.pull_request, description: t("pullRequestHelp") },
         { label: t("landingLabel"), value: config.workflow.landing, description: t("landingHelp") },
+      ],
+    });
+  }
+  if (config.review) {
+    cards.push({
+      kicker: "[review]",
+      value: "",
+      description: t("reviewCardHelp"),
+      tone: "amber",
+      items: [
+        { label: t("codexBaseLabel"), value: config.review.codex_base, description: t("codexBaseHelp") },
       ],
     });
   }
@@ -1912,7 +1933,7 @@ function workflowPills(row, group = workflowUiGroup(row)) {
     row.task_runs.missing ? pill(`${row.task_runs.missing} missing`, "red") : "",
     row.profile ? pill(`${t("profileLabel")} ${row.profile}`, "violet") : "",
     row.profiles.length ? pill(`${row.profiles.length} profiles`, "violet") : "",
-    pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
+    pill(`${row.policy.pull_request}/${row.policy.landing}/review:${row.policy.review_codex_base}`, "amber"),
   ];
 }
 
@@ -1940,7 +1961,7 @@ function workflowFactFields(row) {
     { label: "Workflow", value: row.id },
     { label: t("workflowModeLabel"), value: row.mode },
     { label: t("workflowBaseLabel"), value: row.base || row.base_mode },
-    { label: t("workflowPolicyLabel"), value: `${row.policy.pull_request}/${row.policy.landing}` },
+    { label: t("workflowPolicyLabel"), value: `${row.policy.pull_request}/${row.policy.landing}/review:${row.policy.review_codex_base}` },
     { label: t("workflowRunnableLabel"), value: row.runnable.runnable_count },
     { label: t("workflowUpdatedAtLabel"), value: row.updated_at },
     row.profile ? { label: t("profileLabel"), value: row.profile } : null,
@@ -2367,7 +2388,7 @@ function workflowCanvasInspector(row) {
     : "";
   const facts = detailFields([
     { label: t("workflowModeLabel"), value: row.mode },
-    { label: t("workflowPolicyLabel"), value: `${row.policy.pull_request}/${row.policy.landing}` },
+    { label: t("workflowPolicyLabel"), value: `${row.policy.pull_request}/${row.policy.landing}/review:${row.policy.review_codex_base}` },
     { label: t("workflowRunnableLabel"), value: row.runnable.runnable_count },
   ]);
   return `<aside class="workflow-canvas-inspector" aria-label="${escapeHtml(t("workflowCanvasInspector"))}"><h5>${escapeHtml(t("workflowCanvasInspector"))}</h5>${facts}<details><summary>${escapeHtml(t("workflowCanvasSource"))}</summary>${sourceHtml}</details><div class="workflow-canvas-legend"><span>${escapeHtml(t("workflowCanvasLegend"))}</span><p>${escapeHtml(t("workflowCanvasSolidEdge"))}</p><p>${escapeHtml(t("workflowCanvasDashedEdge"))}</p><p>${escapeHtml(t("workflowCanvasAttentionEdge"))}</p></div></aside>`;
@@ -2990,7 +3011,7 @@ function workflowScanRow(row) {
       row.task_runs.running ? pill(`${row.task_runs.running} ${stateLabel("running").toLowerCase()}`, "green") : "",
       row.task_runs.failed ? pill(`${row.task_runs.failed} ${stateLabel("failed").toLowerCase()}`, "red") : "",
       row.task_runs.missing ? pill(`${row.task_runs.missing} missing`, "red") : "",
-      pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
+      pill(`${row.policy.pull_request}/${row.policy.landing}/review:${row.policy.review_codex_base}`, "amber"),
     ],
     paths: [row.path],
     detail: formatWorkflowTaskRuns(row.task_run_groups || []) || row.source_text,

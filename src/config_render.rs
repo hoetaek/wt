@@ -1,8 +1,8 @@
 use crate::config::{
     AgentCli, AgentConfig, Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
-    ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig,
-    WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
-    WorkspaceBrowserMode, WorkspaceConfig, WorktreeConfig,
+    ReadyMode, ReviewCodexBasePolicy, ReviewDefaultPolicy, SetupConfig, SiteConfig, SiteProvider,
+    SubmitMode, TestConfig, WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy,
+    WorkflowDefaultPullRequestMode, WorkspaceBrowserMode, WorkspaceConfig, WorktreeConfig,
 };
 
 pub fn render_effective_config(config: &Config) -> String {
@@ -11,6 +11,7 @@ pub fn render_effective_config(config: &Config) -> String {
     append_worktree_section(&mut s, &config.worktree);
     append_setup_section(&mut s, &config.setup);
     append_workflow_section(&mut s, config.workflow_default_policy());
+    append_review_section(&mut s, config.review_default_policy());
     if let Some(issues) = config.issues.as_ref() {
         append_issues_section(&mut s, issues);
     }
@@ -133,6 +134,14 @@ fn append_workflow_section(s: &mut String, policy: WorkflowDefaultPolicy) {
     s.push_str(&format!(
         "landing = {}\n",
         toml_quote(workflow_default_landing_name(policy.landing))
+    ));
+}
+
+fn append_review_section(s: &mut String, policy: ReviewDefaultPolicy) {
+    s.push_str("\n[review]\n");
+    s.push_str(&format!(
+        "codex_base = {}\n",
+        toml_quote(review_codex_base_name(policy.codex_base))
     ));
 }
 
@@ -348,6 +357,14 @@ fn workflow_default_landing_name(policy: WorkflowDefaultLandingPolicy) -> &'stat
     }
 }
 
+fn review_codex_base_name(policy: ReviewCodexBasePolicy) -> &'static str {
+    match policy {
+        ReviewCodexBasePolicy::None => "none",
+        ReviewCodexBasePolicy::Advisory => "advisory",
+        ReviewCodexBasePolicy::Required => "required",
+    }
+}
+
 fn editor_placement_name(placement: &EditorPlacement) -> &'static str {
     match placement {
         EditorPlacement::CmuxSurface => "cmux_surface",
@@ -432,9 +449,9 @@ fn toml_quote(value: &str) -> String {
 mod tests {
     use super::render_effective_config;
     use crate::config::{
-        Config, EditorConfig, EditorPlacement, SiteConfig, SiteProvider, WorkflowConfig,
-        WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig, WorkspaceBrowserMode,
-        WorkspaceChromeDevtoolsConfig, WorkspaceConfig,
+        Config, EditorConfig, EditorPlacement, ReviewCodexBasePolicy, ReviewConfig, SiteConfig,
+        SiteProvider, WorkflowConfig, WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig,
+        WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig, WorkspaceConfig,
     };
 
     #[test]
@@ -450,6 +467,21 @@ mod tests {
         assert!(rendered.contains("[workflow]\n"));
         assert!(rendered.contains("pull_request = \"draft\"\n"));
         assert!(rendered.contains("landing = \"manual\"\n"));
+        assert!(rendered.contains("[review]\n"));
+        assert!(rendered.contains("codex_base = \"none\"\n"));
+    }
+
+    #[test]
+    fn review_section_uses_effective_policy_defaults() {
+        let rendered = render_effective_config(&Config {
+            review: ReviewConfig {
+                codex_base: Some(ReviewCodexBasePolicy::Required),
+            },
+            ..Config::default()
+        });
+
+        assert!(rendered.contains("[review]\n"));
+        assert!(rendered.contains("codex_base = \"required\"\n"));
     }
 
     #[test]

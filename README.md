@@ -438,6 +438,9 @@ Workflow preparation reads policy from the effective config:
 [workflow]
 pull_request = "none"  # none | draft | ready
 landing = "manual"     # manual | auto
+
+[review]
+codex_base = "none"    # none | advisory | required
 ```
 
 `pull_request = "none"` means workflow agents report `PR=none`,
@@ -448,11 +451,22 @@ explicit landing direction. `landing = "auto"` means review passing is enough
 approval for the coordinator to proceed to landing and cleanup, without
 bypassing dirty-worktree, check, pull-request review, review-thread, or ancestry
 safety gates.
+`review.codex_base = "none"` means no additional Codex base-diff review
+evidence is required by default. `advisory` asks the coordinator to run
+`codex review --base <resolved-parent>` when practical and record concise
+evidence. `required` means the coordinator must not pass or land the prepared
+workflow task until that Codex base-diff review has run against the resolved
+workflow base or stack parent, the concise evidence note exists, and
+`wt task review <task-run-id> --accept` has recorded accepted review metadata
+for the TaskRun. `wt workflow pass` rejects required-review tasks without that
+accepted review metadata.
 
-`wt config` prints the effective `[workflow]` policy, including the built-in
-defaults above. `wt init` writes an explicit starter `[workflow]` policy so the
-PR and landing behavior for newly prepared workflows is visible in the generated
-config.
+`wt config` prints the effective `[workflow]` and `[review]` policy, including
+the built-in defaults above. `wt init` writes an explicit starter `[workflow]`
+policy so the PR and landing behavior for newly prepared workflows is visible in
+the generated config. It only writes `[review]` when preserving an existing
+explicit review policy, so local init does not accidentally override a shared
+or root review requirement.
 
 When `[workspace]` is configured, `wt config` also prints effective workspace
 colors, including built-in defaults. `wt init` writes the starter color map;

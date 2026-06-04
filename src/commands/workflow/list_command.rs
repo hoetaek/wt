@@ -89,6 +89,7 @@ struct RunnableMetadata {
 struct WorkflowPolicySummary {
     pull_request: String,
     landing: String,
+    review_codex_base: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,6 +197,7 @@ fn workflow_row(ctx: &Ctx, path: &Path, id: String, metadata: WorkflowMetadata) 
         policy: WorkflowPolicySummary {
             pull_request: metadata.policy.pull_request.as_str().into(),
             landing: metadata.policy.landing.as_str().into(),
+            review_codex_base: metadata.policy.review.codex_base.as_str().into(),
         },
         updated_at: metadata.updated_at,
         state_error,
@@ -464,8 +466,8 @@ fn workflow_row_summary(row: &WorkflowListRow, group: WorkflowDisplayGroup) -> S
         parts.push(action);
     }
     parts.push(format!(
-        "policy {}/{}",
-        row.policy.pull_request, row.policy.landing
+        "policy {}/{} review:{}",
+        row.policy.pull_request, row.policy.landing, row.policy.review_codex_base
     ));
 
     format!("{}  {}", row.title, parts.join(" · "))
@@ -646,6 +648,7 @@ run = "run-2026-05-18-001-schema"
         assert_eq!(row.runnable.runnable_count, 1);
         assert_eq!(row.profile.as_deref(), Some("codex"));
         assert_eq!(row.policy.pull_request, "none");
+        assert_eq!(row.policy.review_codex_base, "none");
         assert_eq!(row.state_error, None);
         assert_eq!(report.invalid_workflows[0].id, "bad");
     }
@@ -729,13 +732,13 @@ run = "run-2026-05-18-003-passed"
         assert!(rendered.contains("│ waiting"));
         assert!(rendered.contains("│ passed"));
         assert!(rendered.contains(
-            "│  •  Ship search  id 2026-05-18-001 · mode batch · runs 1 prepared · policy none/manual"
+            "│  •  Ship search  id 2026-05-18-001 · mode batch · runs 1 prepared · policy none/manual review:none"
         ));
         assert!(rendered.contains(
-            "│  •  waiting-task  id 2026-05-18-002 · mode stack · runs 1 running · reason waiting for running task · policy none/manual"
+            "│  •  waiting-task  id 2026-05-18-002 · mode stack · runs 1 running · reason waiting for running task · policy none/manual review:none"
         ));
         assert!(rendered.contains(
-            "│  •  passed-task  id 2026-05-18-003 · mode single · runs 1 passed · profile codex · policy none/manual"
+            "│  •  passed-task  id 2026-05-18-003 · mode single · runs 1 passed · profile codex · policy none/manual review:none"
         ));
         assert!(!rendered.contains("body Keep search work coordinated."));
         assert!(!rendered.contains("file <repo-root>/.wt/execution/workflows/2026-05-18-001.toml"));

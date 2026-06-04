@@ -5,7 +5,8 @@ use crate::task_run::{
 };
 use crate::workflow::run::WorkflowTaskState;
 use crate::workflow::{
-    WorkflowLandingPolicy, WorkflowMetadata, WorkflowPolicy, WorkflowPullRequestMode, WorkflowTask,
+    WorkflowCodexBaseReview, WorkflowLandingPolicy, WorkflowMetadata, WorkflowPolicy,
+    WorkflowPullRequestMode, WorkflowTask,
 };
 use std::path::Path;
 
@@ -68,11 +69,29 @@ fn landing_wait_text(policy: &WorkflowPolicy) -> &'static str {
     }
 }
 
+fn codex_base_review_text(
+    policy: &WorkflowPolicy,
+    review_base: &str,
+    review_base_label: &str,
+) -> Option<String> {
+    let review_command = format!("codex review --base {}", shell_arg(review_base));
+    match policy.review.codex_base {
+        WorkflowCodexBaseReview::None => None,
+        WorkflowCodexBaseReview::Advisory => Some(format!(
+            "Workflow review policy sets `review.codex_base = \"advisory\"`. After your report, the coordinator may run a Codex base-diff review against the {review_base_label}:\n\n```bash\n{review_command}\n```\n\nRecord a concise review evidence note with the command, parent, final findings, and any follow-up. If that coordinator review asks for changes, keep ownership in this branch and report again."
+        )),
+        WorkflowCodexBaseReview::Required => Some(format!(
+            "Workflow review policy sets `review.codex_base = \"required\"`. After your report, the coordinator must run a Codex base-diff review against the {review_base_label} before passing or landing this workflow task:\n\n```bash\n{review_command}\n```\n\nRecord a concise review evidence note, then record accepted TaskRun review metadata with `wt task review <task-run-id> --accept \"Codex base review passed against {review_base}: <summary/evidence>\"` before passing or landing this workflow task. If that coordinator review asks for changes, keep ownership in this branch and report again."
+        )),
+    }
+}
+
 #[cfg(test)]
 fn default_workflow_policy() -> WorkflowPolicy {
     WorkflowPolicy {
         pull_request: WorkflowPullRequestMode::None,
         landing: WorkflowLandingPolicy::Manual,
+        review: Default::default(),
     }
 }
 
@@ -112,6 +131,7 @@ pub(crate) fn test_workflow_policy(pull_request: WorkflowPullRequestMode) -> Wor
     WorkflowPolicy {
         pull_request,
         landing: WorkflowLandingPolicy::Manual,
+        review: Default::default(),
     }
 }
 
@@ -120,6 +140,7 @@ pub(crate) fn test_auto_landing_policy() -> WorkflowPolicy {
     WorkflowPolicy {
         pull_request: WorkflowPullRequestMode::None,
         landing: WorkflowLandingPolicy::Auto,
+        review: Default::default(),
     }
 }
 
@@ -611,7 +632,7 @@ fn workflow_handoff_policy(
                 }
             };
 
-            let after_send = if let Some(pass) = pass {
+            let mut after_send = if let Some(pass) = pass {
                 format!(
                     "{}\n\nWhen review passes, wait for the coordinator to advance the workflow. The coordinator will run:\n\n```bash\n{}\n```\n\n{}",
                     review_followup(policy),
@@ -625,6 +646,10 @@ fn workflow_handoff_policy(
                     landing_wait_text(policy)
                 )
             };
+            if let Some(codex_review) = codex_base_review_text(policy, pr_base, pr_base_label) {
+                after_send.push_str("\n\n");
+                after_send.push_str(&codex_review);
+            }
             (pull_request_instructions, pr_report_value, after_send)
         }
     }

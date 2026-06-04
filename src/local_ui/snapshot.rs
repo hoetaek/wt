@@ -1,7 +1,7 @@
 use crate::config::{
     AgentCli, AgentConfig, Config, ConfigSource, EditorPlacement, IssueProviderType, ReadyMode,
-    SetupConfig, SiteProvider, SubmitMode, TestConfig, WorkflowDefaultLandingPolicy,
-    WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
+    ReviewCodexBasePolicy, SetupConfig, SiteProvider, SubmitMode, TestConfig,
+    WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
 };
 use crate::config_render::render_effective_config;
 use crate::context::{
@@ -127,6 +127,7 @@ struct ConfigSummary {
     worktree: Option<WorktreeSummary>,
     setup: Option<SetupSummary>,
     workflow: WorkflowDefaultSummary,
+    review: ReviewSummary,
     issues: Option<IssuesSummary>,
     site: Option<SiteSummary>,
     editor: Option<EditorSummary>,
@@ -145,6 +146,11 @@ struct SourceFileSummary {
 struct WorkflowDefaultSummary {
     pull_request: String,
     landing: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ReviewSummary {
+    codex_base: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -412,6 +418,7 @@ struct TaskRunCounts {
 struct WorkflowPolicySummary {
     pull_request: String,
     landing: String,
+    review_codex_base: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -786,6 +793,7 @@ fn workflow_summary(
         policy: WorkflowPolicySummary {
             pull_request: metadata.policy.pull_request.as_str().into(),
             landing: metadata.policy.landing.as_str().into(),
+            review_codex_base: metadata.policy.review.codex_base.as_str().into(),
         },
         updated_at: metadata.updated_at,
         state_error,
@@ -1522,6 +1530,9 @@ fn config_summary(ctx: &Ctx) -> ConfigSummary {
             pull_request: workflow_default_pull_request(policy.pull_request).into(),
             landing: workflow_default_landing(policy.landing).into(),
         },
+        review: ReviewSummary {
+            codex_base: review_codex_base(policy.review.codex_base).into(),
+        },
         issues: ctx.config.issues.as_ref().map(|issues| IssuesSummary {
             provider: match issues.provider {
                 IssueProviderType::Linear => "linear".into(),
@@ -1780,6 +1791,14 @@ fn workflow_default_landing(policy: WorkflowDefaultLandingPolicy) -> &'static st
     match policy {
         WorkflowDefaultLandingPolicy::Manual => "manual",
         WorkflowDefaultLandingPolicy::Auto => "auto",
+    }
+}
+
+fn review_codex_base(policy: ReviewCodexBasePolicy) -> &'static str {
+    match policy {
+        ReviewCodexBasePolicy::None => "none",
+        ReviewCodexBasePolicy::Advisory => "advisory",
+        ReviewCodexBasePolicy::Required => "required",
     }
 }
 
@@ -2419,6 +2438,7 @@ mod tests {
             policy: workflow::WorkflowPolicy {
                 pull_request: workflow::WorkflowPullRequestMode::None,
                 landing: workflow::WorkflowLandingPolicy::Manual,
+                review: Default::default(),
             },
             tasks: vec![
                 workflow::WorkflowTask {

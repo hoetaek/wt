@@ -32,6 +32,9 @@ DJANGO_ENV = "dev"
 pull_request = "draft"
 landing = "auto"
 
+[review]
+codex_base = "required"
+
 [profile]
 name = "codex"
 
@@ -134,6 +137,10 @@ commands = [
         WorkflowDefaultPullRequestMode::Draft
     );
     assert_eq!(workflow_policy.landing, WorkflowDefaultLandingPolicy::Auto);
+    assert_eq!(
+        workflow_policy.review.codex_base,
+        ReviewCodexBasePolicy::Required
+    );
     assert_eq!(config.profile.unwrap().name.as_deref(), Some("codex"));
 
     let site = config.site.unwrap();
@@ -402,6 +409,9 @@ provider = "github"
 pull_request = "draft"
 landing = "manual"
 
+[review]
+codex_base = "advisory"
+
 [site]
 provider = "herd"
 name = "root"
@@ -421,6 +431,9 @@ cli = "codex"
 [workflow]
 pull_request = "none"
 landing = "auto"
+
+[review]
+codex_base = "required"
 
 [site]
 provider = "traefik"
@@ -449,6 +462,10 @@ copy = ["CLAUDE.local.md"]
         WorkflowDefaultPullRequestMode::None
     );
     assert_eq!(workflow_policy.landing, WorkflowDefaultLandingPolicy::Auto);
+    assert_eq!(
+        workflow_policy.review.codex_base,
+        ReviewCodexBasePolicy::Required
+    );
 }
 
 #[test]
@@ -511,6 +528,79 @@ landing = "auto"
     let policy = config.workflow_default_policy();
     assert_eq!(policy.pull_request, WorkflowDefaultPullRequestMode::Draft);
     assert_eq!(policy.landing, WorkflowDefaultLandingPolicy::Auto);
+}
+
+#[test]
+fn review_policy_merges_per_field() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config")).unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
+[review]
+codex_base = "advisory"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt/config/local.toml"),
+        r#"
+[review]
+codex_base = "required"
+"#,
+    )
+    .unwrap();
+
+    let policy = Config::load(dir.path()).unwrap().workflow_default_policy();
+    assert_eq!(policy.review.codex_base, ReviewCodexBasePolicy::Required);
+}
+
+#[test]
+fn review_policy_profile_overlay_merges_per_field() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config/profiles/codex")).unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
+[review]
+codex_base = "advisory"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join(".wt/config/profiles/codex/profile.toml"),
+        r#"
+[review]
+codex_base = "required"
+"#,
+    )
+    .unwrap();
+
+    let base = Config::load_file(&dir.path().join(".wt.toml")).unwrap();
+    let config = Config::load_profile(dir.path(), "codex", &base)
+        .unwrap()
+        .unwrap();
+    let policy = config.workflow_default_policy();
+    assert_eq!(policy.review.codex_base, ReviewCodexBasePolicy::Required);
+}
+
+#[test]
+fn review_policy_rejects_unknown_values() {
+    let err = toml::from_str::<Config>("[review]\ncodex_base = \"strict\"\n").unwrap_err();
+
+    assert!(err.to_string().contains("strict"));
+    assert!(err.to_string().contains("[review].codex_base"));
+}
+
+#[test]
+fn review_policy_rejects_boolean_values() {
+    let err = toml::from_str::<Config>("[review]\ncodex_base = true\n").unwrap_err();
+
+    assert!(err.to_string().contains("[review].codex_base"));
+    assert!(err.to_string().contains("boolean"));
 }
 
 #[test]

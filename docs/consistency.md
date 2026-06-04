@@ -1025,7 +1025,7 @@ layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 
 | `worktree.copy_as` | extend, `(from, to)` 쌍 dedupe | 같은 from/to 쌍은 한 번만. 다른 from이면 둘 다 살아남는다. |
 | `setup.deps` | extend (현재 dedupe 없음) | 같은 dep을 두 layer가 적으면 두 번 실행된다. dep script는 idempotent하게 짠다. |
 | `setup.env`, `setup.env_files[path]`, `workspace.colors` | HashMap extend (key-level overwrite) | 같은 key를 윗 layer가 덮어쓴다. |
-| `workflow.pull_request`, `workflow.landing`, `editor.command`, `editor.placement`, `workspace.browser`, `workspace.chrome_devtools` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. |
+| `workflow.pull_request`, `workflow.landing`, `review.codex_base`, `editor.command`, `editor.placement`, `workspace.browser`, `workspace.chrome_devtools` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. |
 | `workspace` (Option 섹션) | deep-merge (both Some) | 두 layer가 모두 `[workspace]`를 가지면 필드별로 위 규칙대로 합친다. |
 | `site`, `test`, `issues` (Option 섹션) | wholesale REPLACE if Some | 윗 layer가 `[site]`/`[test]`/`[issues]`를 가지면 아랫 layer의 같은 섹션이 통째로 사라진다. 한 필드만 바꾸려면 base의 모든 필드를 다시 적는다. |
 | `agent.{cli, args, command, ready, submit, timeout, send_after}` | per-field presence-based REPLACE | 윗 layer가 명시한 필드만 덮어쓴다. |
@@ -1457,6 +1457,9 @@ Canonical config shape:
 [workflow]
 pull_request = "none"  # none | draft | ready
 landing = "manual"     # manual | auto
+
+[review]
+codex_base = "none"    # none | advisory | required
 ```
 
 `pull_request` is the default pull-request handoff intent for workflow tasks. `none`
@@ -1465,13 +1468,24 @@ draft pull requests and leave them draft. `ready` means agents open pull request
 are ready for review immediately. `ready` is the canonical name; `open`, `review`,
 boolean `true`, and boolean `false` are not aliases.
 
-`landing` is the coordinator preference after review passes. Review is always part of
-the coordinator flow, and config cannot disable review. `manual` means review completes
-and the coordinator stops before merge or cleanup until the user explicitly directs
-landing. `auto` means review passing is enough approval for the coordinator to proceed
-to landing and cleanup. `auto` does not bypass dirty-worktree checks, configured check
-commands, required pull-request checks, unresolved review threads, branch ancestry
-checks, workflow mode ordering, or any other landing safety gate.
+`landing` is the coordinator preference after review passes. Coordinator review is
+always part of the flow, and config cannot disable that review. `manual` means review
+completes and the coordinator stops before merge or cleanup until the user explicitly
+directs landing. `auto` means review passing is enough approval for the coordinator to
+proceed to landing and cleanup. `auto` does not bypass dirty-worktree checks,
+configured check commands, required pull-request checks, unresolved review threads,
+branch ancestry checks, workflow mode ordering, or any other landing safety gate.
+
+`review.codex_base` is an additional Codex-native base-diff evidence policy for the
+coordinator. `none` means no `codex review --base <resolved-parent>` evidence is
+required. `advisory` asks the coordinator to run it when practical and record concise
+evidence, but a missing/unavailable run is not by itself a blocker if reported.
+`required` means the coordinator must run it against the resolved workflow base or
+stack parent and record concise evidence before `wt workflow pass`, landing, or
+cleanup. Required Codex base review is enforced by `wt workflow pass`: the TaskRun
+must also have accepted review metadata from `wt task review <task-run-id> --accept`
+after the coordinator records the evidence note. This key does not replace normal
+coordinator review or pull-request review gates.
 
 If a pull request exists, "review passes" is an evidence-backed pull-request review
 gate, not an inferred state from green checks or an agent completion report. The
@@ -1509,6 +1523,9 @@ The Workflow file stores the effective policy snapshot once at workflow level:
 [policy]
 pull_request = "none"
 landing = "manual"
+
+[policy.review]
+codex_base = "none"
 ```
 
 Workflow policy is intent, not state: actual pull-request review result, merge status,
@@ -1517,14 +1534,19 @@ TaskDocument cleanup remain outside Workflow policy. `wt inspect`, pull-request 
 Git commands, `wt workflow pass`, and `wt done` continue to own those checks and
 transitions explicitly.
 
-The built-in config defaults are `pull_request = "none"` and `landing = "manual"`.
+The built-in config defaults are `pull_request = "none"`, `landing = "manual"`, and
+`review.codex_base = "none"`.
 Explicit workflow preparation flags override the config for one run while keeping the
 same value names and failing early for conflicting forms instead of introducing aliases.
-`wt config` shows the effective `[workflow]` policy, including built-in defaults, so
-scripts and humans can inspect the actual policy that new workflow preparation will use.
+`wt config` shows the effective `[workflow]` and `[review]` policy, including built-in
+defaults, so scripts and humans can inspect the actual policy that new workflow
+preparation will use.
 `wt init` does not write a commented optional `[workflow]` tutorial block; generated config
 writes an explicit starter `[workflow]` policy with `pull_request = "none"` and `landing = "manual"`
 unless it is preserving an existing explicit workflow policy from the target config.
+It writes `[review]` only when preserving an existing explicit review policy, so local
+init does not materialize `codex_base = "none"` as an accidental override of a shared
+or root requirement.
 `wt workflow show` displays the prepared policy snapshot from the workflow file, not the
 current `.wt.toml` value.
 
@@ -1595,7 +1617,7 @@ inventory surface이며 Workflow, TaskRun, branch, worktree 목록 의미를 갖
 `wt workflow show <id>`는 한 Workflow file을 읽는 canonical one-shot observation surface다.
 기본 human 출력은 Workflow meta(path, mode, base, title/body/origin, policy, task count)와
 번호 매긴 task row, task file path, branch, parent를 보여준다. `--json`은 같은 대상에 대해
-`path`, `mode`, `base`, `title`, `pull_request`, `landing`, `tasks[]`를 출력하며,
+`path`, `mode`, `base`, `title`, `pull_request`, `landing`, `review.codex_base`, `tasks[]`를 출력하며,
 `tasks[]` 각 record는 `order`, `task`, `status`, `branch`, `parent`, `title`을 가진다.
 `status`는 linked TaskRun의 durable lifecycle 값(`prepared`, `running`, `passed`, `failed`,
 `skipped`)만 사용하고, JSON mode에서 linked TaskRun이나 TaskDocument를 판독할 수 없으면

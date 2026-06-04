@@ -3,7 +3,10 @@ use crate::commands::editor;
 use crate::commands::issue_selection;
 use crate::commands::task as task_command;
 #[cfg(test)]
-use crate::config::{WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode};
+use crate::config::{
+    ReviewCodexBasePolicy, ReviewConfig, WorkflowDefaultLandingPolicy,
+    WorkflowDefaultPullRequestMode,
+};
 use crate::context::Ctx;
 use crate::task::{self as task_store, PreparedTask};
 #[cfg(test)]
@@ -33,8 +36,8 @@ use crate::workflow::run::{
 };
 #[cfg(test)]
 use crate::workflow::{
-    WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowOrigin, WorkflowPullRequestMode,
-    WorkflowTask,
+    WorkflowCodexBaseReview, WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowOrigin,
+    WorkflowPullRequestMode, WorkflowTask,
 };
 use anyhow::{Result, bail};
 use std::env;
@@ -475,6 +478,14 @@ cli = "none"
         branch: Option<&str>,
     ) {
         task_run::update(ctx, &row.run, status, branch, None).unwrap();
+    }
+
+    fn task_run_update_record(ctx: &Ctx, run_id: &str) -> task_run::TaskRunRecord {
+        task_run::list(ctx)
+            .unwrap()
+            .into_iter()
+            .find(|record| record.id == run_id)
+            .unwrap()
     }
 
     fn write_workflow_with_parent(
@@ -1626,6 +1637,7 @@ cli = "none"
         );
         workflow.policy.pull_request = WorkflowPullRequestMode::None;
         workflow.policy.landing = WorkflowLandingPolicy::Manual;
+        workflow.policy.review.codex_base = WorkflowCodexBaseReview::Required;
         let record = workflow_store::create(&ctx, workflow).unwrap();
 
         show(&ctx, Some(&record.id)).unwrap();
@@ -1633,6 +1645,7 @@ cli = "none"
         let dims = ui.dims.lock().unwrap().join("\n");
         assert!(dims.contains("Pull request: none"));
         assert!(dims.contains("Landing: manual"));
+        assert!(dims.contains("Review codex_base: required"));
     }
 
     #[test]
@@ -1642,6 +1655,9 @@ cli = "none"
             workflow: crate::config::WorkflowConfig {
                 pull_request: Some(WorkflowDefaultPullRequestMode::Draft),
                 landing: Some(WorkflowDefaultLandingPolicy::Auto),
+            },
+            review: ReviewConfig {
+                codex_base: Some(ReviewCodexBasePolicy::Required),
             },
             ..Config::default()
         };
@@ -1664,10 +1680,16 @@ cli = "none"
             WorkflowPullRequestMode::Draft
         );
         assert_eq!(record.workflow.policy.landing, WorkflowLandingPolicy::Auto);
+        assert_eq!(
+            record.workflow.policy.review.codex_base,
+            WorkflowCodexBaseReview::Required
+        );
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("pull_request = \"draft\""));
         assert!(content.contains("[policy]"));
         assert!(content.contains("landing = \"auto\""));
+        assert!(content.contains("[policy.review]"));
+        assert!(content.contains("codex_base = \"required\""));
     }
 
     #[test]
@@ -1982,6 +2004,107 @@ landing = "auto"
                 STATUS_PASSED
             );
         }
+    }
+
+    #[test]
+    fn workflow_pass_requires_accepted_review_for_required_codex_base_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let mut record = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["feature"]);
+        record.workflow.policy.review.codex_base = WorkflowCodexBaseReview::Required;
+        workflow_store::write(&ctx, &record.path, &mut record.workflow).unwrap();
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("feature"),
+        );
+
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("requires Codex base review evidence before pass"));
+        assert!(message.contains("last review status is missing"));
+        assert!(message.contains("codex review --base main"));
+        assert!(message.contains(&format!(
+            "wt task review {} --accept",
+            record.workflow.tasks[0].run
+        )));
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_RUNNING
+        );
+
+        let run = task_run_update_record(&ctx, &record.workflow.tasks[0].run);
+        task_run::update_review_metadata(&run, task_run::REVIEW_ACCEPTED, "msg-review").unwrap();
+
+        pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap();
+
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_PASSED
+        );
+    }
+
+    #[test]
+    fn workflow_pass_requires_accepted_review_for_required_matrix_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        write_profile(dir.path(), "alpha");
+        write_profile(dir.path(), "beta");
+        write_task(
+            dir.path(),
+            "add-schema",
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        );
+        let ctx = ctx(dir.path());
+        let mut record =
+            prepare_matrix_workflow(&ctx, &["add-schema".into()], &strings(&["alpha", "beta"]));
+        record.workflow.policy.review.codex_base = WorkflowCodexBaseReview::Required;
+        workflow_store::write(&ctx, &record.path, &mut record.workflow).unwrap();
+        let row = &record.workflow.tasks[0];
+        for profile_run in &row.runs {
+            task_run::update(
+                &ctx,
+                &profile_run.run,
+                STATUS_RUNNING,
+                Some(&format!("add-schema-{}", profile_run.profile)),
+                None,
+            )
+            .unwrap();
+        }
+
+        let err = pass(
+            &ctx,
+            record.path.to_str().unwrap(),
+            Some("add-schema:alpha"),
+            false,
+        )
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("requires Codex base review evidence before pass"));
+        assert!(message.contains("codex review --base main"));
+        assert!(message.contains(&format!("wt task review {} --accept", row.runs[0].run)));
+
+        let alpha = task_run_update_record(&ctx, &row.runs[0].run);
+        task_run::update_review_metadata(&alpha, task_run::REVIEW_ACCEPTED, "msg-review").unwrap();
+
+        pass(
+            &ctx,
+            record.path.to_str().unwrap(),
+            Some("add-schema:alpha"),
+            false,
+        )
+        .unwrap();
+
+        let alpha = task_run_record(&ctx, &row.runs[0].run).unwrap();
+        let beta = task_run_record(&ctx, &row.runs[1].run).unwrap();
+        assert_eq!(alpha.status, STATUS_PASSED);
+        assert_eq!(beta.status, STATUS_RUNNING);
     }
 
     #[test]
@@ -2331,7 +2454,8 @@ landing = "auto"
             runs: Vec::new(),
         };
         let workflow_path = PathBuf::from("/repo/.wt/execution/workflows/2026-05-16-001.toml");
-        let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
+        let mut policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
+        policy.review.codex_base = WorkflowCodexBaseReview::Required;
 
         let content = workflow_task_prompt_content_with_policy_and_parent(
             "title = \"API\"\n",
@@ -2346,7 +2470,9 @@ landing = "auto"
                 "gh pr create --body-file <pr-body-file> --base validated-runtime-parent"
             )
         );
+        assert!(content.contains("codex review --base validated-runtime-parent"));
         assert!(!content.contains("gh pr create --body-file <pr-body-file> --base stored-parent"));
+        assert!(!content.contains("codex review --base stored-parent"));
     }
 
     #[test]
@@ -2494,6 +2620,26 @@ landing = "auto"
 
         assert!(content.contains("landing and cleanup after its dirty-worktree"));
         assert!(content.contains("safety checks pass"));
+    }
+
+    #[test]
+    fn workflow_prompt_describes_required_codex_base_review_policy() {
+        let mut policy = test_workflow_policy(WorkflowPullRequestMode::None);
+        policy.review.codex_base = WorkflowCodexBaseReview::Required;
+
+        let content = workflow_batch_task_prompt_content_for_policy("title = \"API\"\n", &policy);
+
+        assert!(content.contains("Workflow review policy sets `review.codex_base = \"required\"`"));
+        assert!(content.contains("coordinator must run a Codex base-diff review"));
+        assert!(content.contains("against the workflow base branch"));
+        assert!(content.contains("codex review --base main"));
+        assert!(!content.contains("codex review --base <parent>"));
+        assert!(content.contains("wt task review <task-run-id> --accept"));
+        assert!(content.contains("concise review evidence note"));
+        assert!(content.contains("before passing or landing this workflow task"));
+        assert!(!content.contains("record the log"));
+        assert!(content.contains("Workflow policy sets `pull_request = \"none\"`"));
+        assert!(!content.contains("gh pr create"));
     }
 
     #[test]

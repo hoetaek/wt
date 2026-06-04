@@ -18,7 +18,13 @@ pub(crate) struct WorkflowShowSnapshot {
     pub(crate) title: Option<String>,
     pub(crate) pull_request: String,
     pub(crate) landing: String,
+    pub(crate) review: WorkflowShowReviewPolicySnapshot,
     pub(crate) tasks: Vec<WorkflowShowTaskSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct WorkflowShowReviewPolicySnapshot {
+    pub(crate) codex_base: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +81,9 @@ pub(crate) fn collect_workflow_snapshot(
         title: metadata.title.clone(),
         pull_request: metadata.policy.pull_request.as_str().to_string(),
         landing: metadata.policy.landing.as_str().to_string(),
+        review: WorkflowShowReviewPolicySnapshot {
+            codex_base: metadata.policy.review.codex_base.as_str().to_string(),
+        },
         tasks,
     })
 }

@@ -1,8 +1,8 @@
 use crate::cli::{InitAgent, InitIssueProvider, InitSiteProvider};
 use crate::config::{
-    AgentCli, AgentConfig, Config, CopyAsEntry, WORKSPACE_DEFAULT_COLORS,
-    WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
-    WorkspaceBrowserMode,
+    AgentCli, AgentConfig, Config, CopyAsEntry, ReviewCodexBasePolicy, ReviewDefaultPolicy,
+    WORKSPACE_DEFAULT_COLORS, WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy,
+    WorkflowDefaultPullRequestMode, WorkspaceBrowserMode,
 };
 use crate::context::{Ctx, PromptItem};
 use crate::error::WtError;
@@ -76,6 +76,7 @@ enum InitSection {
     Issues,
     Site,
     Workflow,
+    Review,
     ProfileAgent,
     ProfileAgentPrompt,
     Worktree,
@@ -93,6 +94,7 @@ impl InitSection {
             InitSection::Issues => "issues",
             InitSection::Site => "site",
             InitSection::Workflow => "workflow",
+            InitSection::Review => "review",
             InitSection::ProfileAgent => "profile.agent",
             InitSection::ProfileAgentPrompt => "profile.agent.prompt",
             InitSection::Worktree => "worktree",
@@ -142,6 +144,7 @@ struct InitDefaults {
     from_existing_config: bool,
     agent: Option<AgentConfig>,
     workflow_policy: Option<WorkflowDefaultPolicy>,
+    review_policy: Option<ReviewDefaultPolicy>,
     issue_provider: Option<InitIssueProvider>,
     gh_user: Option<String>,
     site_provider: Option<InitSiteProvider>,
@@ -302,6 +305,10 @@ impl InitDefaults {
         let workflow_policy = (config.workflow.pull_request.is_some()
             || config.workflow.landing.is_some())
         .then(|| config.workflow_default_policy());
+        let review_policy = config
+            .review
+            .codex_base
+            .map(|codex_base| ReviewDefaultPolicy { codex_base });
         let agent = config
             .profile
             .as_ref()
@@ -327,6 +334,7 @@ impl InitDefaults {
             from_existing_config: true,
             agent,
             workflow_policy,
+            review_policy,
             issue_provider,
             gh_user,
             site_provider,
@@ -759,6 +767,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     let workflow_policy = defaults
         .workflow_policy
         .unwrap_or_else(default_workflow_policy);
+    let review_policy = defaults.review_policy;
     if is_interactive_wizard(options) {
         print_wizard_step(
             ctx,
@@ -820,6 +829,9 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     }
 
     append_workflow_policy(&mut s, workflow_policy, &mut sections);
+    if let Some(review_policy) = review_policy {
+        append_review_policy(&mut s, review_policy, &mut sections);
+    }
 
     if let Some(profile) = &profile {
         sections.push(InitSection::ProfileAgent);
@@ -1303,6 +1315,20 @@ fn append_workflow_policy(
     s.push_str(&format!(
         "landing = {}\n\n",
         toml_quote(workflow_landing_name(policy.landing))
+    ));
+}
+
+fn append_review_policy(
+    s: &mut String,
+    policy: ReviewDefaultPolicy,
+    sections: &mut Vec<InitSection>,
+) {
+    sections.push(InitSection::Review);
+    s.push_str("[review]\n");
+    s.push_str("# Codex base-diff review evidence 수집: none | advisory | required\n");
+    s.push_str(&format!(
+        "codex_base = {}\n\n",
+        toml_quote(review_codex_base_name(policy.codex_base))
     ));
 }
 
@@ -2794,6 +2820,9 @@ fn default_workflow_policy() -> WorkflowDefaultPolicy {
     WorkflowDefaultPolicy {
         pull_request: WorkflowDefaultPullRequestMode::None,
         landing: WorkflowDefaultLandingPolicy::Manual,
+        review: ReviewDefaultPolicy {
+            codex_base: ReviewCodexBasePolicy::None,
+        },
     }
 }
 
@@ -2809,6 +2838,14 @@ fn workflow_landing_name(policy: WorkflowDefaultLandingPolicy) -> &'static str {
     match policy {
         WorkflowDefaultLandingPolicy::Manual => "manual",
         WorkflowDefaultLandingPolicy::Auto => "auto",
+    }
+}
+
+fn review_codex_base_name(policy: ReviewCodexBasePolicy) -> &'static str {
+    match policy {
+        ReviewCodexBasePolicy::None => "none",
+        ReviewCodexBasePolicy::Advisory => "advisory",
+        ReviewCodexBasePolicy::Required => "required",
     }
 }
 
@@ -3101,6 +3138,7 @@ mod tests {
         );
         assert!(plan.detected_signals.is_empty());
         assert!(plan.content.contains("[workflow]"));
+        assert!(!plan.content.contains("[review]"));
         assert!(plan.content.contains("pull_request = \"none\""));
         assert!(plan.content.contains("landing = \"manual\""));
         assert!(plan.content.contains(
@@ -5044,6 +5082,9 @@ send_after = 4
 pull_request = "draft"
 landing = "auto"
 
+[review]
+codex_base = "required"
+
 [workspace]
 tabs = ["existing", "vim"]
 colors = { task = "", issue = "cyan" }
@@ -5092,6 +5133,9 @@ colors = { task = "", issue = "cyan" }
         assert_eq!(agent.command.as_deref(), Some("claude --resume"));
         assert_eq!(policy.pull_request, WorkflowDefaultPullRequestMode::Draft);
         assert_eq!(policy.landing, WorkflowDefaultLandingPolicy::Auto);
+        assert_eq!(policy.review.codex_base, ReviewCodexBasePolicy::Required);
+        assert!(content.contains("[review]"));
+        assert!(content.contains("codex_base = \"required\""));
         let workspace = config.workspace.unwrap();
         assert_eq!(
             workspace.tabs,

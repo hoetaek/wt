@@ -2,15 +2,15 @@ use super::resolve_mutating_target;
 use crate::context::Ctx;
 use crate::services::git::GitService;
 use crate::task as task_store;
-use crate::task_run::STATUS_PASSED;
+use crate::task_run::{REVIEW_ACCEPTED, STATUS_PASSED};
 use crate::workflow as workflow_store;
-use crate::workflow::render::workflow_task_label;
+use crate::workflow::render::{shell_arg, workflow_task_label};
 use crate::workflow::run::{
     WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
     read_single_workflow_task_states, read_stack_workflow_task_states, run_workflow,
     update_workflow_profile_task_run, update_workflow_task_run,
 };
-use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask};
+use crate::workflow::{WorkflowCodexBaseReview, WorkflowMetadata, WorkflowMode, WorkflowTask};
 use anyhow::{Result, bail};
 
 pub(super) fn pass_workflow(
@@ -35,6 +35,9 @@ pub(super) fn pass_workflow(
         return Ok(());
     }
 
+    for idx in &pass_indices {
+        validate_required_codex_base_review(&metadata, &states[*idx])?;
+    }
     if metadata.mode == WorkflowMode::Stack {
         for idx in &pass_indices {
             validate_completable_stack_task(ctx, &metadata.tasks[*idx])?;
@@ -84,6 +87,9 @@ fn pass_matrix_workflow(
         return Ok(());
     }
 
+    for state in &passed {
+        validate_required_codex_base_review(metadata, state)?;
+    }
     for state in &passed {
         let profile = state
             .profile
@@ -191,6 +197,49 @@ fn pass_indices(
             Ok(vec![running[0].idx])
         }
     }
+}
+
+fn validate_required_codex_base_review(
+    metadata: &WorkflowMetadata,
+    state: &WorkflowTaskState,
+) -> Result<()> {
+    if metadata.policy.review.codex_base != WorkflowCodexBaseReview::Required {
+        return Ok(());
+    }
+    if state.run.last_review_status == Some(REVIEW_ACCEPTED) {
+        return Ok(());
+    }
+
+    let parent = codex_review_parent(metadata, &state.row)?;
+    let status = state
+        .run
+        .last_review_status
+        .map(|status| status.as_str())
+        .unwrap_or("missing");
+    bail!(
+        "Workflow task {} requires Codex base review evidence before pass; last review status is {status}. Run `{}` and record acceptance with `wt task review {} --accept \"Codex base review passed against {}: <summary/evidence>\"` before running `wt workflow pass`.",
+        workflow_task_label(&state.row),
+        codex_review_command(&parent),
+        state.run_id,
+        parent
+    )
+}
+
+fn codex_review_parent(metadata: &WorkflowMetadata, row: &WorkflowTask) -> Result<String> {
+    if let Some(parent) = row.parent.clone() {
+        return Ok(parent);
+    }
+    match metadata.base_mode.as_str() {
+        "explicit" => metadata
+            .base
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Workflow base_mode is explicit but base is missing")),
+        other => bail!("workflow pass only supports explicit base, found {other}"),
+    }
+}
+
+fn codex_review_command(parent: &str) -> String {
+    format!("codex review --base {}", shell_arg(parent))
 }
 
 fn workflow_matrix_task_matches(ctx: &Ctx, state: &WorkflowTaskState, target: &str) -> bool {

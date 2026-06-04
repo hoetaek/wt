@@ -1531,6 +1531,7 @@ fn is_movable_shared_section(section: &str) -> bool {
                 | "site"
                 | "workspace"
                 | "agent"
+                | "review"
                 | "test"
                 | "issues"
                 | "editor"

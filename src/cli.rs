@@ -772,7 +772,7 @@ pub enum RunCommand {
     },
     /// Start runnable tasks from a saved workflow
     #[command(
-        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts. In non-interactive shells, pass WORKFLOW explicitly.\n\nThis does not list, edit, repair, or pass workflow tasks; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff using `wt task report \"Agent Completion Report: ...\"` with workflow scope derived from the TaskRun, plus fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow pass ...` command. Stack prompts include `--run-next`."
+        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts. In non-interactive shells, pass WORKFLOW explicitly.\n\nThis does not list, edit, repair, or pass workflow tasks; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff using `wt task report \"Agent Completion Report: ...\"` with workflow scope derived from the TaskRun, plus fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation, the prepared [policy.review].codex_base value for Codex base-diff review evidence, and include their `wt workflow pass ...` command. Stack prompts include `--run-next`."
     )]
     Workflow {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -980,7 +980,7 @@ pub enum WorkflowCommand {
     },
     /// Show workflow metadata and task statuses
     #[command(
-        long_about = "Show one saved <repo-root>/.wt/execution/workflows/<id>.toml Workflow file with its prepared policy snapshot and linked TaskRun statuses.\n\nHuman output preserves the compact meta section plus numbered task rows. Use global --json for the one-shot machine-readable observation surface: path, mode, base, title, pull_request, landing, and tasks with order, task, status, branch, parent, and title. This command is read-only and its exit code means command success or failure only."
+        long_about = "Show one saved <repo-root>/.wt/execution/workflows/<id>.toml Workflow file with its prepared policy snapshot and linked TaskRun statuses.\n\nHuman output preserves the compact meta section plus numbered task rows. Use global --json for the one-shot machine-readable observation surface: path, mode, base, title, pull_request, landing, review.codex_base, and tasks with order, task, status, branch, parent, and title. This command is read-only and its exit code means command success or failure only."
     )]
     Show {
         /// Workflow TOML path, shorthand id, or "latest" (default)
@@ -2281,6 +2281,7 @@ mod tests {
         assert!(help.contains("workflow scope derived from the TaskRun"));
         assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("prepared [policy].pull_request"));
+        assert!(help.contains("prepared [policy.review].codex_base"));
         assert!(help.contains("wt workflow pass"));
     }
 

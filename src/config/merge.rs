@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use super::schema::{PROMPT_COMMON_SCOPE, PROMPT_RUNTIME_MODES, prompt_append_mode};
 use super::{
-    AgentConfig, Config, CopyAsEntry, EditorConfig, SetupConfig, WorkflowConfig, WorkspaceConfig,
-    WorktreeConfig,
+    AgentConfig, Config, CopyAsEntry, EditorConfig, ReviewConfig, SetupConfig, WorkflowConfig,
+    WorkspaceConfig, WorktreeConfig,
 };
 
 pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
@@ -17,6 +17,9 @@ pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
     }
     if profile.workflow != WorkflowConfig::default() {
         merge_workflow_config(&mut merged.workflow, profile.workflow);
+    }
+    if profile.review != ReviewConfig::default() {
+        merge_review_config(&mut merged.review, profile.review);
     }
     if profile.profile.is_some() {
         merged.profile = profile.profile;
@@ -200,6 +203,12 @@ fn merge_workflow_config(base: &mut WorkflowConfig, profile: WorkflowConfig) {
     }
     if profile.landing.is_some() {
         base.landing = profile.landing;
+    }
+}
+
+fn merge_review_config(base: &mut ReviewConfig, profile: ReviewConfig) {
+    if profile.codex_base.is_some() {
+        base.codex_base = profile.codex_base;
     }
 }
 
