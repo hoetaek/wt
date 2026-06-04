@@ -452,11 +452,12 @@ approval for the coordinator to proceed to landing and cleanup, without
 bypassing dirty-worktree, check, pull-request review, review-thread, or ancestry
 safety gates.
 `review.codex_base = "none"` means no additional Codex base-diff review
-evidence is required by default. `advisory` asks the coordinator to run
-`codex review --base <resolved-parent>` when practical and record concise
-evidence. `required` means the coordinator must not pass or land the prepared
-workflow task until that Codex base-diff review has run against the resolved
-workflow base or stack parent, the concise evidence note exists, and
+evidence is required by default. `advisory` asks the coordinator to open a Codex
+surface and run `/review --base <resolved-parent>` when practical, with
+`codex review --base <resolved-parent>` as the non-interactive fallback, and
+record concise evidence. `required` means the coordinator must not pass or land
+the prepared workflow task until that Codex base-diff review has run against the
+resolved workflow base or stack parent, the concise evidence note exists, and
 `wt task review <task-run-id> --accept` has recorded accepted review metadata
 for the TaskRun. `wt workflow pass` rejects required-review tasks without that
 accepted review metadata.

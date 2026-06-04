@@ -2025,6 +2025,7 @@ landing = "auto"
         let message = err.to_string();
         assert!(message.contains("requires Codex base review evidence before pass"));
         assert!(message.contains("last review status is missing"));
+        assert!(message.contains("/review --base main"));
         assert!(message.contains("codex review --base main"));
         assert!(message.contains(&format!(
             "wt task review {} --accept",
@@ -2087,6 +2088,7 @@ landing = "auto"
 
         let message = err.to_string();
         assert!(message.contains("requires Codex base review evidence before pass"));
+        assert!(message.contains("/review --base main"));
         assert!(message.contains("codex review --base main"));
         assert!(message.contains(&format!("wt task review {} --accept", row.runs[0].run)));
 
@@ -2470,8 +2472,10 @@ landing = "auto"
                 "gh pr create --body-file <pr-body-file> --base validated-runtime-parent"
             )
         );
+        assert!(content.contains("/review --base validated-runtime-parent"));
         assert!(content.contains("codex review --base validated-runtime-parent"));
         assert!(!content.contains("gh pr create --body-file <pr-body-file> --base stored-parent"));
+        assert!(!content.contains("/review --base stored-parent"));
         assert!(!content.contains("codex review --base stored-parent"));
     }
 
@@ -2630,8 +2634,9 @@ landing = "auto"
         let content = workflow_batch_task_prompt_content_for_policy("title = \"API\"\n", &policy);
 
         assert!(content.contains("Workflow review policy sets `review.codex_base = \"required\"`"));
-        assert!(content.contains("coordinator must run a Codex base-diff review"));
+        assert!(content.contains("coordinator must open a Codex surface"));
         assert!(content.contains("against the workflow base branch"));
+        assert!(content.contains("/review --base main"));
         assert!(content.contains("codex review --base main"));
         assert!(!content.contains("codex review --base <parent>"));
         assert!(content.contains("wt task review <task-run-id> --accept"));

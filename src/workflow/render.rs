@@ -74,14 +74,15 @@ fn codex_base_review_text(
     review_base: &str,
     review_base_label: &str,
 ) -> Option<String> {
-    let review_command = format!("codex review --base {}", shell_arg(review_base));
+    let surface_review_command = format!("/review --base {}", shell_arg(review_base));
+    let cli_review_command = format!("codex review --base {}", shell_arg(review_base));
     match policy.review.codex_base {
         WorkflowCodexBaseReview::None => None,
         WorkflowCodexBaseReview::Advisory => Some(format!(
-            "Workflow review policy sets `review.codex_base = \"advisory\"`. After your report, the coordinator may run a Codex base-diff review against the {review_base_label}:\n\n```bash\n{review_command}\n```\n\nRecord a concise review evidence note with the command, parent, final findings, and any follow-up. If that coordinator review asks for changes, keep ownership in this branch and report again."
+            "Workflow review policy sets `review.codex_base = \"advisory\"`. After your report, the coordinator may open a Codex surface and run a base-diff review against the {review_base_label}:\n\n```text\n{surface_review_command}\n```\n\nFor non-interactive runs, the equivalent CLI fallback is:\n\n```bash\n{cli_review_command}\n```\n\nRecord a concise review evidence note with the command, parent, final findings, and any follow-up. If that coordinator review asks for changes, keep ownership in this branch and report again."
         )),
         WorkflowCodexBaseReview::Required => Some(format!(
-            "Workflow review policy sets `review.codex_base = \"required\"`. After your report, the coordinator must run a Codex base-diff review against the {review_base_label} before passing or landing this workflow task:\n\n```bash\n{review_command}\n```\n\nRecord a concise review evidence note, then record accepted TaskRun review metadata with `wt task review <task-run-id> --accept \"Codex base review passed against {review_base}: <summary/evidence>\"` before passing or landing this workflow task. If that coordinator review asks for changes, keep ownership in this branch and report again."
+            "Workflow review policy sets `review.codex_base = \"required\"`. After your report, the coordinator must open a Codex surface and run a base-diff review against the {review_base_label} before passing or landing this workflow task:\n\n```text\n{surface_review_command}\n```\n\nFor non-interactive runs, the equivalent CLI fallback is:\n\n```bash\n{cli_review_command}\n```\n\nRecord a concise review evidence note, then record accepted TaskRun review metadata with `wt task review <task-run-id> --accept \"Codex base review passed against {review_base}: <summary/evidence>\"` before passing or landing this workflow task. If that coordinator review asks for changes, keep ownership in this branch and report again."
         )),
     }
 }

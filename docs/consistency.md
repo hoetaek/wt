@@ -1477,12 +1477,14 @@ configured check commands, required pull-request checks, unresolved review threa
 branch ancestry checks, workflow mode ordering, or any other landing safety gate.
 
 `review.codex_base` is an additional Codex-native base-diff evidence policy for the
-coordinator. `none` means no `codex review --base <resolved-parent>` evidence is
-required. `advisory` asks the coordinator to run it when practical and record concise
-evidence, but a missing/unavailable run is not by itself a blocker if reported.
-`required` means the coordinator must run it against the resolved workflow base or
-stack parent and record concise evidence before `wt workflow pass`, landing, or
-cleanup. Required Codex base review is enforced by `wt workflow pass`: the TaskRun
+coordinator. `none` means no Codex base-diff review evidence is required. `advisory`
+asks the coordinator to open a Codex surface and run
+`/review --base <resolved-parent>` when practical, with
+`codex review --base <resolved-parent>` as the non-interactive fallback, and record
+concise evidence; a missing/unavailable run is not by itself a blocker if reported.
+`required` means the coordinator must run that review against the resolved workflow
+base or stack parent and record concise evidence before `wt workflow pass`, landing,
+or cleanup. Required Codex base review is enforced by `wt workflow pass`: the TaskRun
 must also have accepted review metadata from `wt task review <task-run-id> --accept`
 after the coordinator records the evidence note. This key does not replace normal
 coordinator review or pull-request review gates.

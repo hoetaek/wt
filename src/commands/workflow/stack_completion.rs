@@ -217,9 +217,10 @@ fn validate_required_codex_base_review(
         .map(|status| status.as_str())
         .unwrap_or("missing");
     bail!(
-        "Workflow task {} requires Codex base review evidence before pass; last review status is {status}. Run `{}` and record acceptance with `wt task review {} --accept \"Codex base review passed against {}: <summary/evidence>\"` before running `wt workflow pass`.",
+        "Workflow task {} requires Codex base review evidence before pass; last review status is {status}. Open a Codex surface and run `{}` against this task. For non-interactive runs, use `{}`. Then record acceptance with `wt task review {} --accept \"Codex base review passed against {}: <summary/evidence>\"` before running `wt workflow pass`.",
         workflow_task_label(&state.row),
-        codex_review_command(&parent),
+        codex_surface_review_command(&parent),
+        codex_cli_review_command(&parent),
         state.run_id,
         parent
     )
@@ -238,7 +239,11 @@ fn codex_review_parent(metadata: &WorkflowMetadata, row: &WorkflowTask) -> Resul
     }
 }
 
-fn codex_review_command(parent: &str) -> String {
+fn codex_surface_review_command(parent: &str) -> String {
+    format!("/review --base {}", shell_arg(parent))
+}
+
+fn codex_cli_review_command(parent: &str) -> String {
     format!("codex review --base {}", shell_arg(parent))
 }
 
