@@ -92,6 +92,18 @@ but the same `02-unknowns.md` file also holds the positive ground — verified
 facts, inventoried materials, prior decisions — so record what is already known,
 not only what is missing.
 
+Learn closes only when the user can judge the next choice, not merely when the
+agent has gathered enough context. Carry Gate 2 from coming to know (domain
+terms, conventions, comparable work, repo facts, internal materials) through to
+being able to choose between plausible frames and state the basis for that
+choice. Gate 3 Criteria consumes that user-held judgment.
+
+Gate 2 experiments aim at the world or repo before an answer is built: "is this
+true?" Record them as hypothesis -> test -> result in `01-Learn/02-unknowns.md`
+and use them to verify facts, conventions, runtime behavior, or comparable
+patterns. Do not use Gate 2 experiments to validate a proposed answer shape;
+that belongs to Gate 4 Wireframe.
+
 Work **inside-out**: ask the user direct clarifying questions and inventory
 user/team-held materials (prior decisions, notes, related artifacts, contacts)
 before reaching outward. Then check the conversation, issue references,
@@ -104,7 +116,8 @@ Useful evidence:
 - current config shape and local overrides such as `.wt.toml` / `<repo-root>/.wt/config/local.toml`
 - current persisted state such as `<repo-root>/.wt/execution/tasks` and `<repo-root>/.wt/execution/workflows`
 - command help for user-facing CLI contracts
-- tests or small local experiments for uncertain behavior
+- tests or small local experiments for uncertain world/repo behavior, recorded
+  as hypothesis -> test -> result
 - spec-local retrospectives and the cross-work timing baseline at
   `<repo-root>/.wt/planning/retrospectives/timing.md` for similar task type, size,
   agent/profile, and coordination shape
@@ -129,19 +142,40 @@ HITL question that chooses the next exploration direction.
 
 Leaf before tree: validate one cheap, inspectable instance before growing it
 into the whole artifact or runnable work. Before promoting an idea, writing
-specs, or preparing TaskDocuments, identify the earliest missing LEAF gate:
+specs, or preparing TaskDocuments, work through gates by phase and stop at the
+earliest missing LEAF gate:
 
 - Learn: 1 Intent, 2 Unknowns & Context
 - Example: 3 Criteria, 4 Wireframe
-- Architect: 5 Design, 5.5 optional Critic, 6 Tasks, 7 Execution handoff
+- Architect: 5 Design, 5.5 optional Critic, 6 Tasks, 7 Artifact / execution handoff
 - Feedback: 8 Review/sync, 9 Retrospect
 
-Use `references/leaf-work.md` for wt-specific gate details and artifacts.
-Do not treat the sequence as a waterfall. Gates loop: when a downstream gate
-overturns an assumption or surfaces a new unknown, return to
-`01-Learn/02-unknowns.md`, update the affected later files, and record the
-discovery in `04-Feedback/08-review.md` when execution/review evidence caused
-it.
+Learn asks whether the user has learned what this needs well enough to judge
+it. Do not treat Learn as a private research phase where the agent silently
+collects facts and then hands back criteria. The user's ability to name what to
+choose between, and why, is the output that Example consumes.
+
+Start from `00-status.md` when it exists. It is the project dashboard for
+current phase/gate, first missing gate, next action, and progress; gate files
+remain authoritative. Keep it current when a gate starts, becomes ready for
+approval, is approved, returns to an earlier gate, is blocked/deferred, or when
+the next action changes materially.
+
+The moment you judge whether a wt LEAF gate passes, propose a transition, or
+handle a return, read that gate's wt-specific entry/exit/return conditions in
+`references/leaf-work.md` first. `SKILL.md` gives the operating shape;
+`references/leaf-work.md` gives the wt pass/fail test. Skip it only to start a
+small run that needs no gate judgment. Do not treat the sequence as a
+waterfall. Gates loop: when a downstream gate overturns an assumption or
+surfaces a new unknown, return to `01-Learn/02-unknowns.md`, update only the
+later files that depended on what changed, and record the return in
+`00-status.md` as a Return Log event, not as a gate state. For wt specs,
+generic leaf-work's
+`04-Feedback/09-retrospective/mid-process-discoveries.md` maps to wt's
+deterministic `04-Feedback/09-retrospect.md`; do not create the generic nested
+folder inside a wt spec. If execution/review evidence caused the return,
+`wt-work` also records that discovery in `04-Feedback/08-review.md` for
+review/sync evidence.
 
 For wt specs, keep the `.wt/planning/specs/<slug>/` personal-state bucket and
 store LEAF artifacts under phase folders inside it: `01-Learn/`,
@@ -160,9 +194,10 @@ handoff instead of fabricating a TaskDocument.
 
 Once the current one-sentence intent is available, show a compact LEAF route
 preview before deep prep. Phrase each phase as a question about this specific
-intent: what to learn in Learn, what cheap example to validate in Example, what
-design/tasks/handoff to architect in Architect, and what to review or learn in
-Feedback. This is orientation, not a fixed plan.
+intent: what the user must learn from facts/conventions through judgment in
+Learn, what cheap example to validate in Example, what design/tasks/handoff to
+architect in Architect, and what to review or learn in Feedback. This is
+orientation, not a fixed plan.
 
 Before Gate 2, run a lightweight topology confirmation when the request has
 more than one possible outcome. Name the top-level outcomes, surfaces,
@@ -185,13 +220,16 @@ Target the weakest ledger row with the next question. Say why that row is the
 current bottleneck before asking. If the core noun changes across answers
 (`idea`, `spec`, `task`, `workflow`, `decision`, etc.), pause feature questions
 and ask which noun is the actual object of the work and which are supporting
-views or artifacts.
+views or artifacts. A row is stable only when the user can judge it in their
+own words; a verified fact held only by the agent is not yet a stable row.
 
-Gate transitions require explicit user approval. The agent may propose that
-unknowns/context are adequate, criteria are settled, a wireframe has passed, or
-design is ready for tasking, but the user decides when
-to move to the next gate. For tiny wt work, gate artifacts may be brief, but the
-Gate 3 -> Gate 4 and Gate 4 -> Gate 5 file boundaries stay separate.
+Every gate transition requires explicit user approval, including returns to an
+earlier gate. The agent may propose that unknowns/context are adequate,
+criteria are settled, a wireframe has passed, design is ready for tasking, or a
+return is needed, but the user decides. The agent never unilaterally declares a
+gate approved, moves forward, or returns to an earlier gate. For tiny wt work,
+gate artifacts may be brief, but the Gate 3 -> Gate 4 and Gate 4 -> Gate 5 file
+boundaries stay separate.
 
 If the user wants to proceed while any Gate 1-3 ledger row is still weak, state
 the remaining risk and the cheapest next question or artifact that would reduce
@@ -213,7 +251,9 @@ Never hide disagreement across a produce/consume edge.
 still has pre-9-gate files such as `04+05-requirements.md`,
 `04+05+06-requirements.md`, or `06-wireframe.md`, treat them as legacy/starter
 context and split them into current ③ criteria and ④ wireframe artifacts before
-launch-ready handoff.
+launch-ready handoff. When Gate 5 has to invent an artifact shape, Gate 4
+failed to lock the contract; return to Wireframe. When the Gate 4 instance and
+Gate 3 criteria conflict, use Gate 3's purpose as the arbiter.
 
 ## Questions
 
@@ -265,6 +305,14 @@ late.
 Run cheap iterations before expensive generalization. Gate 4 validates a
 concrete case and locks the contract that case instantiates; Gate 5 consumes
 that contract and generalizes it into reusable design rules.
+
+Gate 4 experiments aim at the proposed answer: "is this answer right?" The
+experiment is the concrete instance hitting Gate 3 criteria and the Gate 4
+contract. If that instance falsifies a criterion or placeholder contract, keep
+the disagreement visible. Return to `01-Learn/02-unknowns.md` when the failure
+exposes a wrong or missing world/repo fact; revise criteria or wireframe using
+Gate 3 purpose as the arbiter when the failure is about the intended effect or
+answer shape.
 
 Wireframe does not mean UI only. Use the artifact form that fits the output:
 
@@ -520,6 +568,16 @@ Generic leaf-work projects store persistent files under phase folders
 (`01-Learn/`, `02-Example/`, `03-Architect/`, `04-Feedback/`). wt keeps those
 phase folders inside its `.wt` personal-state buckets instead of creating
 repo-root leaf-work folders.
+
+Do not create nested leaf-work folders inside a wt spec. If a work item cannot
+fit as a single reviewable line in `03-Architect/06-tasks.md`, split it into
+several slices there. If it truly needs its own LEAF cycle, create a separate
+sibling spec folder under `planning/specs/` and reference that spec from the
+task graph. External non-text artifacts such as code, video, design, music, or
+physical outputs live outside the spec folder; record the reference and
+handoff in `03-Architect/07-execution.md` instead of storing the artifact as
+LEAF process material.
+
 Prepared wt work uses three canonical locations under the planning/execution
 buckets:
 
@@ -891,6 +949,7 @@ Report:
 - current phase/gate and the first missing gate, if any
 - why the next move belongs to Learn, Example, Architect, or Feedback
 - evidence checked
+- open questions or accepted risks that block or shape the next gate
 - selected approach and rejected alternatives
 - proposed next artifact to create or revise
 - output form

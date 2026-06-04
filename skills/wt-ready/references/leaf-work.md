@@ -8,6 +8,22 @@ Use this reference to decide what artifact `wt-ready` should produce next. The
 sequence is not a rigid waterfall. It is a set of gates: each step reduces a
 different kind of uncertainty before the work becomes runnable.
 
+The moment you judge whether a gate passes, propose a transition, or handle a
+return, read that gate's entry/exit/return conditions in this reference first.
+The parent `SKILL.md` gives the operating shape; this file gives the wt
+pass/fail test. Skip it only to start a small run that needs no gate judgment.
+
+Learn closes only when the user has learned enough to judge the work, not when
+the agent has privately collected enough facts. Gate 2 should carry the user
+from coming to know the domain, conventions, comparable work, repo facts, and
+internal materials to being able to choose between plausible frames and state
+the basis for that choice. Gate 3 Criteria consumes that judgment.
+
+Gate 2 experiments aim at the world or repo before an answer is built: "is this
+true?" This is the natural home of hypothesis -> test -> result loops for
+facts, conventions, runtime behavior, comparable patterns, and internal
+materials. Gate 4 later aims the same scrutiny at the proposed answer instead.
+
 ## Summary
 
 ```text
@@ -34,10 +50,10 @@ the runnable handoff because the implementation result is produced after
 `wt-work`.
 
 Once Gate 1 has a current one-sentence intent, show the user a compact LEAF
-route preview. Phrase each phase as a question about that intent: what to learn
-in Learn, what cheap example to validate in Example, what design/tasks/handoff
-to architect in Architect, and what to review or learn in Feedback. Keep it as
-orientation, not a fixed plan.
+route preview. Phrase each phase as a question about that intent: what the user
+must learn from facts/conventions through judgment in Learn, what cheap example
+to validate in Example, what design/tasks/handoff to architect in Architect, and
+what to review or learn in Feedback. Keep it as orientation, not a fixed plan.
 
 Gates 1-3 use a lightweight clarity ledger to keep preparation focused:
 
@@ -52,7 +68,8 @@ Output form What artifact or lifecycle should this produce?
 Ask the next question against the weakest ledger row, not against the next
 topic that happens to come to mind. If the user accepts moving forward while a
 row is still weak, record the residual risk and the cheapest follow-up that
-would reduce it.
+would reduce it. A row is stable only when the user can judge it in their own
+words; a verified fact held only by the agent is not yet a stable row.
 
 The middle engine maps to:
 
@@ -162,7 +179,10 @@ sides in `02-unknowns.md`: the negative space (what is missing) and the positive
 ground (what is already known or held). The filename says "unknowns", but the
 file is also where verified facts, inventoried user/team material, and prior
 decisions live -- record context that was never a question, not only answers to
-questions.
+questions. The gate closes at user judgment: the user can say what to choose
+between and on what basis, not just receive a list of agent-held facts.
+Experiments at this gate verify the world/repo before answer construction; they
+must be recorded as hypothesis -> test -> result in the same file.
 
 Resolve each entry in place, using the kinds the template already seeds as
 headings:
@@ -190,6 +210,10 @@ Gate to next step:
   the current decision.
 - The context confirms or revises the Gate 1 topology and core noun instead of
   silently changing them.
+- The user can state what to choose between and why; learning has reached
+  judgment, which is the input Gate 3 Criteria needs.
+- Any Gate 2 experiment records the hypothesis, test, and result, and targets
+  a fact or behavior rather than a proposed answer shape.
 
 Return here when:
 
@@ -250,7 +274,11 @@ that the unknowns/context gathered so far are sufficient to model the work with
 representative data and states. Gate 4 produces two paired outputs: the
 concrete instance being walked through, and the contract each placeholder or
 mock value instantiates. Variation points must be positive axes of change: what
-varies, along which axis, within what range, and with what limits.
+varies, along which axis, within what range, and with what limits. Gate 4
+experiments on the proposed answer: "is this answer right?" The concrete
+instance must hit Gate 3 criteria and the Gate 4 contract hard enough to expose
+wrong criteria, missing facts, or broken placeholder contracts before design
+generalizes.
 
 Gate to next step:
 
@@ -270,6 +298,8 @@ Gate to next step:
 - The user confirms the structure fits before design starts.
 - Any visual treatment is approved as a concrete case; reusable component,
   token, responsive, interaction, and state rules are deferred to design.
+- The concrete instance survives its answer experiment against criteria and
+  contract, or the falsification is recorded and routed back to the right gate.
 
 Return here when:
 
@@ -282,6 +312,8 @@ Return here when:
   Gate 3 Criteria.
 - The approved instance conflicts with criteria; use Gate 3 purpose as the
   arbiter, then fix whichever of the instance or criteria fails the purpose.
+- The instance exposes a wrong or missing world/repo fact; return to Gate 2
+  Unknowns & Context and record the experiment result there.
 
 ## 5. Design (Architect)
 
