@@ -49,10 +49,11 @@ the artifact itself; in `wt-ready`, Gate 8 is deliberately narrower: it prepares
 the runnable handoff because the implementation result is produced after
 `wt-work`.
 
-For committed wt spec prep, scaffolding is the first act: run or normalize
-`wt scaffold <slug> --spec` before working any gate so `00-status.md` and the
-four phase folders exist. If the work is too small to deserve that body, do not
-promote it into LEAF spec prep.
+For wt LEAF prep, scaffolding is the first act: run
+`wt scaffold <slug> --idea` for exploratory work and `wt scaffold <slug> --spec`
+only after the user commits to treating the work as executable. Both locations
+create `00-status.md` and the four phase folders before any gate work. If the
+work is too small to deserve that body, do not promote it into LEAF prep.
 
 Once Gate 1 has a current one-sentence intent, show the user a compact opening
 preview. Phrase each phase as the capability it builds for that intent: learned
@@ -103,16 +104,34 @@ The remaining Architect gates then consume that design:
 -> 03-Architect/08-execution.md?
 ```
 
-New wt specs keep Criteria, Wireframe, and Design separate. Treat pre-10-gate
-files such as `04+05-requirements.md`, `04+05+06-requirements.md`,
-`06-wireframe.md`, `07-design.md`, and `08-tasks.md` as legacy/starter context
-and normalize them before launch-ready handoff.
+New wt ideas and specs keep Criteria, Wireframe, and Design separate. Treat
+pre-10-gate files such as `04+05-requirements.md`,
+`04+05+06-requirements.md`, `06-wireframe.md`, `07-design.md`, and
+`08-tasks.md` as legacy/starter context and normalize them before launch-ready
+handoff.
 
 Operational mapping for wt:
 
 ```text
-planning/ideas/<slug>.{md,toml}
--> planning/specs/<slug>/
+planning/ideas/<slug>/
+   00-status.md
+   01-Learn/
+     01-intent.md
+     02-unknowns.md
+     02-references/
+   02-Example/
+     03-criteria.md
+     04-wireframe.md or 04-wireframe/
+   03-Architect/
+     05-design.md
+     06-critic.md?
+     07-tasks.md
+     08-execution.md?
+   04-Feedback/
+     09-review.md?
+     10-retrospect.md?
+-- promote when the user commits to executable work -->
+planning/specs/<slug>/
    00-status.md
    01-Learn/
      01-intent.md
@@ -138,9 +157,10 @@ planning/ideas/<slug>.{md,toml}
 
 Owner: `wt-ready`, then whichever lifecycle skill changes gate state.
 
-Artifact: `planning/specs/<slug>/00-status.md`.
+Artifact: `planning/ideas/<slug>/00-status.md` while exploratory, then
+`planning/specs/<slug>/00-status.md` after promotion.
 
-Purpose: make a durable spec resumable. It is an index, not the source of
+Purpose: make a durable idea/spec resumable. It is an index, not the source of
 truth; gate files remain authoritative.
 
 Update when:
@@ -158,9 +178,9 @@ events, not a gate state. Put blocked/deferred reasons in `Next / Waiting on`.
 
 Owner: `wt-ready`.
 
-Artifact: `planning/ideas/<slug>.{md,toml}` when the thought is exploratory;
-otherwise `planning/specs/<slug>/01-Learn/01-intent.md` or a short intent note
-in the TaskDocument body.
+Artifact: `planning/ideas/<slug>/01-Learn/01-intent.md` when the thought is
+exploratory; otherwise `planning/specs/<slug>/01-Learn/01-intent.md` or a short
+intent note in the TaskDocument body.
 
 Gate to next step:
 
@@ -191,7 +211,8 @@ Return here when:
 Owner: `wt-ready`, with later lifecycle skills returning here when a missed
 unknown appears.
 
-Artifact: idea body section, or `planning/specs/<slug>/01-Learn/02-unknowns.md`.
+Artifact: `planning/ideas/<slug>/01-Learn/02-unknowns.md`, or
+`planning/specs/<slug>/01-Learn/02-unknowns.md`.
 `01-Learn/02-references/` is always scaffolded as a holding slot (with a README
 template); put bulky source material there and summarize the useful answer back
 in `02-unknowns.md`.
@@ -252,7 +273,8 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: idea body, then `planning/specs/<slug>/02-Example/03-criteria.md`.
+Artifact: `planning/ideas/<slug>/02-Example/03-criteria.md`, or
+`planning/specs/<slug>/02-Example/03-criteria.md`.
 
 Purpose: combine purpose and requirements because both are pre-instance
 judgment: the intended effect and the checks that make that effect observable.
@@ -289,8 +311,9 @@ Return here when:
 Owner: `wt-ready`, with `wt-work` updating it when execution findings show that
 the validated structure was wrong.
 
-Artifact: `planning/specs/<slug>/02-Example/04-wireframe.md` for one compact
-artifact, or `02-Example/04-wireframe/` for several screens/flows/examples.
+Artifact: `planning/ideas/<slug>/02-Example/04-wireframe.md` while exploratory,
+then `planning/specs/<slug>/02-Example/04-wireframe.md` after promotion. Use
+`02-Example/04-wireframe/` for several screens/flows/examples.
 
 Purpose: validate concrete structure, workflow, and visual judgment before
 design generalizes. The wireframe is not the generalized system; it is a check
@@ -344,7 +367,8 @@ Return here when:
 Owner: `wt-ready`, with `wt-work` updating it when execution findings invalidate
 assumptions.
 
-Artifact: `planning/specs/<slug>/03-Architect/05-design.md`.
+Artifact: `planning/ideas/<slug>/03-Architect/05-design.md` while exploratory,
+then `planning/specs/<slug>/03-Architect/05-design.md` after promotion.
 
 Purpose: consume the Gate 4 instance, contracts, and variation points, then
 generalize them into implementation-facing design rules: component boundaries,
@@ -385,9 +409,10 @@ Return here when:
 
 Owner: `wt-ready`, when risk triggers fire.
 
-Artifact: `planning/specs/<slug>/03-Architect/06-critic.md` when a durable
-critic pass is required; otherwise an accepted skip/low-risk rationale in
-`03-Architect/05-design.md`.
+Artifact: `planning/ideas/<slug>/03-Architect/06-critic.md` while exploratory,
+then `planning/specs/<slug>/03-Architect/06-critic.md` after promotion, when a
+durable critic pass is required. Otherwise record an accepted skip/low-risk
+rationale in `03-Architect/05-design.md`.
 
 Use `references/design-critic.md` when the design involves security, migration,
 public CLI/config/state shape, cross-module coupling, new user-facing terms,
@@ -413,9 +438,10 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: `planning/specs/<slug>/03-Architect/07-tasks.md`, optional
-`03-Architect/08-execution.md`, TaskDocuments, and saved Workflow TOML when
-needed.
+Artifact: `planning/ideas/<slug>/03-Architect/07-tasks.md` while exploratory,
+then `planning/specs/<slug>/03-Architect/07-tasks.md` after promotion. Use
+optional `03-Architect/08-execution.md`, TaskDocuments, and saved Workflow TOML
+when needed.
 
 Gate to next step:
 
