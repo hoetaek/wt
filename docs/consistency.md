@@ -77,9 +77,25 @@ Canonical personal storage layout:
 │   └── profiles/
 ├── planning/
 │   ├── ideas/
-│   │   └── <slug>.{md,toml}
+│   │   └── <slug>/                   # exploratory LEAF prep; kill-able
+│   │       ├── 00-status.md
+│   │       ├── 01-Learn/
+│   │       │   ├── 01-intent.md
+│   │       │   ├── 02-unknowns.md
+│   │       │   └── 02-references/
+│   │       ├── 02-Example/
+│   │       │   ├── 03-criteria.md
+│   │       │   └── 04-wireframe.md
+│   │       ├── 03-Architect/
+│   │       │   ├── 05-design.md
+│   │       │   ├── 06-critic.md
+│   │       │   ├── 07-tasks.md
+│   │       │   └── 08-execution.md
+│   │       └── 04-Feedback/
+│   │           ├── 09-review.md
+│   │           └── 10-retrospect.md
 │   ├── specs/
-│   │   └── <slug>/
+│   │   └── <slug>/                   # executable-work baseline LEAF prep
 │   │       ├── 00-status.md
 │   │       ├── 01-Learn/
 │   │       │   ├── 01-intent.md
@@ -160,18 +176,23 @@ them as canonical state. The canonical replacements are
 
 ### Idea And Spec Prep
 
-Idea는 kill-able exploration이고 Spec은 실행하기로 결정한 작업의 prep artifact다.
-`wt-ready`는 사용자가 아직 실행에 commit하지 않은 탐색을
-`<repo-root>/.wt/planning/ideas/<slug>.{md,toml}`에 쓸 수 있다. Format은 자유로운 Markdown이거나
-TOML body일 수 있다. Idea는 committed-work status가 없고, 언제든 삭제하거나 다시 쓸 수 있다.
-Idea 삭제나 재작성은 다른 component가 관찰해야 하는 state transition이 아니다.
+LEAF 구조는 사고 절차이고, Idea/Spec 위치는 commit level이다. Idea와 Spec은 같은 numbered
+LEAF layout을 쓴다. 차이는 파일 모양이 아니라 사용자가 그 일을 실행 가능한 작업으로
+취급하기로 commit했는지다.
 
-`wt-ready`가 idea를 받고 사용자가 실행에 commit하면 idea는 spec으로 promotion된다.
-Promotion은 `planning/ideas/<slug>.{md,toml}`을 제거하고 numbered LEAF artifact를
-`planning/specs/<slug>/` 아래에 만드는 동작이다. 이 directory location change가 visible
-commit gate다. `wt` state tree를 읽는 사람은 `planning/ideas/` 아래의 exploration과
-`planning/specs/<slug>/` 아래의 committed prep work를 directory 위치만으로 구분할 수 있어야
-한다.
+Idea는 kill-able exploration이다. `wt-ready`는 사용자가 아직 실행 가능한 작업으로 취급하겠다고
+commit하지 않은 탐색을 `<repo-root>/.wt/planning/ideas/<slug>/`에 쓴다. Idea 안에서도 계획,
+criteria, wireframe, design, task graph 후보를 얼마든지 작성할 수 있다. 하지만 Idea는
+committed-work status가 없고, downstream consumer가 의존하지 않으며, 언제든 삭제하거나 다시 쓸 수
+있다. Idea 삭제나 재작성은 다른 component가 관찰해야 하는 state transition이 아니다.
+
+Spec은 실행 가능한 작업으로 취급하기로 commit한 LEAF prep artifact다. `wt-ready`가 idea를 받고
+사용자가 실행 가능한 작업으로 취급하겠다고 commit하면 idea는 spec으로 promotion된다. Promotion은
+`planning/ideas/<slug>/` directory를 `planning/specs/<slug>/`로 옮기는 동작이다. 이 directory
+location change가 visible commit gate다. `wt` state tree를 읽는 사람은
+`planning/ideas/<slug>/` 아래의 exploration과 `planning/specs/<slug>/` 아래의 executable-work
+baseline을 directory 위치만으로 구분할 수 있어야 한다. Flat `planning/ideas/<slug>.{md,toml}`은
+legacy/migration-only artifact이며 새 scaffold나 새 docs가 만들지 않는다.
 
 TaskDocument는 계속 `<repo-root>/.wt/execution/tasks/<slug>.toml`에 있는 launch unit이다. 그
 body는 `planning/specs/<slug>/` relative path를 참조할 수 있지만 TaskDocument schema는 바뀌지
@@ -180,13 +201,14 @@ review/sync, retrospect를 담는 긴 human/AI artifact이고, TaskDocument는 `
 `wt workflow`가 소비하는 실행 단위다. Spec 없이 TaskDocument TOML만 있는 pre-redesign task도
 valid local task로 남는다.
 
-Spec 내부의 canonical layout은 LEAF phase folder다. `planning/specs/<slug>/` bucket은
-wt의 personal-state ownership을 유지하고, 그 안에서 `01-Learn/`, `02-Example/`,
-`03-Architect/`, `04-Feedback/`이 사고 과정의 phase를 표현한다. 일반 leaf-work는 여러
-artifact를 담기 위해 `05-design-<artifact>.md`, `08-execution-<artifact>.md`,
-`09-review-<artifact>-vN.md`, `10-retrospect-<topic>.md` 같은 suffix를 권장하지만, wt spec은
-slug 하나가 하나의 work item을 소유하므로 canonical file은 `05-design.md`,
-`06-critic.md`, `08-execution.md`, `09-review.md`, `10-retrospect.md`처럼 deterministic하게 둔다.
+Idea/Spec 내부의 canonical layout은 LEAF phase folder다. `planning/ideas/<slug>/`와
+`planning/specs/<slug>/` bucket은 wt의 personal-state ownership을 유지하고, 그 안에서
+`01-Learn/`, `02-Example/`, `03-Architect/`, `04-Feedback/`이 사고 과정의 phase를 표현한다.
+일반 leaf-work는 여러 artifact를 담기 위해 `05-design-<artifact>.md`,
+`08-execution-<artifact>.md`, `09-review-<artifact>-vN.md`, `10-retrospect-<topic>.md` 같은
+suffix를 권장하지만, wt idea/spec은 slug 하나가 하나의 work item을 소유하므로 canonical file은
+`05-design.md`, `06-critic.md`, `08-execution.md`, `09-review.md`, `10-retrospect.md`처럼
+deterministic하게 둔다.
 `06-critic.md`는 critic trigger가 실제로 발동할 때만 만드는 lazy artifact이고, skip/low-risk
 판단은 `05-design.md`에 기록한다.
 
@@ -194,25 +216,27 @@ slug 하나가 하나의 work item을 소유하므로 canonical file은 `05-desi
 section heading은 한국어를 기본으로 한다. TOML field name(`title`, `branch`, `mode` 등)은
 schema contract이므로 영어로 유지하지만, 값과 body template은 한국어로 읽히게 한다.
 
-Committed spec prep은 scaffold가 첫 동작이다. `wt scaffold <slug> --spec`은 `00-status.md`와
-`01-Learn/`, `02-Example/`, `03-Architect/`, `04-Feedback/` 네 phase directory를 보장한 뒤
-gate file을 채운다. 너무 작아서 이 body가 필요 없는 작업은 LEAF spec prep으로 승격하지 않는다.
+LEAF prep은 scaffold가 첫 동작이다. `wt scaffold <slug> --idea`와
+`wt scaffold <slug> --spec`은 각각 `planning/ideas/<slug>/` 또는 `planning/specs/<slug>/`에
+`00-status.md`와 `01-Learn/`, `02-Example/`, `03-Architect/`, `04-Feedback/` 네 phase directory를
+보장한 뒤 gate file을 채운다. 너무 작아서 이 body가 필요 없는 작업은 LEAF idea/spec prep으로
+승격하지 않는다.
 
-`planning/specs/<slug>/00-status.md`는 spec을 재개 가능하게 하는 dashboard다. 현재 phase/gate,
+`00-status.md`는 idea/spec을 재개 가능하게 하는 dashboard다. 현재 phase/gate,
 첫 미충족 gate, 다음 액션, 최근 return, return 횟수, gate별 progress를 적는다. progress 값은
 `0`, `25`, `50`, `75`, `100`, state 값은 `not-started`, `active`, `needs-approval`, `approved`를
 쓰고 return은 별도 gate state가 아니라 Return Log event로 기록한다. 이 파일은 index이지 source of
 truth가 아니다 — gate file이 authoritative하다.
 
-`planning/specs/<slug>/01-Learn/01-intent.md`는 raw user wording, interpreted intent, and promotion note를
-preserve한다. 이 파일은 later agent가 "사용자가 실제로 무엇을 요청했는지"와 "coordinator가
-어떻게 해석했는지"를 구분할 수 있게 해야 한다.
+`01-Learn/01-intent.md`는 raw user wording, interpreted intent, and commitment note를 preserve한다.
+이 파일은 later agent가 "사용자가 실제로 무엇을 요청했는지"와 "coordinator가 어떻게 해석했는지"를
+구분할 수 있게 해야 한다.
 Intent는 core noun과 topology도 기록할 수 있다. Core noun은 사용자가 실제로 바꾸려는 대상
 (`idea`, `spec`, `task`, `workflow`, command, UI 등)이고, topology는 독립적으로 성공/실패할 수
 있는 top-level outcome, surface, integration, deliverable 목록이다. Deferred topology item은
 삭제하지 않고 왜 이번 prep에서 제외했는지 적는다.
 
-`planning/specs/<slug>/01-Learn/02-unknowns.md`는 domain concepts, standards/conventions, external facts,
+`01-Learn/02-unknowns.md`는 domain concepts, standards/conventions, external facts,
 internal facts를 구분하고 각 항목을 `blocking now` 또는 `useful later`로 표시한다. Evidence
 gathering은 이 unknown list를 agenda로 삼는다. Clarity ledger는 gate마다 역할이 다르다.
 Gate 1은 desired effect와 core noun으로 Intent row를 잠그고, Gate 2는 ledger를 learning lens로만
@@ -237,7 +261,7 @@ Gate 5 Design은 그 contract를 consume해서 empty/overflow/edge/timing/failur
 variation range로 일반화하는 generator다. 세 파일(`03-criteria.md`, `04-wireframe.md`,
 `05-design.md`)은 합치지 않는다.
 
-`wt scaffold <slug> --spec`은 새 spec에 phase folders를 seed한다:
+`wt scaffold <slug> --idea`와 `wt scaffold <slug> --spec`은 새 idea/spec에 phase folders를 seed한다:
 `00-status.md`, `01-Learn/01-intent.md`, `01-Learn/02-unknowns.md`,
 `01-Learn/02-references/README.md`, `02-Example/03-criteria.md`,
 `02-Example/04-wireframe.md`, `03-Architect/05-design.md`,
@@ -249,7 +273,7 @@ seed하지 않고 handoff/review/retrospect 시점에 만든다. 이전 numberin
 `08-tasks.md`, `09-execution.md`, `10-review.md`, `11-retrospect.md`)과 이전 wt 9-gate
 파일(`03-Architect/06-tasks.md`, `03-Architect/07-execution.md`,
 `04-Feedback/08-review.md`, `04-Feedback/09-retrospect.md`)은 pre-10-gate
-legacy/starter artifact로만 취급한다. 새 spec이나 새 docs는 그 이름을 만들지 않고, scaffold는
+legacy/starter artifact로만 취급한다. 새 idea/spec이나 새 docs는 그 이름을 만들지 않고, scaffold는
 그런 파일이 남아 있으면 ten-gate 파일을 만들기 전에 정리하도록 거부한다.
 
 `planning/specs/<slug>/02-Example/03-criteria.md`는 purpose/success criteria,

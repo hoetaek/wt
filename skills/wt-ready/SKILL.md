@@ -24,10 +24,12 @@ Inspect local truth before asking questions:
 git status --short --branch
 find . -maxdepth 2 -name AGENTS.md -o -name AGENTS.override.md
 repo_root="$(git rev-parse --show-toplevel)"
-# execution/tasks, execution/workflows, planning/ideas hold flat files;
-# planning/specs holds one directory per slug.
-find "$repo_root/.wt/execution/tasks" "$repo_root/.wt/execution/workflows" "$repo_root/.wt/planning/ideas" -maxdepth 1 -type f 2>/dev/null | sort
-find "$repo_root/.wt/planning/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
+# execution/tasks and execution/workflows hold flat files;
+# planning/ideas and planning/specs hold one LEAF directory per slug.
+find "$repo_root/.wt/execution/tasks" "$repo_root/.wt/execution/workflows" -maxdepth 1 -type f 2>/dev/null | sort
+find "$repo_root/.wt/planning/ideas" "$repo_root/.wt/planning/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
+# Flat idea files are legacy context, not canonical new targets.
+find "$repo_root/.wt/planning/ideas" -maxdepth 1 -type f 2>/dev/null | sort
 ```
 
 For `wt` itself, read `docs/consistency.md` before proposing model, CLI,
@@ -42,16 +44,15 @@ preparation. Implementation belongs in a wt task/workflow branch.
 
 An idea is exploration. It is allowed to die.
 
-- Use `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}` when the user is still
-  exploring future work and should not commit to a spec, TaskDocument, or
-  workflow yet.
-- The idea body is scratch surface, not a contract. It may be deleted,
-  rewritten, split, or archived without any state transition that other
-  components observe.
-- No downstream consumer depends on an idea file continuing to exist. Removing
-  one is not breakage.
+- Use `<repo-root>/.wt/planning/ideas/<slug>/` when the user is still exploring
+  future work and should not commit to treating it as executable work yet.
+- The idea uses the same LEAF structure as a spec, but it is still exploratory
+  scratch surface, not a launch contract. It may be deleted, rewritten, split,
+  or archived without any state transition that other components observe.
+- No downstream consumer depends on an idea directory continuing to exist.
+  Removing one is not breakage.
 - If the user asks only to capture, compare, enrich, defer, or review ideas,
-  stop at the idea file. Do not create specs, TaskDocuments, workflows, or
+  stop at the idea directory. Do not create specs, TaskDocuments, workflows, or
   branches.
 
 Capture enough that a later prep pass can continue without rediscovering the
@@ -64,20 +65,22 @@ basics:
 - assumptions, risks, non-goals, and open questions
 - recommendation: enrich more, promote to spec, defer, archive, or split
 
-Use these idea statuses when writing TOML or a status line in Markdown:
+Use these idea statuses in `00-status.md`:
 
 - `captured`: raw idea saved with minimal context.
 - `enriched`: meaningful context, references, or alternatives were gathered.
-- `ready_for_prep`: enough information exists to promote into spec prep without
-  rediscovering raw intent, plausible frames, tradeoffs, and the next question.
+- `ready_for_prep`: enough information exists to promote into executable-work
+  prep without rediscovering raw intent, plausible frames, tradeoffs, and the
+  next question.
 - `archived`: intentionally not pursuing now.
 
-To seed a Markdown idea, run `wt scaffold <slug> --idea`. Use lowercase ASCII
-kebab-case slugs. Prefer Markdown for loose notes; use TOML only when simple
-top-level fields plus a `body` string help. If an idea already exists at either
-extension, update that file instead of creating a duplicate.
+To seed an idea, run `wt scaffold <slug> --idea`. Use lowercase ASCII kebab-case
+slugs. If `planning/ideas/<slug>/` already exists, update that directory instead
+of creating a duplicate. If a legacy flat idea exists at
+`planning/ideas/<slug>.{md,toml,markdown}`, normalize it into the LEAF directory
+before continuing.
 
-End an idea-only pass with the idea path, status, evidence checked, related
+End an idea-only pass with the idea directory path, status, evidence checked, related
 artifacts found, why it is or is not ready for prep, and the missing LEAF gate
 when it is not ready.
 
@@ -135,7 +138,7 @@ ride along as facts into the next gate.
 When intent is still soft, use bounded context/reference exploration before
 forcing purpose or requirements. Gather enough local or external examples to
 name 2-4 plausible frames, record why each fits or fails, and then either:
-continue to purpose/success criteria, stop with/update an idea file, or ask one
+continue to purpose/success criteria, stop with/update an idea directory, or ask one
 HITL question that chooses the next exploration direction.
 
 ## LEAF Work
@@ -158,13 +161,14 @@ it. Do not treat Learn as a private research phase where the agent silently
 collects facts and then hands back criteria. The user's ability to name what to
 choose between, and why, is the output that Example consumes.
 
-Scaffolding is the first act for committed wt spec prep, so the work stands on
-a firm foundation. Once the user commits an idea to spec work, run or normalize
-`wt scaffold <slug> --spec` before working any gate so `00-status.md` and the
-four phase folders exist. The scaffold is the wt LEAF body: it makes "which
-gate am I in / what is the first missing gate" inspectable before each gate
-file fills in. If the work is too small for that body, keep it as an idea,
-direct note, or direct edit instead of invoking LEAF.
+Scaffolding is the first act for wt LEAF prep, so the work stands on a firm
+foundation. Run or normalize `wt scaffold <slug> --idea` for exploratory prep
+and `wt scaffold <slug> --spec` only after the user commits to treating the work
+as executable. In both locations the scaffold creates `00-status.md` and the
+four phase folders before any gate work, making "which gate am I in / what is
+the first missing gate" inspectable before each gate file fills in. If the work
+is too small for that body, keep it as a direct note or direct edit instead of
+invoking LEAF.
 
 Start from `00-status.md` when it exists. It is the project dashboard for
 current phase/gate, first missing gate, next action, and progress; gate files
@@ -617,10 +621,11 @@ LEAF process material.
 Prepared wt work uses three canonical locations under the planning/execution
 buckets:
 
-- `planning/ideas/<slug>.{md,toml}` — kill-able exploration captured by
-  `wt-ready`. Free-form Markdown or TOML. May be deleted at any time. No
-  commitment.
-- `planning/specs/<slug>/` — committed prep artifact. Holds numbered LEAF files:
+- `planning/ideas/<slug>/` — kill-able LEAF exploration captured by `wt-ready`.
+  Holds the same numbered LEAF files as a spec, but may be deleted, rewritten,
+  split, or archived at any time. No downstream consumer may depend on it.
+- `planning/specs/<slug>/` — executable-work baseline prep artifact. Holds
+  numbered LEAF files:
   `00-status.md`, `01-Learn/01-intent.md`, `01-Learn/02-unknowns.md`,
   `01-Learn/02-references/` (always scaffolded as a holding slot),
   `02-Example/03-criteria.md`,
@@ -628,15 +633,16 @@ buckets:
   `03-Architect/05-design.md`, lazy `03-Architect/06-critic.md`,
   `03-Architect/07-tasks.md`, lazy `03-Architect/08-execution.md`, lazy
   `04-Feedback/09-review.md`, and lazy `04-Feedback/10-retrospect.md`.
-  This is the canonical location for prep work that has been promoted past
-  exploration and for spec-backed review/retrospect records.
+  This is the canonical location for work promoted past exploration into an
+  executable-work baseline and for spec-backed review/retrospect records.
 - `execution/tasks/<slug>.toml` — TaskDocument, the launch unit. Schema
   unchanged. The body may reference `planning/specs/<slug>/` files by relative
   path.
 
-The wt CLI does not parse or manage `planning/specs/` as executable state.
-`wt scaffold <slug> --spec` may seed starter files depending on the installed
-wt version; if it creates pre-10-gate files such as `03-context.md`,
+The wt CLI does not parse or manage `planning/ideas/` or `planning/specs/` as
+executable state. `wt scaffold <slug> --idea` and `wt scaffold <slug> --spec`
+may seed starter files depending on the installed wt version; if they create
+pre-10-gate files such as `03-context.md`,
 `04+05-requirements.md`, `06-wireframe.md`, `07-design.md`, `08-tasks.md`,
 or the old 9-gate wt files `03-Architect/06-tasks.md`,
 `03-Architect/07-execution.md`, `04-Feedback/08-review.md`, and
@@ -646,23 +652,27 @@ and TaskRun models are unchanged.
 
 ### Promotion (idea → spec)
 
-When `wt-ready` is invoked and the user commits to preparing the work, an
-existing idea file is promoted, not copied:
+When `wt-ready` is invoked and the user commits to treating the work as
+executable, an existing idea directory is promoted, not copied:
 
-- `rm <repo-root>/.wt/planning/ideas/<slug>.{md,toml}` — the visible commit gate
-  that distinguishes exploration from committed prep.
-- Create or normalize the spec files: `00-status.md`, `01-Learn/01-intent.md`,
+- Move `<repo-root>/.wt/planning/ideas/<slug>/` into
+  `<repo-root>/.wt/planning/specs/<slug>/` — the visible commit gate that
+  distinguishes exploration from executable-work baseline.
+- Preserve and update the LEAF files: `00-status.md`, `01-Learn/01-intent.md`,
   `01-Learn/02-unknowns.md`, `02-Example/03-criteria.md`,
   `02-Example/04-wireframe.md`, `03-Architect/05-design.md`, and
   `03-Architect/07-tasks.md`.
+- Record in `01-Learn/01-intent.md` that the spec was promoted from
+  `planning/ideas/<slug>/`; if a legacy flat idea was normalized, record that
+  legacy source too.
 - If a mode decision is recorded at prep time, create `03-Architect/08-execution.md`
   by hand. Treat it as a decision and handoff artifact, not a blank prep
   skeleton.
 
-The deletion plus spec directory creation is the visible commit gate that
-distinguishes exploration from committed prep. Work that the user requests
+The directory move plus spec-location update is the visible commit gate that
+distinguishes exploration from executable-work prep. Work that the user requests
 directly, without a prior idea, may go straight into `planning/specs/<slug>/`
-without an idea file existing first.
+without an idea directory existing first.
 
 ### Authoring conventions
 
@@ -670,7 +680,7 @@ without an idea file existing first.
 
 - Preserve the user's raw wording and the coordinator's interpreted intent as
   separate text.
-- Record whether this spec was promoted from an idea path or entered prep
+- Record whether this spec was promoted from an idea directory or entered prep
   directly.
 
 `00-status.md`:
@@ -994,7 +1004,7 @@ drift is the cheapest defect to fix during grilling.
 
 End with one of these concrete outputs:
 
-- idea captured/updated at `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}`
+- idea captured/updated at `<repo-root>/.wt/planning/ideas/<slug>/`
   when the user is still exploring
 - spec deliverables prepared (or promoted from `planning/ideas/`) at
   `<repo-root>/.wt/planning/specs/<slug>/`, recording the chosen execution shape
