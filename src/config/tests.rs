@@ -56,21 +56,15 @@ post_deps_tabs = ["npm run dev"]
 colors = { task = "Blue", issue = "Red", pr = "Green" }
 
 [workspace.browser]
-mode = "system"
+mode = "chrome_devtools"
 url = "{{site_url}}"
-app = "Google Chrome"
 
-[workspace.chrome_devtools]
+[workspace.browser.chrome_devtools]
 port = 9222
 user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
 
 [agent]
 cli = "claude"
-
-[test]
-commands = [
-{ working_dir = "backend", run = "./vendor/bin/pest", if_exists = "vendor/bin/pest", label = "PHP" },
-]
 "#;
     let config: Config = toml::from_str(toml_str).unwrap();
 
@@ -165,10 +159,10 @@ commands = [
     assert_eq!(ws.colors.get("task").unwrap(), "Blue");
     assert_eq!(ws.colors.get("issue").unwrap(), "Red");
     let browser = ws.browser.unwrap();
-    assert_eq!(browser.mode, WorkspaceBrowserMode::System);
+    assert_eq!(browser.mode, WorkspaceBrowserMode::ChromeDevtools);
     assert_eq!(browser.url.as_deref(), Some("{{site_url}}"));
-    assert_eq!(browser.app.as_deref(), Some("Google Chrome"));
-    let chrome_devtools = ws.chrome_devtools.unwrap();
+    assert_eq!(browser.app, None);
+    let chrome_devtools = browser.chrome_devtools.unwrap();
     assert_eq!(chrome_devtools.port, Some(9222));
     assert_eq!(
         chrome_devtools.user_data_dir.as_deref(),
@@ -177,10 +171,6 @@ commands = [
 
     let agent = config.agent.unwrap();
     assert_eq!(agent.cli, AgentCli::Claude);
-
-    let test = config.test.unwrap();
-    assert_eq!(test.commands[0].label.as_deref(), Some("PHP"));
-    assert_eq!(test.commands[0].working_dir.as_deref(), Some("backend"));
 }
 
 #[test]
@@ -199,25 +189,30 @@ deps = [
 }
 
 #[test]
-fn rejects_unknown_test_command_field() {
+fn rejects_legacy_workspace_chrome_devtools_section_with_guidance() {
     let err = toml::from_str::<Config>(
         r#"
-[test]
-commands = [
-{ cwd = "web", run = "npm test" },
-]
+[workspace.chrome_devtools]
+debug_port = 9222
 "#,
     )
     .unwrap_err();
 
-    assert!(err.to_string().contains("unknown field `cwd`"));
+    assert!(err.to_string().contains("[workspace.chrome_devtools]"));
+    assert!(
+        err.to_string()
+            .contains("[workspace.browser.chrome_devtools]")
+    );
 }
 
 #[test]
-fn rejects_unknown_workspace_chrome_devtools_field() {
+fn rejects_unknown_workspace_browser_chrome_devtools_field() {
     let err = toml::from_str::<Config>(
         r#"
-[workspace.chrome_devtools]
+[workspace.browser]
+mode = "chrome_devtools"
+
+[workspace.browser.chrome_devtools]
 debug_port = 9222
 "#,
     )
@@ -250,6 +245,10 @@ fn parses_workspace_browser_chrome_devtools_policy() {
         r#"
 [workspace.browser]
 mode = "chrome_devtools"
+
+[workspace.browser.chrome_devtools]
+port = 9222
+user_data_dir = ".chrome-devtools"
 "#,
     )
     .unwrap();
@@ -257,6 +256,12 @@ mode = "chrome_devtools"
     let browser = config.workspace.unwrap().browser.unwrap();
     assert_eq!(browser.mode, WorkspaceBrowserMode::ChromeDevtools);
     assert_eq!(browser.effective_url().unwrap().as_ref(), "{{site_url}}");
+    let chrome_devtools = browser.chrome_devtools.unwrap();
+    assert_eq!(chrome_devtools.port, Some(9222));
+    assert_eq!(
+        chrome_devtools.user_data_dir.as_deref(),
+        Some(".chrome-devtools")
+    );
 }
 
 #[test]
@@ -294,6 +299,39 @@ app = "Google Chrome"
     .unwrap_err();
 
     assert!(err.to_string().contains("[workspace.browser].app"));
+}
+
+#[test]
+fn workspace_browser_inactive_modes_reject_chrome_devtools_section() {
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.browser]
+mode = "none"
+
+[workspace.browser.chrome_devtools]
+port = 9222
+"#,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("[workspace.browser.chrome_devtools]")
+    );
+
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.browser]
+mode = "system"
+
+[workspace.browser.chrome_devtools]
+port = 9222
+"#,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("[workspace.browser.chrome_devtools]")
+    );
 }
 
 #[test]
@@ -335,7 +373,11 @@ enabled = true
 "#,
     )
     .unwrap_err();
-    assert!(err.to_string().contains("enabled"));
+    assert!(err.to_string().contains("[workspace.chrome_devtools]"));
+    assert!(
+        err.to_string()
+            .contains("[workspace.browser.chrome_devtools]")
+    );
 
     let err = toml::from_str::<Config>(
         r#"
@@ -344,7 +386,11 @@ url = "{{site_url}}"
 "#,
     )
     .unwrap_err();
-    assert!(err.to_string().contains("url"));
+    assert!(err.to_string().contains("[workspace.chrome_devtools]"));
+    assert!(
+        err.to_string()
+            .contains("[workspace.browser.chrome_devtools]")
+    );
 }
 
 #[test]
@@ -677,24 +723,36 @@ command = "code {{path}}"
 }
 
 #[test]
-fn profile_workspace_chrome_devtools_replaces_base_section() {
+fn profile_workspace_browser_chrome_devtools_replaces_base_section() {
     let base: Config = toml::from_str(
         r#"
-[workspace.chrome_devtools]
+[workspace.browser]
+mode = "chrome_devtools"
+
+[workspace.browser.chrome_devtools]
 port = 9222
 "#,
     )
     .unwrap();
     let profile: Config = toml::from_str(
         r#"
-[workspace.chrome_devtools]
+[workspace.browser]
+mode = "chrome_devtools"
+
+[workspace.browser.chrome_devtools]
 user_data_dir = ".chrome-alt"
 "#,
     )
     .unwrap();
 
     let merged = merge_config(&base, profile);
-    let chrome_devtools = merged.workspace.unwrap().chrome_devtools.unwrap();
+    let chrome_devtools = merged
+        .workspace
+        .unwrap()
+        .browser
+        .unwrap()
+        .chrome_devtools
+        .unwrap();
     assert_eq!(chrome_devtools.port, None);
     assert_eq!(
         chrome_devtools.user_data_dir.as_deref(),

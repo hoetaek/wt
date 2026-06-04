@@ -1,5 +1,4 @@
 mod agent;
-mod background_tests;
 mod browser;
 mod chrome_devtools;
 mod command;
@@ -13,12 +12,11 @@ mod summary;
 mod workspace;
 
 pub(crate) use agent::agent_launch_command;
-use agent::bootstrap_agent;
-use background_tests::run_background_tests;
+use agent::{AgentLaunchOptions, bootstrap_agent, prepare_agent_launch_options};
 use deps::install_deps;
 use env_template::substitute_env;
 use files::{copy_files, link_files};
-use local_context::inject_local_context;
+use local_context::{append_agent_local_context, inject_local_context};
 use post_deps::open_post_deps_tabs;
 use summary::print_summary;
 use workspace::{insert_cmux_template_vars, open_workspace, workspace_color};
@@ -65,11 +63,12 @@ use std::fs;
 #[cfg(test)]
 use workspace::OpenedWorkspace;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct SetupOptions {
     pub(crate) focus_workspace: bool,
     pub(crate) restore_caller_after_workspace_open: bool,
     pub(crate) focus_restore_if_workspace_cold: bool,
+    pub(crate) agent_launch_options: AgentLaunchOptions,
 }
 
 impl Default for SetupOptions {
@@ -78,6 +77,7 @@ impl Default for SetupOptions {
             focus_workspace: false,
             restore_caller_after_workspace_open: true,
             focus_restore_if_workspace_cold: true,
+            agent_launch_options: AgentLaunchOptions::default(),
         }
     }
 }
@@ -122,7 +122,7 @@ pub(crate) fn run_setup_with_workspace_color_kind(
     extra_vars: Option<&HashMap<String, String>>,
     config_override: Option<&Config>,
 ) -> Result<()> {
-    let options = SetupOptions::default();
+    let mut options = SetupOptions::default();
     let config = config_override.unwrap_or(&ctx.config);
 
     ensure_worktree_personal_storage(ctx, wt_path)?;
@@ -136,6 +136,13 @@ pub(crate) fn run_setup_with_workspace_color_kind(
     }
     let site = apply_site_template_vars(config, &mut template_vars);
     let browser_launch = prepare_browser_launch(config, wt_path, &mut template_vars)?;
+    options.agent_launch_options = prepare_agent_launch_options(
+        ctx,
+        config.agent.as_ref(),
+        browser_launch
+            .as_ref()
+            .and_then(|launch| launch.chrome_devtools_mcp_config()),
+    )?;
 
     if let Some(ref site) = site {
         site::register_site(ctx, wt_path, site);
@@ -151,7 +158,7 @@ pub(crate) fn run_setup_with_workspace_color_kind(
         names,
         &template_vars,
         &ws_color,
-        options,
+        &options,
     )?;
     insert_cmux_template_vars(&mut template_vars, opened_workspace.as_ref());
     let ws_handle = opened_workspace
@@ -159,6 +166,9 @@ pub(crate) fn run_setup_with_workspace_color_kind(
         .map(|workspace| workspace.handle.as_str());
 
     inject_local_context(ctx, config, wt_path, names, &template_vars, ws_handle)?;
+    if let Some(context) = options.agent_launch_options.chrome_devtools_context() {
+        append_agent_local_context(config, wt_path, context)?;
+    }
 
     install_deps(ctx, config, wt_path)?;
 
@@ -172,8 +182,6 @@ pub(crate) fn run_setup_with_workspace_color_kind(
     if let (Some(handle), Some(agent)) = (ws_handle, &config.agent) {
         bootstrap_agent(ctx, handle, agent, modes.setup_mode, &template_vars)?;
     }
-
-    run_background_tests(ctx, config, wt_path)?;
 
     print_summary(ctx, wt_path, names, site.as_ref(), &template_vars);
 
@@ -236,7 +244,7 @@ fn missing_worktree_personal_storage_dir(wt_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::mock::{CommandCall, MockRunner, MockUi};
     use crate::context::{CmdOutput, CommandRunner, CtxOptions};
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -328,6 +336,48 @@ mod tests {
             prompt: HashMap::new(),
             ..AgentConfig::default()
         }
+    }
+
+    fn workspace_command_arg(calls: &[CommandCall]) -> String {
+        let workspace_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "cmux" && args.first().is_some_and(|arg| arg == "new-workspace")
+            })
+            .expect("expected cmux new-workspace call");
+        workspace_call
+            .1
+            .iter()
+            .position(|arg| arg == "--command")
+            .and_then(|idx| workspace_call.1.get(idx + 1))
+            .expect("expected new-workspace --command")
+            .clone()
+    }
+
+    fn chrome_launch_port(calls: &[CommandCall]) -> String {
+        let launch_call = calls
+            .iter()
+            .find(|(cmd, _, _)| cmd == "open" || cmd == "sh")
+            .expect("expected Chrome launch command");
+        launch_call
+            .1
+            .iter()
+            .find_map(|arg| arg.strip_prefix("--remote-debugging-port="))
+            .expect("expected Chrome remote debugging port")
+            .to_string()
+    }
+
+    fn add_cmux_agent_workspace_responses(runner: &mut MockRunner, ready_screen: &str) {
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:0"}}"#,
+            true,
+        );
+        runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response(ready_screen, true);
+        runner.add_response("", true);
+        runner.add_response("pane:0", true);
     }
 
     #[test]
@@ -725,7 +775,7 @@ mod tests {
             ..SetupOptions::default()
         };
 
-        let opened = open_workspace(&ctx, &config, &wt, &names, &HashMap::new(), "", options)
+        let opened = open_workspace(&ctx, &config, &wt, &names, &HashMap::new(), "", &options)
             .unwrap()
             .unwrap();
 
@@ -797,6 +847,7 @@ mod tests {
                     mode: WorkspaceBrowserMode::System,
                     url: Some("{{site_url}}".into()),
                     app: Some("Google Chrome".into()),
+                    chrome_devtools: None,
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -837,8 +888,7 @@ mod tests {
     #[test]
     fn run_setup_browser_mode_none_suppresses_browser_and_chrome_launch() {
         use crate::config::{
-            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
-            WorkspaceConfig,
+            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceConfig,
         };
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner};
@@ -871,10 +921,7 @@ mod tests {
                     mode: WorkspaceBrowserMode::None,
                     url: None,
                     app: None,
-                }),
-                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    port: Some(9222),
-                    ..WorkspaceChromeDevtoolsConfig::default()
+                    chrome_devtools: None,
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -952,9 +999,9 @@ mod tests {
                     mode: WorkspaceBrowserMode::ChromeDevtools,
                     url: None,
                     app: None,
-                }),
-                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    ..WorkspaceChromeDevtoolsConfig::default()
+                    chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                        ..WorkspaceChromeDevtoolsConfig::default()
+                    }),
                 }),
                 ..WorkspaceConfig::default()
             }),
@@ -1020,6 +1067,198 @@ mod tests {
     }
 
     #[test]
+    fn run_setup_wires_chrome_devtools_mcp_for_claude_agent() {
+        use crate::config::{
+            Config, ReadyMode, WorkspaceBrowserConfig, WorkspaceBrowserMode,
+            WorkspaceChromeDevtoolsConfig, WorkspaceConfig,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let wt = dir.path().join("repo-worktree");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(wt.join("CLAUDE.local.md"), "# Existing content\n").unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_command("npx");
+        runner.add_command("google-chrome");
+        add_cmux_agent_workspace_responses(&mut runner, "ready ❯");
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let config = Config {
+            workspace: Some(WorkspaceConfig {
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::ChromeDevtools,
+                    url: None,
+                    app: None,
+                    chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                        ..WorkspaceChromeDevtoolsConfig::default()
+                    }),
+                }),
+                ..WorkspaceConfig::default()
+            }),
+            agent: Some(AgentConfig {
+                cli: AgentCli::Claude,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                ..AgentConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo,
+            config,
+            Box::new(SharedMockRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: wt.clone(),
+            branch: "alice/issue-1-test".into(),
+            workspace: "test".into(),
+            site: None,
+        };
+        let expected_user_data_dir = wt
+            .parent()
+            .unwrap()
+            .join(".chrome-devtools")
+            .join(wt.file_name().unwrap());
+        let expected_mcp_config = expected_user_data_dir.join("wt-mcp.json");
+
+        run_setup(
+            &ctx,
+            &wt,
+            &names,
+            Some("GitHub Issue"),
+            "branch",
+            None,
+            None,
+        )
+        .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let command_arg = workspace_command_arg(&calls);
+        assert!(command_arg.contains("claude --mcp-config "));
+        assert!(command_arg.contains(&expected_mcp_config.to_string_lossy().to_string()));
+        assert!(!command_arg.contains("--strict-mcp-config"));
+
+        let port = chrome_launch_port(&calls);
+        let rendered = fs::read_to_string(&expected_mcp_config).unwrap();
+        let mcp_config: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(
+            mcp_config["mcpServers"]["chrome-devtools"]["command"],
+            "npx"
+        );
+        assert_eq!(
+            mcp_config["mcpServers"]["chrome-devtools"]["args"][0],
+            "chrome-devtools-mcp@latest"
+        );
+        assert_eq!(
+            mcp_config["mcpServers"]["chrome-devtools"]["args"][1],
+            format!("--browser-url=http://127.0.0.1:{port}")
+        );
+
+        let context = fs::read_to_string(wt.join("CLAUDE.local.md")).unwrap();
+        assert!(context.contains("chrome-devtools(wt)"));
+    }
+
+    #[test]
+    fn run_setup_wires_chrome_devtools_mcp_for_codex_agent() {
+        use crate::config::{
+            Config, ReadyMode, WorkspaceBrowserConfig, WorkspaceBrowserMode,
+            WorkspaceChromeDevtoolsConfig, WorkspaceConfig,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let wt = dir.path().join("repo-worktree");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(wt.join("AGENTS.override.md"), "# Existing content\n").unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_command("npx");
+        runner.add_command("google-chrome");
+        add_cmux_agent_workspace_responses(&mut runner, "ready ›");
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let config = Config {
+            workspace: Some(WorkspaceConfig {
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::ChromeDevtools,
+                    url: None,
+                    app: None,
+                    chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                        ..WorkspaceChromeDevtoolsConfig::default()
+                    }),
+                }),
+                ..WorkspaceConfig::default()
+            }),
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                ..AgentConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo,
+            config,
+            Box::new(SharedMockRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: wt.clone(),
+            branch: "alice/issue-1-test".into(),
+            workspace: "test".into(),
+            site: None,
+        };
+        let expected_user_data_dir = wt
+            .parent()
+            .unwrap()
+            .join(".chrome-devtools")
+            .join(wt.file_name().unwrap());
+
+        run_setup(
+            &ctx,
+            &wt,
+            &names,
+            Some("GitHub Issue"),
+            "branch",
+            None,
+            None,
+        )
+        .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let command_arg = workspace_command_arg(&calls);
+        let port = chrome_launch_port(&calls);
+        assert!(command_arg.starts_with("export WT_AGENT_ID=agents/issue-1-test; codex "));
+        assert!(command_arg.contains("-c 'mcp_servers.chrome-devtools.command=\"npx\"'"));
+        assert!(command_arg.contains(&format!(
+            "-c 'mcp_servers.chrome-devtools.args=[\"chrome-devtools-mcp@latest\",\"--browser-url=http://127.0.0.1:{port}\"]'"
+        )));
+        assert!(!command_arg.contains("--mcp-config"));
+        assert!(!expected_user_data_dir.join("wt-mcp.json").exists());
+
+        let context = fs::read_to_string(wt.join("AGENTS.override.md")).unwrap();
+        assert!(context.contains("chrome-devtools(wt)"));
+    }
+
+    #[test]
     fn run_setup_renders_chrome_devtools_vars_for_post_deps_tabs() {
         use crate::config::{
             Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
@@ -1073,9 +1312,9 @@ mod tests {
                     mode: WorkspaceBrowserMode::ChromeDevtools,
                     url: None,
                     app: None,
-                }),
-                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    ..WorkspaceChromeDevtoolsConfig::default()
+                    chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                        ..WorkspaceChromeDevtoolsConfig::default()
+                    }),
                 }),
                 ..WorkspaceConfig::default()
             }),

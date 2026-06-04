@@ -652,6 +652,7 @@ mod tests {
                     mode: WorkspaceBrowserMode::System,
                     url: Some("{{site_url}}".into()),
                     app: None,
+                    chrome_devtools: None,
                 }),
                 ..WorkspaceConfig::default()
             }),

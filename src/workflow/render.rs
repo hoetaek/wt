@@ -340,12 +340,21 @@ pub(crate) fn prepared_workflow_message(
     ctx: &Ctx,
     workflow_path: &Path,
     title: Option<&str>,
+    coordinator: &str,
+    show_auto_hint: bool,
 ) -> String {
     let path = ctx.storage_root.display_path(workflow_path);
-    match title.map(str::trim).filter(|title| !title.is_empty()) {
+    let mut message = match title.map(str::trim).filter(|title| !title.is_empty()) {
         Some(title) => format!("Prepared workflow: {title} ({path})"),
         None => format!("Prepared workflow: {path}"),
+    };
+    message.push_str(&format!("\n  coordinator: {coordinator}"));
+    if show_auto_hint {
+        message.push_str(
+            "\n  hint: To bind a different coordinator, rerun with --coordinator <id> or WT_AGENT_ID=<id>.",
+        );
     }
+    message
 }
 
 pub(crate) fn no_runnable_workflow_tasks_message() -> &'static str {

@@ -1,3 +1,4 @@
+use crate::messages::AgentId;
 use clap::{ArgAction, ArgGroup, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -911,6 +912,9 @@ pub enum WorkflowCommand {
         /// With --mode matrix, selected named profiles to run in order
         #[arg(long, value_name = "PROFILE", value_delimiter = ',')]
         profiles: Vec<String>,
+        /// Bind the workflow TaskRuns to this coordinator id at creation time
+        #[arg(long, value_name = "ID", value_parser = parse_agent_id)]
+        coordinator: Option<String>,
         /// Short workflow title for list, select, and show surfaces
         #[arg(long)]
         title: Option<String>,
@@ -1121,6 +1125,12 @@ fn parse_positive_u64(value: &str) -> std::result::Result<u64, String> {
         return Err("must be a positive integer".into());
     }
     Ok(parsed)
+}
+
+fn parse_agent_id(value: &str) -> std::result::Result<String, String> {
+    AgentId::parse(value)
+        .map(|agent| agent.as_str().to_string())
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
@@ -2036,6 +2046,8 @@ mod tests {
             "stack",
             "--profile",
             "codex",
+            "--coordinator",
+            "coord-split",
             "--title",
             "Split workflow",
             "--body",
@@ -2057,6 +2069,7 @@ mod tests {
                     mode: WorkflowModeArg::Stack,
                     profile: Some(ref profile),
                     ref profiles,
+                    coordinator: Some(ref coordinator),
                     title: Some(ref title),
                     body: Some(ref body),
                     body_file: None,
@@ -2068,6 +2081,7 @@ mod tests {
             }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
                 && profiles.is_empty()
+                && coordinator == "agents/coord-split"
                 && title == "Split workflow"
                 && body == "Ship the split workflow"
                 && origin_provider == "linear"
@@ -2087,6 +2101,7 @@ mod tests {
                     mode: WorkflowModeArg::Batch,
                     profile: None,
                     ref profiles,
+                    coordinator: None,
                     title: None,
                     body: None,
                     body_file: None,
@@ -2097,6 +2112,26 @@ mod tests {
                 }
             }) if tasks.is_empty() && profiles.is_empty()
         ));
+    }
+
+    #[test]
+    fn workflow_task_rejects_invalid_coordinator_id() {
+        let err = Cli::try_parse_from([
+            "wt",
+            "workflow",
+            "task",
+            "--mode",
+            "batch",
+            "--coordinator",
+            "agents/team/bad",
+            "add-schema",
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("agents/team/bad"));
+        assert!(
+            err.to_string()
+                .contains("Agent ids must be NAME or agents/NAME")
+        );
     }
 
     #[test]
@@ -2297,6 +2332,7 @@ mod tests {
         assert!(task_help.contains("--body-file"));
         assert!(task_help.contains("--origin-provider"));
         assert!(task_help.contains("--origin-id"));
+        assert!(task_help.contains("--coordinator <ID>"));
         assert!(task_help.contains("Workflow-level [origin] is stored only on the Workflow"));
         assert!(task_help.contains("does not add issue-closing keywords"));
         assert!(!task_help.contains("--objective"));

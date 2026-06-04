@@ -49,9 +49,6 @@ pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
             }
         });
     }
-    if profile.test.is_some() {
-        merged.test = profile.test;
-    }
     if profile.issues.is_some() {
         merged.issues = profile.issues;
     }
@@ -218,9 +215,6 @@ fn merge_workspace_config(base: &mut WorkspaceConfig, profile: WorkspaceConfig) 
     base.colors.extend(profile.colors);
     if profile.browser.is_some() {
         base.browser = profile.browser;
-    }
-    if profile.chrome_devtools.is_some() {
-        base.chrome_devtools = profile.chrome_devtools;
     }
 }
 

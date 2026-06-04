@@ -276,7 +276,13 @@ Wireframe does not mean UI only. Use the artifact form that fits the output:
    data. This pass must succeed before design or medium-specific wireframing.
 3. If needed, add an artifact-specific wireframe:
    - UI / app flow: rough screens or HTML with realistic records, empty states,
-     error states, and visual treatment for the concrete approved case.
+     error states, and visual treatment for the concrete approved case. For
+     **brownfield web changes** (editing an existing page), you can capture the
+     real page with Chrome and edit only the changed regions instead of
+     hand-drawing, then save a self-contained single file — see
+     `references/brownfield-html-capture.md`. This is still a medium-specific
+     pass: the text-first wireframe (step 2) comes first, and the captured real
+     markup stays the locked context.
    - CLI / config: expected command transcript, generated TOML, and failure
      cases.
    - Workflow/process: mock TaskDocument, Workflow, TaskRun, pass/land path,
@@ -789,6 +795,9 @@ makes a file authoritative.
   request/response examples).
 - For UI/web work, whether the visual treatment is sufficient to judge the
   concrete case before generalizing a visual system in `03-Architect/05-design.md`.
+- For brownfield web captures (see `references/brownfield-html-capture.md`),
+  whether the saved artifact is self-contained (assets inlined, offline-reload
+  checked) and which stack limits were left as deferred variation points.
 - Which empty/error/edge/loading/conflict states change structure and therefore
   must appear before design.
 - Whether the wireframe reveals missing requirements or wrong assumptions.

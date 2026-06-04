@@ -83,7 +83,6 @@ enum InitSection {
     WorktreeNaming,
     Setup,
     Editor,
-    Test,
     Workspace,
     WorkspaceBrowser,
 }
@@ -101,7 +100,6 @@ impl InitSection {
             InitSection::WorktreeNaming => "worktree.naming",
             InitSection::Setup => "setup",
             InitSection::Editor => "editor",
-            InitSection::Test => "test",
             InitSection::Workspace => "workspace",
             InitSection::WorkspaceBrowser => "workspace.browser",
         }
@@ -118,7 +116,6 @@ struct InitCommonConfig {
     worktree_naming: bool,
     setup_deps: Vec<InitCommand>,
     editor_command: Option<String>,
-    test_commands: Vec<InitCommand>,
     workspace_tabs: Vec<String>,
     post_deps_tabs: Vec<String>,
     workspace_colors: Vec<(String, String)>,
@@ -171,7 +168,6 @@ enum InitCommandKind {
 struct DetectedRepo {
     setup_deps: Vec<InitCommand>,
     post_deps_tabs: Vec<String>,
-    test_commands: Vec<InitCommand>,
     issue_provider: Option<InitIssueProvider>,
     site_provider: Option<InitSiteProvider>,
     has_env_file: bool,
@@ -183,7 +179,6 @@ impl DetectedRepo {
         Self {
             setup_deps: detect_setup_deps(repo_root),
             post_deps_tabs: detect_post_deps_tabs(repo_root),
-            test_commands: detect_test_commands(repo_root),
             issue_provider: detect_issue_provider(repo_root),
             site_provider: detect_site_provider(repo_root),
             has_env_file: repo_root.join(".env").exists(),
@@ -218,9 +213,6 @@ impl DetectedRepo {
         for tab in &self.post_deps_tabs {
             push_signal(&mut signals, format!("post-deps tab: {tab}"));
         }
-        for command in &self.test_commands {
-            push_signal(&mut signals, format!("test: {}", command_display(command)));
-        }
         signals
     }
 }
@@ -248,23 +240,6 @@ impl InitCommonConfig {
                 })
                 .collect(),
             editor_command: config.editor.command.clone(),
-            test_commands: config
-                .test
-                .as_ref()
-                .map(|test| {
-                    test.commands
-                        .iter()
-                        .map(|command| InitCommand {
-                            label: command.label.clone(),
-                            working_dir: command.working_dir.clone(),
-                            run: command.run.clone(),
-                            if_exists: command.if_exists.clone(),
-                            kind: InitCommandKind::Other,
-                            default_enabled: true,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
             ..InitCommonConfig::default()
         };
 
@@ -288,7 +263,7 @@ impl InitCommonConfig {
                     mode,
                     url: browser.url.clone(),
                     app: browser.app.clone(),
-                    chrome_devtools_user_data_dir: workspace
+                    chrome_devtools_user_data_dir: browser
                         .chrome_devtools
                         .as_ref()
                         .and_then(|chrome| chrome.user_data_dir.clone()),
@@ -1240,16 +1215,6 @@ fn append_active_common_config(
         s.push_str("placement = \"cmux_surface\"\n\n");
     }
 
-    if !common.test_commands.is_empty() {
-        sections.push(InitSection::Test);
-        s.push_str("[test]\n");
-        s.push_str("commands = [\n");
-        for command in &common.test_commands {
-            append_command_entry(s, command);
-        }
-        s.push_str("]\n\n");
-    }
-
     sections.push(InitSection::Workspace);
     s.push_str("[workspace]\n");
     s.push_str("# cmux로 함께 열 보조 탭입니다. 없거나 불필요하면 []로 둡니다.\n");
@@ -1286,7 +1251,7 @@ fn append_active_common_config(
         s.push('\n');
 
         if browser.mode == InitWorkspaceBrowserMode::ChromeDevtools {
-            s.push_str("[workspace.chrome_devtools]\n");
+            s.push_str("[workspace.browser.chrome_devtools]\n");
             if let Some(user_data_dir) = browser.chrome_devtools_user_data_dir.as_deref() {
                 s.push_str(&format!("user_data_dir = {}\n", toml_quote(user_data_dir)));
             } else {
@@ -1428,12 +1393,12 @@ fn resolve_common_config(
     } else if cmux_available(ctx) {
         PromptItem::with_description(
             "감지한 개발 설정 저장",
-            "감지한 setup/test 명령, 로컬 파일, workspace 설정을 저장합니다.",
+            "감지한 setup 명령, 로컬 파일, workspace 설정을 저장합니다.",
         )
     } else {
         PromptItem::with_description(
             "감지한 개발 설정 저장",
-            "감지한 setup/test 명령과 로컬 파일을 저장하고 workspace 자동화는 비워둡니다.",
+            "감지한 setup 명령과 로컬 파일을 저장하고 workspace 자동화는 비워둡니다.",
         )
     };
     let items = vec![
@@ -1444,7 +1409,7 @@ fn resolve_common_config(
         ),
         PromptItem::with_description(
             "자동화 없이 최소 설정",
-            "setup/test/editor/browser 없이 빈 workspace 설정만 저장합니다.",
+            "setup/editor/browser 없이 빈 workspace 설정만 저장합니다.",
         ),
     ];
     match ctx
@@ -1487,7 +1452,6 @@ fn detected_project_common_config(
         } else {
             Vec::new()
         },
-        test_commands: default_enabled_test_commands(detected),
         workspace_tabs: if local_target {
             recommended_workspace_tabs(ctx)
         } else {
@@ -1547,20 +1511,6 @@ fn resolve_custom_common_config(
         }
     }
 
-    if !detected.test_commands.is_empty() {
-        ctx.ui
-            .print_dim("test command는 반복해서 쓸 validation 명령으로 저장됩니다.");
-        print_detected_commands(ctx, "감지한 test command", &detected.test_commands);
-        if ctx.ui.confirm(
-            "위 test command를 저장할까요?",
-            !config.test_commands.is_empty(),
-        )? {
-            config.test_commands = detected.test_commands.clone();
-        } else {
-            config.test_commands.clear();
-        }
-    }
-
     config.editor_command = resolve_editor_command(ctx, config.editor_command.as_deref())?;
     if cmux_available(ctx) && site_provider.is_some() {
         config.workspace_browser = resolve_workspace_browser(ctx, config.workspace_browser)?;
@@ -1573,15 +1523,6 @@ fn resolve_custom_common_config(
 fn default_enabled_setup_deps(detected: &DetectedRepo) -> Vec<InitCommand> {
     detected
         .setup_deps
-        .iter()
-        .filter(|command| command.default_enabled)
-        .cloned()
-        .collect()
-}
-
-fn default_enabled_test_commands(detected: &DetectedRepo) -> Vec<InitCommand> {
-    detected
-        .test_commands
         .iter()
         .filter(|command| command.default_enabled)
         .cloned()
@@ -1977,20 +1918,6 @@ fn push_node_install_option(options: &mut Vec<(String, String)>, label: String, 
     }
 }
 
-fn print_detected_commands(ctx: &Ctx, title: &str, commands: &[InitCommand]) {
-    if commands.len() == 1 {
-        ctx.ui
-            .print_dim(&format!("{title}: {}", command_display(&commands[0])));
-        return;
-    }
-
-    ctx.ui.print_dim(&format!("{title}:"));
-    for command in commands {
-        ctx.ui
-            .print_dim(&format!("  - {}", command_display(command)));
-    }
-}
-
 fn print_detected_dev_server_commands(ctx: &Ctx, commands: &[String]) {
     if commands.len() == 1 {
         ctx.ui
@@ -2075,45 +2002,6 @@ fn detect_post_deps_tabs(repo_root: &Path) -> Vec<String> {
         .collect()
 }
 
-fn detect_test_commands(repo_root: &Path) -> Vec<InitCommand> {
-    let mut commands = Vec::new();
-    for rel_dir in detect_manifest_dirs(repo_root, &["Cargo.toml"]) {
-        commands.push(InitCommand {
-            label: Some("test".into()),
-            working_dir: relative_dir(&rel_dir),
-            run: "cargo test".into(),
-            if_exists: None,
-            kind: InitCommandKind::Other,
-            default_enabled: true,
-        });
-    }
-    for rel_dir in detect_package_roots(repo_root) {
-        let project_root = repo_root.join(&rel_dir);
-        let working_dir = relative_dir(&rel_dir);
-        if let Some(run) = package_script_command(&project_root, "test") {
-            commands.push(InitCommand {
-                label: Some("test".into()),
-                working_dir: working_dir.clone(),
-                run,
-                if_exists: None,
-                kind: InitCommandKind::Other,
-                default_enabled: true,
-            });
-        }
-        if let Some(run) = package_script_command(&project_root, "lint") {
-            commands.push(InitCommand {
-                label: Some("lint".into()),
-                working_dir,
-                run,
-                if_exists: None,
-                kind: InitCommandKind::Other,
-                default_enabled: true,
-            });
-        }
-    }
-    commands
-}
-
 fn detect_issue_provider(repo_root: &Path) -> Option<InitIssueProvider> {
     repo_root
         .join(".linear.toml")
@@ -2172,13 +2060,10 @@ fn package_script_command(project_root: &Path, script: &str) -> Option<String> {
         return None;
     }
 
-    let manager = node_package_manager(project_root);
-    let command = if script == "test" && manager == "npm" {
-        "npm test".into()
-    } else {
-        format!("{manager} run {script}")
-    };
-    Some(command)
+    Some(format!(
+        "{} run {script}",
+        node_package_manager(project_root)
+    ))
 }
 
 fn package_script_exists(project_root: &Path, script: &str) -> bool {
@@ -3366,7 +3251,6 @@ mod tests {
                 InitSection::Workflow,
                 InitSection::Worktree,
                 InitSection::Setup,
-                InitSection::Test,
                 InitSection::Workspace
             ]
         );
@@ -3376,16 +3260,10 @@ mod tests {
         );
         assert!(
             plan.detected_signals
-                .contains(&"test: npm test".to_string())
-        );
-        assert!(
-            plan.detected_signals
                 .contains(&"post-deps tab: npm run dev".to_string())
         );
         assert!(plan.content.contains("[setup]"));
         assert!(plan.content.contains("run = \"npm install\""));
-        assert!(plan.content.contains("[test]"));
-        assert!(plan.content.contains("run = \"npm test\""));
         assert!(plan.content.contains("post_deps_tabs = [\"npm run dev\"]"));
     }
 
@@ -3489,15 +3367,14 @@ mod tests {
         assert_eq!(config.issues.unwrap().provider, IssueProviderType::Linear);
         assert_eq!(config.site.unwrap().provider, SiteProvider::Herd);
         let workspace = config.workspace.unwrap();
+        let browser = workspace.browser.unwrap();
+        assert_eq!(browser.mode, WorkspaceBrowserMode::ChromeDevtools);
         assert_eq!(
-            workspace.browser.unwrap().mode,
-            WorkspaceBrowserMode::ChromeDevtools
-        );
-        assert_eq!(
-            workspace.chrome_devtools.unwrap().user_data_dir.as_deref(),
+            browser.chrome_devtools.unwrap().user_data_dir.as_deref(),
             Some("{{worktree_parent}}/.chrome-devtools/{{worktree_name}}")
         );
         assert!(plan.content.contains("[workspace.browser]"));
+        assert!(plan.content.contains("[workspace.browser.chrome_devtools]"));
         assert!(plan.content.contains("mode = \"chrome_devtools\""));
         assert!(!plan.content.contains("php artisan storage:link"));
         assert!(!plan.content.contains("setup-env"));
@@ -3542,7 +3419,7 @@ mod tests {
     }
 
     #[test]
-    fn init_recommendation_detects_rust_only_repo_tests() {
+    fn init_recommendation_for_rust_only_repo_skips_setup_commands() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("Cargo.toml"),
@@ -3562,29 +3439,19 @@ mod tests {
         .unwrap();
         let config: Config = toml::from_str(&plan.content).unwrap();
 
-        assert!(
-            plan.detected_signals
-                .contains(&"test: cargo test".to_string())
-        );
         assert_eq!(
             plan.sections,
             vec![
                 InitSection::Workflow,
                 InitSection::Worktree,
-                InitSection::Test,
                 InitSection::Workspace
             ]
         );
         assert!(config.setup.deps.is_empty());
-        let test = config.test.unwrap();
-        assert_eq!(test.commands.len(), 1);
-        assert_eq!(test.commands[0].label.as_deref(), Some("test"));
-        assert_eq!(test.commands[0].run, "cargo test");
-        assert!(test.commands[0].working_dir.is_none());
     }
 
     #[test]
-    fn init_recommendation_detects_node_scripts_for_setup_tests_and_dev_tabs() {
+    fn init_recommendation_detects_node_setup_and_dev_tabs() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("package.json"),
@@ -3619,14 +3486,6 @@ mod tests {
                 .contains(&"post-deps tab: pnpm run dev".to_string())
         );
         assert!(
-            plan.detected_signals
-                .contains(&"test: pnpm run test".to_string())
-        );
-        assert!(
-            plan.detected_signals
-                .contains(&"test: pnpm run lint".to_string())
-        );
-        assert!(
             !plan
                 .detected_signals
                 .iter()
@@ -3634,14 +3493,6 @@ mod tests {
         );
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].run, "pnpm install");
-        let test = config.test.unwrap();
-        assert_eq!(test.commands.len(), 2);
-        assert!(test.commands.iter().any(|command| {
-            command.label.as_deref() == Some("test") && command.run == "pnpm run test"
-        }));
-        assert!(test.commands.iter().any(|command| {
-            command.label.as_deref() == Some("lint") && command.run == "pnpm run lint"
-        }));
         let workspace = config.workspace.unwrap();
         assert_eq!(workspace.post_deps_tabs, vec!["pnpm run dev".to_string()]);
     }
@@ -3698,7 +3549,6 @@ mod tests {
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].working_dir.as_deref(), Some("api"));
         assert_eq!(config.setup.deps[0].run, "uv sync");
-        assert!(config.test.is_none());
     }
 
     #[test]
@@ -3747,14 +3597,6 @@ mod tests {
         assert!(
             plan.detected_signals
                 .contains(&"setup: apps/web: bun install".to_string())
-        );
-        assert!(
-            plan.detected_signals
-                .contains(&"test: cargo test".to_string())
-        );
-        assert!(
-            plan.detected_signals
-                .contains(&"test: apps/web: bun run test".to_string())
         );
         assert_eq!(config.setup.deps.len(), 3);
         assert!(
@@ -3808,7 +3650,6 @@ mod tests {
                 InitSection::Workflow,
                 InitSection::Worktree,
                 InitSection::Setup,
-                InitSection::Test,
                 InitSection::Workspace
             ]
         );
@@ -3821,11 +3662,9 @@ mod tests {
                 .contains(&"post-deps tab: npm run dev".to_string())
         );
         assert_eq!(config.setup.deps.len(), 1);
-        assert!(config.test.is_some());
         let workspace = config.workspace.unwrap();
         assert_eq!(workspace.post_deps_tabs, vec!["npm run dev".to_string()]);
         assert!(plan.content.lines().any(|line| line == "[setup]"));
-        assert!(plan.content.lines().any(|line| line == "[test]"));
         assert!(
             plan.content
                 .lines()
@@ -3904,13 +3743,6 @@ mod tests {
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].run, "npm install");
-        let test = config.test.unwrap();
-        assert!(test.commands.iter().any(|command| {
-            command.label.as_deref() == Some("test") && command.run == "npm test"
-        }));
-        assert!(test.commands.iter().any(|command| {
-            command.label.as_deref() == Some("lint") && command.run == "npm run lint"
-        }));
         let workspace = config.workspace.unwrap();
         assert!(workspace.tabs.is_empty());
         assert!(workspace.post_deps_tabs.is_empty());
@@ -3996,17 +3828,7 @@ mod tests {
         .unwrap();
         let summary = render_plan_summary(&plan).join("\n");
 
-        assert!(summary.contains("저장될 설정: workflow, worktree, setup, test, workspace"));
-        assert!(
-            plan.detected_signals
-                .contains(&"test: npm test".to_string())
-        );
-        assert!(
-            plan.detected_signals
-                .contains(&"test: npm run lint".to_string())
-        );
-        assert!(!summary.contains("test: npm test"));
-        assert!(!summary.contains("test: npm run lint"));
+        assert!(summary.contains("저장될 설정: workflow, worktree, setup, workspace"));
         assert!(!summary.contains("[ok] 감지됨"));
         assert!(!summary.contains("감지된 신호"));
     }
@@ -4075,7 +3897,6 @@ mod tests {
         assert!(!content.contains("# [worktree.naming]"));
         assert!(!content.contains("# [setup.env]"));
         assert!(!content.contains("# [editor]"));
-        assert!(!content.contains("# [test]"));
         assert!(!content.contains("# post_deps_tabs"));
         assert!(!content.contains("# colors ="));
         assert!(config.worktree.path.is_none());
@@ -4574,7 +4395,6 @@ mod tests {
         ui.add_confirm(true); // add detected setup commands
         ui.add_select(0); // detected pnpm install
         ui.add_confirm(true); // start detected dev command after deps
-        ui.add_confirm(true); // add detected test commands
         ui.add_select(1); // nvim {{path}}
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
@@ -4629,20 +4449,6 @@ mod tests {
         );
         assert_eq!(workspace.post_deps_tabs, vec!["pnpm run dev".to_string()]);
 
-        let test = config.test.unwrap();
-        assert!(test.commands.iter().any(|command| {
-            command.label.as_deref() == Some("test")
-                && command.run == "pnpm run test"
-                && command.working_dir.is_none()
-                && command.if_exists.is_none()
-        }));
-        assert!(test.commands.iter().any(|command| {
-            command.label.as_deref() == Some("lint")
-                && command.run == "pnpm run lint"
-                && command.working_dir.is_none()
-                && command.if_exists.is_none()
-        }));
-
         let dims = ui.dims.lock().unwrap().clone();
         assert!(dims.iter().any(|line| line
             == "dev 탭은 dependency setup이 끝난 뒤 개발 서버 command를 별도 탭에서 시작합니다."));
@@ -4650,9 +4456,6 @@ mod tests {
             dims.iter()
                 .any(|line| line == "감지한 dev server command: pnpm run dev")
         );
-        assert!(dims.iter().any(|line| line == "감지한 test command:"));
-        assert!(dims.iter().any(|line| line == "  - pnpm run test"));
-        assert!(dims.iter().any(|line| line == "  - pnpm run lint"));
         assert!(
             ui.prompts
                 .lock()

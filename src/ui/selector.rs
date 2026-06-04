@@ -1619,11 +1619,11 @@ mod tests {
         let state = SelectorState::single(vec![
             SelectorRow::Option(
                 SelectorOption::new(0, "감지한 개발 설정 저장")
-                    .description("감지한 setup/test 명령과 로컬 파일을 저장합니다."),
+                    .description("감지한 setup 명령과 로컬 파일을 저장합니다."),
             ),
             SelectorRow::Option(
                 SelectorOption::new(1, "자동화 없이 최소 설정")
-                    .description("setup/test/editor/browser 없이 빈 workspace만 저장합니다."),
+                    .description("setup/editor/browser 없이 빈 workspace만 저장합니다."),
             ),
         ]);
         let rendered = render_plain(
@@ -1633,15 +1633,15 @@ mod tests {
 
         assert!(rendered.contains("│ ❯ ●  감지한 개발 설정 저장"));
         assert!(rendered.contains(&format!(
-            "│ {}감지한 setup/test 명령과 로컬 파일을 저장합니다.",
+            "│ {}감지한 setup 명령과 로컬 파일을 저장합니다.",
             " ".repeat(5)
         )));
         assert!(rendered.contains(
-            "│      감지한 setup/test 명령과 로컬 파일을 저장합니다.\n│\n│   ○  자동화 없이 최소 설정"
+            "│      감지한 setup 명령과 로컬 파일을 저장합니다.\n│\n│   ○  자동화 없이 최소 설정"
         ));
         assert!(rendered.contains("│   ○  자동화 없이 최소 설정"));
         assert!(rendered.contains(&format!(
-            "│ {}setup/test/editor/browser 없이 빈 workspace만 저장합니다.",
+            "│ {}setup/editor/browser 없이 빈 workspace만 저장합니다.",
             " ".repeat(5)
         )));
     }

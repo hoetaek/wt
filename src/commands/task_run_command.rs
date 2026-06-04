@@ -48,7 +48,7 @@ pub fn run(
     if selected.is_empty() {
         bail!("No local tasks selected");
     }
-    let coordinator = current_actor::resolve_launch_coordinator(ctx)?;
+    let coordinator = current_actor::resolve_launch_coordinator(ctx, None)?;
 
     if jobs > 1 && selected.len() > 1 {
         return run_selected_tasks_parallel(ctx, selected, base_raw, profile, jobs, &coordinator);

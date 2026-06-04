@@ -4,6 +4,7 @@ use crate::messages::{AgentId, MessageScope};
 use crate::services::current_actor;
 use crate::services::inbox_wake;
 use crate::task_run::{self, TaskReviewStatus, TaskRunRecord};
+use crate::workflow::render::shell_arg;
 use anyhow::{Context, Result, bail};
 
 pub(crate) fn run(
@@ -12,7 +13,7 @@ pub(crate) fn run(
     status: TaskReviewStatus,
     message: &[String],
 ) -> Result<()> {
-    let from = current_actor::resolve_launch_coordinator(ctx)?;
+    let from = current_actor::resolve_launch_coordinator(ctx, None)?;
     run_with_actor(ctx, task_run_id, status, message, &from)
 }
 
@@ -23,9 +24,10 @@ pub(super) fn run_with_actor(
     message: &[String],
     from: &AgentId,
 ) -> Result<()> {
-    let text = review_message(status, message)?;
+    let review_text = review_message_text(message)?;
     let record = resolve_review_task_run(ctx, task_run_id)?;
-    validate_review_sender(&record, from)?;
+    validate_review_sender(&record, from, status, &review_text)?;
+    let text = review_message(status, &review_text);
     let to = required_task_agent_id(&record)?;
     let scope = MessageScope::task_run(record.id.clone())?;
 
@@ -81,11 +83,17 @@ fn required_coordinator_id(record: &TaskRunRecord) -> Result<AgentId> {
     })
 }
 
-fn validate_review_sender(record: &TaskRunRecord, from: &AgentId) -> Result<()> {
+fn validate_review_sender(
+    record: &TaskRunRecord,
+    from: &AgentId,
+    status: TaskReviewStatus,
+    message: &str,
+) -> Result<()> {
     let expected = required_coordinator_id(record)?;
     if from.as_str() != expected.as_str() {
+        let hint = review_sender_mismatch_hint(record, &expected, status, message);
         bail!(
-            "Current actor id {} does not match TaskRun {} coordinator_id {}; review feedback must be sent by the TaskRun coordinator route.",
+            "Current actor id {} does not match TaskRun {} coordinator_id {}; review feedback must be sent by the TaskRun coordinator route.\nHint: {hint}",
             from.as_str(),
             record.id,
             expected.as_str()
@@ -94,16 +102,43 @@ fn validate_review_sender(record: &TaskRunRecord, from: &AgentId) -> Result<()> 
     Ok(())
 }
 
-fn review_message(status: TaskReviewStatus, message: &[String]) -> Result<String> {
+fn review_sender_mismatch_hint(
+    record: &TaskRunRecord,
+    expected: &AgentId,
+    status: TaskReviewStatus,
+    message: &str,
+) -> String {
+    format!(
+        "wt as {} -- wt task review {} {} {}",
+        shell_arg(expected.as_str()),
+        shell_arg(&record.id),
+        review_status_flag(status),
+        shell_arg(message)
+    )
+}
+
+fn review_status_flag(status: TaskReviewStatus) -> &'static str {
+    match status {
+        TaskReviewStatus::Accepted => "--accept",
+        TaskReviewStatus::Rejected => "--reject",
+        TaskReviewStatus::Blocked => "--block",
+    }
+}
+
+fn review_message_text(message: &[String]) -> Result<String> {
     let message = message.join(" ");
     let message = message.trim();
     if message.is_empty() {
         bail!("Review message cannot be empty");
     }
-    Ok(format!(
+    Ok(message.to_string())
+}
+
+fn review_message(status: TaskReviewStatus, message: &str) -> String {
+    format!(
         "Coordinator Review: Status={}; Message={message}",
         status.as_str()
-    ))
+    )
 }
 
 #[cfg(test)]
@@ -458,6 +493,10 @@ mod tests {
         assert!(message.contains("does not match TaskRun"));
         assert!(message.contains("agents/coord-b"));
         assert!(message.contains("coordinator_id agents/coord-a"));
+        assert!(message.contains(&format!(
+            "Hint: wt as agents/coord-a -- wt task review {} --reject 'needs changes'",
+            record.id
+        )));
         assert!(
             task_run::read(&record.path)
                 .unwrap()

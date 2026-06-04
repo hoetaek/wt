@@ -559,6 +559,9 @@ mode = "chrome_devtools"
 In Chrome DevTools browser mode, `wt` reserves a localhost port, launches Chrome
 with `--remote-debugging-address=127.0.0.1`, and uses a non-default per-worktree
 user data directory under the worktree parent, outside the repository checkout.
+When the workspace agent is Claude or Codex and `npx` is available, setup also
+wires a launch-time `chrome-devtools` MCP server to that reserved browser URL
+without changing tracked or global agent config.
 Setup templates, post-deps tabs, local context, and agent bootstrap can use
 `{{chrome_debug_port}}`, `{{chrome_debug_url}}`, and
 `{{chrome_user_data_dir}}`. A localhost Chrome remote debugging endpoint lets

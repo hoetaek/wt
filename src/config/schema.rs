@@ -44,7 +44,6 @@ pub struct Config {
     pub editor: EditorConfig,
     pub workspace: Option<WorkspaceConfig>,
     pub agent: Option<AgentConfig>,
-    pub test: Option<TestConfig>,
     pub issues: Option<IssuesConfig>,
 }
 
@@ -384,7 +383,6 @@ pub struct WorkspaceConfig {
     pub post_deps_tabs: Vec<String>,
     pub colors: HashMap<String, String>,
     pub browser: Option<WorkspaceBrowserConfig>,
-    pub chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
@@ -394,7 +392,7 @@ struct WorkspaceConfigRaw {
     post_deps_tabs: Vec<String>,
     colors: HashMap<String, String>,
     browser: Option<WorkspaceBrowserConfig>,
-    chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
+    chrome_devtools: Option<toml::Value>,
 }
 
 impl<'de> Deserialize<'de> for WorkspaceConfig {
@@ -408,13 +406,17 @@ impl<'de> Deserialize<'de> for WorkspaceConfig {
                 "[workspace].colors.new is no longer supported; use [workspace].colors.branch for wt run branch",
             ));
         }
+        if raw.chrome_devtools.is_some() {
+            return Err(D::Error::custom(
+                "[workspace.chrome_devtools] is no longer supported; move it to [workspace.browser.chrome_devtools]",
+            ));
+        }
 
         Ok(Self {
             tabs: raw.tabs,
             post_deps_tabs: raw.post_deps_tabs,
             colors: raw.colors,
             browser: raw.browser,
-            chrome_devtools: raw.chrome_devtools,
         })
     }
 }
@@ -462,6 +464,7 @@ pub struct WorkspaceBrowserConfig {
     pub mode: WorkspaceBrowserMode,
     pub url: Option<String>,
     pub app: Option<String>,
+    pub chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -478,6 +481,7 @@ struct WorkspaceBrowserConfigRaw {
     mode: WorkspaceBrowserMode,
     url: Option<String>,
     app: Option<String>,
+    chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
 }
 
 impl<'de> Deserialize<'de> for WorkspaceBrowserConfig {
@@ -499,8 +503,19 @@ impl<'de> Deserialize<'de> for WorkspaceBrowserConfig {
                         "[workspace.browser].app is not valid when mode = \"none\"",
                     ));
                 }
+                if raw.chrome_devtools.is_some() {
+                    return Err(D::Error::custom(
+                        "[workspace.browser.chrome_devtools] is only valid when mode = \"chrome_devtools\"",
+                    ));
+                }
             }
-            WorkspaceBrowserMode::System => {}
+            WorkspaceBrowserMode::System => {
+                if raw.chrome_devtools.is_some() {
+                    return Err(D::Error::custom(
+                        "[workspace.browser.chrome_devtools] is only valid when mode = \"chrome_devtools\"",
+                    ));
+                }
+            }
             WorkspaceBrowserMode::ChromeDevtools => {
                 if raw.app.is_some() {
                     return Err(D::Error::custom(
@@ -514,6 +529,7 @@ impl<'de> Deserialize<'de> for WorkspaceBrowserConfig {
             mode: raw.mode,
             url: raw.url,
             app: raw.app,
+            chrome_devtools: raw.chrome_devtools,
         })
     }
 }
@@ -744,7 +760,6 @@ pub struct ProfileConfig {
     pub site: Option<SiteConfig>,
     pub workspace: Option<WorkspaceConfig>,
     pub agent: Option<AgentConfig>,
-    pub test: Option<TestConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
@@ -756,7 +771,6 @@ struct ProfileConfigRaw {
     site: Option<SiteConfig>,
     workspace: Option<WorkspaceConfig>,
     agent: Option<AgentConfig>,
-    test: Option<TestConfig>,
 }
 
 impl<'de> Deserialize<'de> for ProfileConfig {
@@ -772,7 +786,6 @@ impl<'de> Deserialize<'de> for ProfileConfig {
             site: raw.site,
             workspace: raw.workspace,
             agent: raw.agent,
-            test: raw.test,
         };
         profile
             .validate()
@@ -788,7 +801,6 @@ impl ProfileConfig {
             || self.site.is_some()
             || self.workspace.is_some()
             || self.agent.is_some()
-            || self.test.is_some()
     }
 
     fn validate(&self) -> anyhow::Result<()> {
@@ -798,7 +810,7 @@ impl ProfileConfig {
 
         if self.name.is_some() && self.has_inline_settings() {
             bail!(
-                "[profile] name cannot be combined with inline [profile.agent], [profile.worktree], [profile.setup], [profile.workspace], [profile.site], or [profile.test] sections"
+                "[profile] name cannot be combined with inline [profile.agent], [profile.worktree], [profile.setup], [profile.workspace], or [profile.site] sections"
             );
         }
 
@@ -812,7 +824,6 @@ impl ProfileConfig {
             site: self.site,
             workspace: self.workspace,
             agent: self.agent,
-            test: self.test,
             ..Config::default()
         }
     }
@@ -891,21 +902,6 @@ pub fn validate_profile_name(name: &str) -> anyhow::Result<()> {
         bail!("Profile name must contain only ASCII letters, digits, '-' or '_': {name}");
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct TestConfig {
-    pub commands: Vec<TestCommand>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct TestCommand {
-    pub working_dir: Option<String>,
-    pub run: String,
-    pub if_exists: Option<String>,
-    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]

@@ -24,6 +24,21 @@ pub(crate) struct ChromeDevtoolsSession {
     port_guard: TcpListener,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChromeDevtoolsMcpConfig {
+    pub(crate) browser_url: String,
+    pub(crate) claude_config_path: PathBuf,
+}
+
+impl ChromeDevtoolsSession {
+    pub(crate) fn mcp_config(&self) -> ChromeDevtoolsMcpConfig {
+        ChromeDevtoolsMcpConfig {
+            browser_url: self.debug_url.clone(),
+            claude_config_path: self.user_data_dir.join("wt-mcp.json"),
+        }
+    }
+}
+
 pub(super) fn prepare_chrome_devtools_session(
     chrome_devtools: &WorkspaceChromeDevtoolsConfig,
     browser: &WorkspaceBrowserConfig,
@@ -83,7 +98,7 @@ struct ChromeDevtoolsLaunch {
 
 fn reserve_debug_port(configured_port: Option<u16>) -> Result<(u16, TcpListener)> {
     if configured_port == Some(0) {
-        bail!("[workspace.chrome_devtools].port must be greater than 0");
+        bail!("[workspace.browser.chrome_devtools].port must be greater than 0");
     }
 
     let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, configured_port.unwrap_or(0));
@@ -104,7 +119,7 @@ fn render_user_data_dir(
 ) -> Result<PathBuf> {
     let rendered = template::render(chrome_devtools.effective_user_data_dir(), vars);
     if rendered.trim().is_empty() {
-        bail!("[workspace.chrome_devtools].user_data_dir cannot render to an empty path");
+        bail!("[workspace.browser.chrome_devtools].user_data_dir cannot render to an empty path");
     }
 
     let path = PathBuf::from(rendered);
@@ -144,7 +159,7 @@ fn launch_chrome_process(ctx: &Ctx, launch: &ChromeDevtoolsLaunch) -> Result<()>
     {
         let _ = (ctx, launch);
         bail!(
-            "workspace.chrome_devtools automatic Chrome launch is currently supported on macOS and Unix-like systems with Google Chrome or Chromium on PATH"
+            "workspace.browser.chrome_devtools automatic Chrome launch is currently supported on macOS and Unix-like systems with Google Chrome or Chromium on PATH"
         )
     }
 }
@@ -176,7 +191,7 @@ fn launch_chrome_unix(ctx: &Ctx, launch: &ChromeDevtoolsLaunch) -> Result<()> {
         .find(|command| ctx.runner.has_command(command))
     else {
         bail!(
-            "workspace.chrome_devtools requires Google Chrome or Chromium on PATH; tried {}",
+            "workspace.browser.chrome_devtools requires Google Chrome or Chromium on PATH; tried {}",
             CHROME_DEVTOOLS_COMMANDS.join(", ")
         );
     };

@@ -917,6 +917,10 @@ merge된 layer, convention file, built-in default를 사용자가 복사해 수�
 활성 section의 runtime default는 `wt config` 출력에 materialize한다. 예를 들어 active
 `[site]` provider는 name/root/secure/url과 Traefik target default까지 보여주고,
 `[workspace.browser]`는 setup/open 때 browser를 띄울지와 어떤 URL을 열지 결정한다.
+`[workspace.browser.chrome_devtools]`는 `mode = "chrome_devtools"`일 때만 쓰는 Chrome
+DevTools launch detail(`port`, `user_data_dir`)을 소유한다. 이 detail은 browser mode의
+하위 설정이지 `[workspace]`의 형제 section이 아니다. 예전 `[workspace.chrome_devtools]`는
+canonical path가 아니며, 자동 migrate나 alias 없이 새 위치로 옮기라는 parse error로 거부한다.
 `[site]`는 `site_url`을 만들고, browser launch policy를 소유하지 않는다. active `[editor]`
 설정은 생략된 placement의 `cmux_surface` default를 보여준다. cmux에서 이 default는
 caller surface 오른쪽 split pane에 editor를 연다. 반대로
@@ -1025,9 +1029,9 @@ layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 
 | `worktree.copy_as` | extend, `(from, to)` 쌍 dedupe | 같은 from/to 쌍은 한 번만. 다른 from이면 둘 다 살아남는다. |
 | `setup.deps` | extend (현재 dedupe 없음) | 같은 dep을 두 layer가 적으면 두 번 실행된다. dep script는 idempotent하게 짠다. |
 | `setup.env`, `setup.env_files[path]`, `workspace.colors` | HashMap extend (key-level overwrite) | 같은 key를 윗 layer가 덮어쓴다. |
-| `workflow.pull_request`, `workflow.landing`, `review.codex_base`, `editor.command`, `editor.placement`, `workspace.browser`, `workspace.chrome_devtools` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. |
+| `workflow.pull_request`, `workflow.landing`, `review.codex_base`, `editor.command`, `editor.placement`, `workspace.browser` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. `workspace.browser.chrome_devtools`는 `workspace.browser`의 하위 설정이므로 browser section과 함께 교체된다. |
 | `workspace` (Option 섹션) | deep-merge (both Some) | 두 layer가 모두 `[workspace]`를 가지면 필드별로 위 규칙대로 합친다. |
-| `site`, `test`, `issues` (Option 섹션) | wholesale REPLACE if Some | 윗 layer가 `[site]`/`[test]`/`[issues]`를 가지면 아랫 layer의 같은 섹션이 통째로 사라진다. 한 필드만 바꾸려면 base의 모든 필드를 다시 적는다. |
+| `site`, `issues` (Option 섹션) | wholesale REPLACE if Some | 윗 layer가 `[site]`/`[issues]`를 가지면 아랫 layer의 같은 섹션이 통째로 사라진다. 한 필드만 바꾸려면 base의 모든 필드를 다시 적는다. |
 | `agent.{cli, args, command, ready, submit, timeout, send_after}` | per-field presence-based REPLACE | 윗 layer가 명시한 필드만 덮어쓴다. |
 | `agent.prompt[mode]` | REPLACE per mode unless `[agent.prompt.append].<mode>` | 같은 mode를 적으면 덮어쓴다. append-key form은 기존 prompt에 `\n\n`으로 이어붙인다. |
 
@@ -1044,8 +1048,8 @@ profile convention(`scaffold/`, `prompts/`)은 effective config에 합쳐지지 
 피하려면 둘 중 하나는 명시한다.
 
 `[profile] name`과 inline `[profile.agent]`, `[profile.worktree]`, `[profile.setup]`,
-`[profile.workspace]`, `[profile.site]`, `[profile.test]`를 같이 쓸 수 없다. parse 단계에서
-hard error로 막는다. 한 곳만 골라서 적는다.
+`[profile.workspace]`, `[profile.site]`를 같이 쓸 수 없다. parse 단계에서 hard error로
+막는다. 한 곳만 골라서 적는다.
 
 ### Omission Means Default Behavior
 *North star: [Direction-Driven Design](north-star.md#direction-driven-design).*
@@ -1215,7 +1219,7 @@ bundle 이름을 고르게 하지 않는다. `--preset`과 `--minimal`은 primar
 않고, 새 parser surface에서는 legacy 입력으로 실패한다.
 
 `wt init --yes`는 non-interactive project recommendation을 받아들이는 자동화 경로다. Repo
-manifest를 scan해 setup command, dev tab, test command 후보를 active config에 반영한다.
+manifest를 scan해 setup command와 dev tab 후보를 active config에 반영한다.
 Issue/site integration은 explicit flag 또는 `.linear.toml`, Laravel app처럼 concrete repo
 signal이 있을 때만 active config에 쓴다. Agent runtime은 explicit flag나 기존 config default가
 있을 때만 쓴다. Interactive wizard에서는 agent runtime도 작은 selector로 물으며, agent를 선택하면
@@ -1573,6 +1577,16 @@ rewrite them into the canonical title/body/origin shape instead of preserving
 Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
 두 번째 task source를 만들지 않는다.
+Workflow coordinator는 `wt workflow task`가 Workflow와 linked TaskRun을 준비하는 생성
+시점에 한 번 바인딩된다. 우선순위는 명시 `--coordinator <id>`가 있으면 그것을 쓰고,
+없으면 `WT_AGENT_ID`, current live identity anchor, auto-created identity anchor 순서다.
+`<id>`는 `wt as`와 같은 `NAME` 또는 `agents/NAME` 단일 agent-name segment만 허용한다.
+생성 출력은 항상 저장된 `coordinator: agents/<name>`을 보여주고, auto-created identity
+anchor로 떨어진 경우에만 다른 coordinator로 묶으려면 `--coordinator <id>` 또는
+`WT_AGENT_ID=<id>`로 다시 생성하라는 hint를 보여준다. `wt run workflow`는 이 바인딩을
+다시 결정하지 않고 linked TaskRun의 저장된 `coordinator_id`를 보존한다. legacy 또는
+incomplete TaskRun처럼 `coordinator_id`가 비어 있는 경우에만 현재 actor 우선순위로 누락
+route를 repair하고 그 fallback 사용 사실을 출력한다.
 
 `<repo-root>/.wt/execution/workflows`는 `<repo-root>/.wt/batches`와 `<repo-root>/.wt/stacks`를 대체한다. 이유는 batch와 stack이
 저장소 noun이 아니라 하나의 Workflow 안에서 고르는 execution mode이기 때문이다. 새
@@ -1804,7 +1818,10 @@ transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow�
 task agent에게 전달하는 canonical feedback은
 `wt task review <task-run-id> --accept|--reject|--block "<message>"`이며, 이 명령은
 TaskRun의 `agent_id`로 `task_run:<id>` scope 메시지를 보내고 TaskRun review metadata를
-갱신한다. Late review after pass는 정상 flow다. `--reject`와 `--block`은 passed TaskRun을
+갱신한다. Review를 보내는 actor가 TaskRun의 저장된 `coordinator_id`와 다르면 feedback은
+거부되어야 하며, 교정 경로는 기록된 coordinator로 재실행하는
+`wt as agents/<recorded> -- wt task review <task-run-id> --accept|--reject|--block "<message>"`
+형태다. Late review after pass는 정상 flow다. `--reject`와 `--block`은 passed TaskRun을
 `running`으로 되열고, task agent는 같은 TaskRun route로 다시 `wt task report`를 보낼 수
 있다. `--accept`는 metadata-only이며 running TaskRun을 `passed`로 만들지 않는다. Pull request
 review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한 check를 다시 돌린 뒤

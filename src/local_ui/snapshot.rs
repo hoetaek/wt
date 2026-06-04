@@ -1,7 +1,7 @@
 use crate::config::{
     AgentCli, AgentConfig, Config, ConfigSource, EditorPlacement, IssueProviderType, ReadyMode,
-    ReviewCodexBasePolicy, SetupConfig, SiteProvider, SubmitMode, TestConfig,
-    WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
+    ReviewCodexBasePolicy, SetupConfig, SiteProvider, SubmitMode, WorkflowDefaultLandingPolicy,
+    WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
 };
 use crate::config_render::render_effective_config;
 use crate::context::{
@@ -133,7 +133,6 @@ struct ConfigSummary {
     editor: Option<EditorSummary>,
     workspace: Option<WorkspaceSummary>,
     agent: Option<AgentSummary>,
-    test: Option<TestSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -234,7 +233,6 @@ struct WorkspaceSummary {
     post_deps_tab_count: usize,
     post_deps_tabs: Vec<String>,
     browser: Option<WorkspaceBrowserSummary>,
-    chrome_devtools: Option<WorkspaceChromeDevtoolsSummary>,
     color_count: usize,
     colors: Vec<WorkspaceColorSummary>,
 }
@@ -244,6 +242,7 @@ struct WorkspaceBrowserSummary {
     mode: String,
     url: Option<String>,
     app: Option<String>,
+    chrome_devtools: Option<WorkspaceChromeDevtoolsSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -275,11 +274,6 @@ struct AgentSummary {
 struct PromptModeSummary {
     mode: String,
     count: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct TestSummary {
-    commands: Vec<CommandSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -482,13 +476,11 @@ struct ProfileSummary {
     link: Vec<String>,
     agent: String,
     has_site: bool,
-    test_count: usize,
     worktree: Option<WorktreeSummary>,
     setup: Option<SetupSummary>,
     site: Option<SiteSummary>,
     workspace: Option<WorkspaceSummary>,
     agent_settings: Option<AgentSummary>,
-    test: Option<TestSummary>,
     source_text: Option<String>,
 }
 
@@ -1186,18 +1178,11 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
             let site = site_summary(&profile.config);
             let workspace = workspace_summary(profile.config.workspace.as_ref());
             let agent_settings = agent_summary(profile.config.agent.as_ref());
-            let test = test_summary(profile.config.test.as_ref());
             let agent = agent_settings
                 .as_ref()
                 .map(|agent| agent.cli.clone())
                 .unwrap_or_else(|| "none".into());
             let has_site = profile.config.has_site();
-            let test_count = profile
-                .config
-                .test
-                .as_ref()
-                .map(|test| test.commands.len())
-                .unwrap_or(0);
 
             ProfileSummary {
                 name: profile.name,
@@ -1216,13 +1201,11 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
                 link: profile.config.worktree.link.clone(),
                 agent,
                 has_site,
-                test_count,
                 worktree,
                 setup,
                 site,
                 workspace,
                 agent_settings,
-                test,
                 source_text: read_known_source_text(ctx, &profile.path),
             }
         })
@@ -1547,7 +1530,6 @@ fn config_summary(ctx: &Ctx) -> ConfigSummary {
         }),
         workspace: workspace_summary(ctx.config.workspace.as_ref()),
         agent: agent_summary(ctx.config.agent.as_ref()),
-        test: test_summary(ctx.config.test.as_ref()),
     }
 }
 
@@ -1579,13 +1561,13 @@ fn workspace_summary(workspace: Option<&WorkspaceConfig>) -> Option<WorkspaceSum
                 mode: workspace_browser_mode_name(browser.mode).into(),
                 url: browser.effective_url().map(|url| url.into_owned()),
                 app: browser.app.clone(),
+                chrome_devtools: browser.chrome_devtools.as_ref().map(|chrome| {
+                    WorkspaceChromeDevtoolsSummary {
+                        port: chrome.port,
+                        user_data_dir: chrome.effective_user_data_dir().into(),
+                    }
+                }),
             }),
-        chrome_devtools: workspace.chrome_devtools.as_ref().map(|chrome| {
-            WorkspaceChromeDevtoolsSummary {
-                port: chrome.port,
-                user_data_dir: chrome.effective_user_data_dir().into(),
-            }
-        }),
         color_count: workspace.effective_colors().len(),
         colors: workspace
             .effective_colors()
@@ -1690,25 +1672,6 @@ fn setup_summary(setup: &SetupConfig) -> Option<SetupSummary> {
             .collect(),
         env: sorted_key_values(&setup.env),
         env_files,
-    })
-}
-
-fn test_summary(test: Option<&TestConfig>) -> Option<TestSummary> {
-    let test = test?;
-    if *test == TestConfig::default() {
-        return None;
-    }
-    Some(TestSummary {
-        commands: test
-            .commands
-            .iter()
-            .map(|command| CommandSummary {
-                run: command.run.clone(),
-                working_dir: command.working_dir.clone(),
-                if_exists: command.if_exists.clone(),
-                label: command.label.clone(),
-            })
-            .collect(),
     })
 }
 
@@ -2017,9 +1980,9 @@ mod tests {
     use crate::config::IssuesConfig;
     use crate::config::{
         AgentCli, AgentConfig, DepCommand, EditorConfig, EditorPlacement, ReadyMode, SiteConfig,
-        SiteProvider, SubmitMode, TestCommand, TestConfig, WorkflowDefaultLandingPolicy,
-        WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig, WorkspaceBrowserMode,
-        WorkspaceChromeDevtoolsConfig, WorkspaceConfig, WorktreeNamingConfig,
+        SiteProvider, SubmitMode, WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode,
+        WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
+        WorkspaceConfig, WorktreeNamingConfig,
     };
     use std::collections::HashMap;
 
@@ -2128,10 +2091,10 @@ mod tests {
                 mode: WorkspaceBrowserMode::ChromeDevtools,
                 url: Some("{{site_url}}".into()),
                 app: None,
-            }),
-            chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                port: Some(9222),
-                user_data_dir: Some("{{worktree_parent}}/.chrome-devtools".into()),
+                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                    port: Some(9222),
+                    user_data_dir: Some("{{worktree_parent}}/.chrome-devtools".into()),
+                }),
             }),
         });
         config.agent = Some(AgentConfig {
@@ -2150,14 +2113,6 @@ mod tests {
                 ),
             ]),
             ..AgentConfig::default()
-        });
-        config.test = Some(TestConfig {
-            commands: vec![TestCommand {
-                working_dir: None,
-                run: "cargo test".into(),
-                if_exists: Some("Cargo.toml".into()),
-                label: Some("Rust tests".into()),
-            }],
         });
         let state = SnapshotState::new(
             dir.path().to_path_buf(),
@@ -2207,9 +2162,10 @@ mod tests {
         assert_eq!(editor.placement, "cmux_surface");
         let workspace = snapshot.config.workspace.as_ref().unwrap();
         assert_eq!(workspace.tabs, vec!["lazygit", "nvim"]);
-        assert_eq!(workspace.browser.as_ref().unwrap().mode, "chrome_devtools");
+        let browser = workspace.browser.as_ref().unwrap();
+        assert_eq!(browser.mode, "chrome_devtools");
         assert_eq!(
-            workspace.chrome_devtools.as_ref().unwrap().user_data_dir,
+            browser.chrome_devtools.as_ref().unwrap().user_data_dir,
             "{{worktree_parent}}/.chrome-devtools"
         );
         let agent = snapshot.config.agent.as_ref().unwrap();
@@ -2223,10 +2179,6 @@ mod tests {
         assert_eq!(agent.prompt_counts[0].count, 1);
         assert_eq!(agent.prompt_counts[1].mode, "issue");
         assert_eq!(agent.prompt_counts[1].count, 2);
-        assert_eq!(
-            snapshot.config.test.as_ref().unwrap().commands[0].run,
-            "cargo test"
-        );
         let profile = snapshot.profiles.items.first().unwrap();
         assert_eq!(
             profile.copy,
