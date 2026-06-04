@@ -488,6 +488,33 @@ cli = "none"
             .unwrap()
     }
 
+    fn record_accepted_review_after_report(
+        ctx: &Ctx,
+        run_id: &str,
+        reported_at: &str,
+        reviewed_at: &str,
+    ) {
+        let run = task_run_update_record(ctx, run_id);
+        task_run::update_report_metadata(&run, "msg-report").unwrap();
+        let run = task_run_update_record(ctx, run_id);
+        task_run::update_review_metadata(&run, task_run::REVIEW_ACCEPTED, "msg-review").unwrap();
+        set_task_run_review_timestamps(ctx, run_id, reported_at, reviewed_at);
+    }
+
+    fn set_task_run_review_timestamps(
+        ctx: &Ctx,
+        run_id: &str,
+        reported_at: &str,
+        reviewed_at: &str,
+    ) {
+        let path = task_run::resolve(ctx, run_id).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let mut document = content.parse::<toml_edit::DocumentMut>().unwrap();
+        document["last_reported_at"] = toml_edit::value(reported_at);
+        document["last_reviewed_at"] = toml_edit::value(reviewed_at);
+        std::fs::write(path, document.to_string()).unwrap();
+    }
+
     fn write_workflow_with_parent(
         ctx: &Ctx,
         record: &mut workflow_store::WorkflowRecord,
@@ -2041,6 +2068,25 @@ landing = "auto"
         let run = task_run_update_record(&ctx, &record.workflow.tasks[0].run);
         task_run::update_review_metadata(&run, task_run::REVIEW_ACCEPTED, "msg-review").unwrap();
 
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("latest Agent Completion Report timestamp is missing")
+        );
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_RUNNING
+        );
+
+        record_accepted_review_after_report(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "2026-05-18T00:01:00Z",
+            "2026-05-18T00:02:00Z",
+        );
+
         pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap();
 
         assert_eq!(
@@ -2092,8 +2138,12 @@ landing = "auto"
         assert!(message.contains("codex review --base main"));
         assert!(message.contains(&format!("wt task review {} --accept", row.runs[0].run)));
 
-        let alpha = task_run_update_record(&ctx, &row.runs[0].run);
-        task_run::update_review_metadata(&alpha, task_run::REVIEW_ACCEPTED, "msg-review").unwrap();
+        record_accepted_review_after_report(
+            &ctx,
+            &row.runs[0].run,
+            "2026-05-18T00:01:00Z",
+            "2026-05-18T00:02:00Z",
+        );
 
         pass(
             &ctx,
@@ -2107,6 +2157,87 @@ landing = "auto"
         let beta = task_run_record(&ctx, &row.runs[1].run).unwrap();
         assert_eq!(alpha.status, STATUS_PASSED);
         assert_eq!(beta.status, STATUS_RUNNING);
+    }
+
+    #[test]
+    fn workflow_pass_rejects_accepted_review_older_than_latest_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let mut record = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["feature"]);
+        record.workflow.policy.review.codex_base = WorkflowCodexBaseReview::Required;
+        workflow_store::write(&ctx, &record.path, &mut record.workflow).unwrap();
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("feature"),
+        );
+        record_accepted_review_after_report(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "2026-05-18T00:03:00Z",
+            "2026-05-18T00:02:00Z",
+        );
+
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains(
+            "accepted review at 2026-05-18T00:02:00Z is older than latest Agent Completion Report at 2026-05-18T00:03:00Z"
+        ));
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_RUNNING
+        );
+
+        record_accepted_review_after_report(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            "2026-05-18T00:03:00Z",
+            "2026-05-18T00:04:00Z",
+        );
+
+        pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap();
+
+        assert_eq!(
+            task_run_record(&ctx, &record.workflow.tasks[0].run)
+                .unwrap()
+                .status,
+            STATUS_PASSED
+        );
+    }
+
+    #[test]
+    fn workflow_pass_quotes_required_codex_base_review_accept_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let mut record = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["feature"]);
+        let review_base = "feature/$(touch pwn)`base`";
+        record.workflow.base = Some(review_base.into());
+        record.workflow.policy.review.codex_base = WorkflowCodexBaseReview::Required;
+        workflow_store::write(&ctx, &record.path, &mut record.workflow).unwrap();
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("feature"),
+        );
+
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+
+        let expected_message =
+            format!("Codex base review passed against {review_base}: <summary/evidence>");
+        let expected_command = format!(
+            "wt task review {} --accept {}",
+            record.workflow.tasks[0].run,
+            shell_arg(&expected_message)
+        );
+        let unsafe_command = format!("--accept \"{expected_message}\"");
+        let message = err.to_string();
+        assert!(message.contains(&expected_command));
+        assert!(!message.contains(&unsafe_command));
     }
 
     #[test]
@@ -2645,6 +2776,38 @@ landing = "auto"
         assert!(!content.contains("record the log"));
         assert!(content.contains("Workflow policy sets `pull_request = \"none\"`"));
         assert!(!content.contains("gh pr create"));
+    }
+
+    #[test]
+    fn workflow_prompt_quotes_required_codex_base_review_accept_message() {
+        let row = WorkflowTask {
+            task: "PROJ-2".into(),
+            run: "run-2".into(),
+            parent: Some("stored-parent".into()),
+            runs: Vec::new(),
+        };
+        let workflow_path = PathBuf::from("/repo/.wt/execution/workflows/2026-05-16-001.toml");
+        let mut policy = test_workflow_policy(WorkflowPullRequestMode::None);
+        let review_base = "feature/$(touch pwn)`base`";
+        policy.review.codex_base = WorkflowCodexBaseReview::Required;
+
+        let content = workflow_task_prompt_content_with_policy_and_parent(
+            "title = \"API\"\n",
+            &workflow_path,
+            &row,
+            &policy,
+            review_base,
+        );
+
+        let expected_message =
+            format!("Codex base review passed against {review_base}: <summary/evidence>");
+        let expected_command = format!(
+            "wt task review <task-run-id> --accept {}",
+            shell_arg(&expected_message)
+        );
+        let unsafe_command = format!("--accept \"{expected_message}\"");
+        assert!(content.contains(&expected_command));
+        assert!(!content.contains(&unsafe_command));
     }
 
     #[test]

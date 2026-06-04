@@ -76,15 +76,28 @@ fn codex_base_review_text(
 ) -> Option<String> {
     let surface_review_command = format!("/review --base {}", shell_arg(review_base));
     let cli_review_command = format!("codex review --base {}", shell_arg(review_base));
+    let accept_command = codex_base_review_accept_command("<task-run-id>", review_base);
     match policy.review.codex_base {
         WorkflowCodexBaseReview::None => None,
         WorkflowCodexBaseReview::Advisory => Some(format!(
             "Workflow review policy sets `review.codex_base = \"advisory\"`. After your report, the coordinator may open a Codex surface and run a base-diff review against the {review_base_label}:\n\n```text\n{surface_review_command}\n```\n\nFor non-interactive runs, the equivalent CLI fallback is:\n\n```bash\n{cli_review_command}\n```\n\nRecord a concise review evidence note with the command, parent, final findings, and any follow-up. If that coordinator review asks for changes, keep ownership in this branch and report again."
         )),
         WorkflowCodexBaseReview::Required => Some(format!(
-            "Workflow review policy sets `review.codex_base = \"required\"`. After your report, the coordinator must open a Codex surface and run a base-diff review against the {review_base_label} before passing or landing this workflow task:\n\n```text\n{surface_review_command}\n```\n\nFor non-interactive runs, the equivalent CLI fallback is:\n\n```bash\n{cli_review_command}\n```\n\nRecord a concise review evidence note, then record accepted TaskRun review metadata with `wt task review <task-run-id> --accept \"Codex base review passed against {review_base}: <summary/evidence>\"` before passing or landing this workflow task. If that coordinator review asks for changes, keep ownership in this branch and report again."
+            "Workflow review policy sets `review.codex_base = \"required\"`. After your report, the coordinator must open a Codex surface and run a base-diff review against the {review_base_label} before passing or landing this workflow task:\n\n```text\n{surface_review_command}\n```\n\nFor non-interactive runs, the equivalent CLI fallback is:\n\n```bash\n{cli_review_command}\n```\n\nRecord a concise review evidence note, then record accepted TaskRun review metadata with:\n\n```bash\n{accept_command}\n```\n\nDo this before passing or landing this workflow task. If that coordinator review asks for changes, keep ownership in this branch and report again."
         )),
     }
+}
+
+pub(crate) fn codex_base_review_accept_command(task_run_id: &str, review_base: &str) -> String {
+    format!(
+        "wt task review {} --accept {}",
+        task_run_id,
+        shell_arg(&codex_base_review_accept_message(review_base))
+    )
+}
+
+fn codex_base_review_accept_message(review_base: &str) -> String {
+    format!("Codex base review passed against {review_base}: <summary/evidence>")
 }
 
 #[cfg(test)]

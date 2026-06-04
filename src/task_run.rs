@@ -1000,7 +1000,7 @@ fn current_utc_timestamp() -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{nanos:09}Z")
 }
 
-fn normalized_utc_timestamp(timestamp: &str) -> Option<String> {
+pub(crate) fn normalized_utc_timestamp(timestamp: &str) -> Option<String> {
     let without_zone = timestamp.trim().strip_suffix('Z')?;
     let (base, fraction) = without_zone
         .split_once('.')
