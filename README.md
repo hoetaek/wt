@@ -459,8 +459,8 @@ record concise evidence. `required` means the coordinator must not pass or land
 the prepared workflow task until that Codex base-diff review has run against the
 resolved workflow base or stack parent, the concise evidence note exists, and
 `wt task review <task-run-id> --accept` has recorded accepted review metadata
-for the TaskRun. `wt workflow pass` rejects required-review tasks without that
-accepted review metadata.
+for the TaskRun after the latest Agent Completion Report. `wt workflow pass`
+rejects required-review tasks without fresh accepted review metadata.
 
 `wt config` prints the effective `[workflow]` and `[review]` policy, including
 the built-in defaults above. `wt init` writes an explicit starter `[workflow]`

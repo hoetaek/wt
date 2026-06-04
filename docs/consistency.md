@@ -1486,8 +1486,9 @@ concise evidence; a missing/unavailable run is not by itself a blocker if report
 base or stack parent and record concise evidence before `wt workflow pass`, landing,
 or cleanup. Required Codex base review is enforced by `wt workflow pass`: the TaskRun
 must also have accepted review metadata from `wt task review <task-run-id> --accept`
-after the coordinator records the evidence note. This key does not replace normal
-coordinator review or pull-request review gates.
+after the latest Agent Completion Report and after the coordinator records the
+evidence note. This key does not replace normal coordinator review or pull-request
+review gates.
 
 If a pull request exists, "review passes" is an evidence-backed pull-request review
 gate, not an inferred state from green checks or an agent completion report. The
