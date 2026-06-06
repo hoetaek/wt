@@ -1078,6 +1078,13 @@ layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 
 | `agent.{cli, args, command, ready, submit, timeout, send_after}` | per-field presence-based REPLACE | 윗 layer가 명시한 필드만 덮어쓴다. |
 | `agent.prompt[mode]` | REPLACE per mode unless `[agent.prompt.append].<mode>` | 같은 mode를 적으면 덮어쓴다. append-key form은 기존 prompt에 `\n\n`으로 이어붙인다. |
 
+`[issues].origin_policy`는 TaskDocument와 Workflow가 provider origin을 어떻게 다룰지에
+대한 canonical config intent다. 값은 `provider-preferred`, `provider-required`,
+`local-only`만 받으며, 생략하면 `provider-preferred`다. `provider-required`와
+`local-only`는 launch/preparation gate가 실제로 구현되기 전까지 reserved intent이며,
+그 전의 docs/help/output은 provider auth, provider API, offline failure가 unrelated local
+work를 막는다고 설명하면 안 된다.
+
 Named profile에는 profile.toml 외에 두 가지 convention이 더 있다.
 
 | 위치 | 동작 |

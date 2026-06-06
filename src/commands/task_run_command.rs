@@ -557,6 +557,7 @@ mod tests {
                 issues: Some(IssuesConfig {
                     provider: IssueProviderType::Linear,
                     gh_user: None,
+                    origin_policy: Default::default(),
                 }),
                 ..Config::default()
             },
@@ -636,6 +637,7 @@ mod tests {
                 issues: Some(IssuesConfig {
                     provider: IssueProviderType::Linear,
                     gh_user: None,
+                    origin_policy: Default::default(),
                 }),
                 ..Config::default()
             },
@@ -730,6 +732,7 @@ id = "PROJ-123"
         config.issues = Some(IssuesConfig {
             provider: IssueProviderType::Linear,
             gh_user: None,
+            origin_policy: Default::default(),
         });
         let ctx = Ctx::new(
             repo.path().to_path_buf(),
@@ -1306,6 +1309,7 @@ id = "PROJ-123"
                 issues: Some(IssuesConfig {
                     provider: IssueProviderType::Linear,
                     gh_user: None,
+                    origin_policy: Default::default(),
                 }),
                 ..Config::default()
             },
@@ -1378,6 +1382,7 @@ id = "PROJ-123"
                 issues: Some(IssuesConfig {
                     provider: IssueProviderType::Linear,
                     gh_user: None,
+                    origin_policy: Default::default(),
                 }),
                 ..Config::default()
             },
@@ -1436,6 +1441,7 @@ id = "PROJ-123"
                 issues: Some(IssuesConfig {
                     provider: IssueProviderType::Linear,
                     gh_user: None,
+                    origin_policy: Default::default(),
                 }),
                 ..Config::default()
             },

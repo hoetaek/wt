@@ -2098,6 +2098,7 @@ mod tests {
         config.issues = Some(IssuesConfig {
             provider: IssueProviderType::Github,
             gh_user: Some("alice".into()),
+            origin_policy: Default::default(),
         });
         config.site = Some(SiteConfig {
             provider: SiteProvider::Herd,

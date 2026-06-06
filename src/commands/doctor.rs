@@ -2317,6 +2317,7 @@ parent = "develop"
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
                 gh_user: None,
+                origin_policy: Default::default(),
             }),
             ..Default::default()
         };
@@ -2337,6 +2338,7 @@ parent = "develop"
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Github,
                 gh_user: Some("alice".into()),
+                origin_policy: Default::default(),
             }),
             ..Default::default()
         };

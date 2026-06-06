@@ -1,6 +1,6 @@
 use anyhow::bail;
 use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -908,6 +908,22 @@ pub fn validate_profile_name(name: &str) -> anyhow::Result<()> {
 pub struct IssuesConfig {
     pub provider: IssueProviderType,
     pub gh_user: Option<String>,
+    #[serde(default)]
+    pub origin_policy: OriginPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OriginPolicy {
+    ProviderPreferred,
+    ProviderRequired,
+    LocalOnly,
+}
+
+impl Default for OriginPolicy {
+    fn default() -> Self {
+        Self::ProviderPreferred
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]

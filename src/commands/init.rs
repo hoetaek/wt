@@ -772,6 +772,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
             "provider = {}\n",
             toml_quote(issue_provider_name(provider))
         ));
+        s.push_str("origin_policy = \"provider-preferred\"\n");
         if *provider == InitIssueProvider::Github {
             if let Some(user) = gh_user.as_deref() {
                 s.push_str(&format!("gh_user = {}\n", toml_quote(user)));
@@ -3170,6 +3171,34 @@ mod tests {
         assert!(plan.content.contains("provider = \"github\""));
         assert!(plan.content.contains("[worktree.naming]"));
         assert!(!plan.content.contains("[profile.agent]"));
+    }
+
+    #[test]
+    fn init_linear_writes_provider_preferred_origin_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                shared: false,
+                agent: Some(InitAgent::None),
+                agent_args: Vec::new(),
+                agent_command: None,
+                issue_provider: Some(InitIssueProvider::Linear),
+                site_provider: None,
+                yes: true,
+                force: false,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let config = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
+        assert!(config.contains("[issues]"));
+        assert!(config.contains("provider = \"linear\""));
+        assert!(config.contains("origin_policy = \"provider-preferred\""));
     }
 
     #[test]

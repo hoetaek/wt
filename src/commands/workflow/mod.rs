@@ -2109,6 +2109,7 @@ landing = "auto"
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
                 gh_user: None,
+                origin_policy: Default::default(),
             }),
             workflow: crate::config::WorkflowConfig {
                 pull_request: Some(WorkflowDefaultPullRequestMode::Ready),
@@ -2163,6 +2164,7 @@ landing = "auto"
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
                 gh_user: None,
+                origin_policy: Default::default(),
             }),
             ..Config::default()
         };

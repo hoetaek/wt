@@ -442,6 +442,7 @@ mod tests {
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
                 gh_user: None,
+                origin_policy: Default::default(),
             }),
             ..Config::default()
         }
@@ -452,6 +453,7 @@ mod tests {
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Github,
                 gh_user: None,
+                origin_policy: Default::default(),
             }),
             ..Config::default()
         }
@@ -511,6 +513,7 @@ mod tests {
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
                 gh_user: None,
+                origin_policy: Default::default(),
             }),
             ..Config::default()
         };
