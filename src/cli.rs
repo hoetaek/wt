@@ -822,7 +822,7 @@ pub enum TaskCommand {
     },
     /// Manage provider issue origin links for local TaskDocuments
     #[command(
-        long_about = "Manage provider issue origin links for local <repo-root>/.wt/execution/tasks/<task>.toml TaskDocuments.\n\nImport creates local TaskDocuments from provider issues, publish creates provider issues from local TaskDocuments, and attach/fetch/diff/pull/push are reserved provider issue origin actions for existing TaskDocuments."
+        long_about = "Manage provider issue origin links for local <repo-root>/.wt/execution/tasks/<task>.toml TaskDocuments.\n\nImport creates local TaskDocuments from provider issues, publish creates provider issues from local TaskDocuments, fetch refreshes provider issue evidence without changing TaskDocuments, and diff compares local title/body with fetched provider evidence. attach/pull/push remain reserved provider issue origin actions for existing TaskDocuments."
     )]
     Origin {
         #[command(subcommand)]
@@ -1879,6 +1879,23 @@ mod tests {
                 }
             }) if tasks == &vec!["origin-docs".to_string()]
         ));
+    }
+
+    #[test]
+    fn task_origin_help_marks_fetch_and_diff_as_enabled() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("origin")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("fetch refreshes provider issue evidence"));
+        assert!(help.contains("diff compares local title/body with fetched provider evidence"));
+        assert!(help.contains("attach/pull/push remain reserved"));
+        assert!(!help.contains("attach/fetch/diff/pull/push are reserved"));
     }
 
     #[test]
