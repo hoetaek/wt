@@ -3,6 +3,19 @@ use crate::task::{TaskDocument, render_task_document};
 use crate::workflow::{WorkflowMetadata, render_workflow_metadata};
 use std::path::PathBuf;
 
+pub const LEAF_PHASE_DIRS: [&str; 4] = ["01-Learn", "02-Example", "03-Architect", "04-Feedback"];
+
+const LEAF_FILES: [&str; 8] = [
+    "00-status.md",
+    "01-Learn/01-intent.md",
+    "01-Learn/02-unknowns.md",
+    "01-Learn/02-references/README.md",
+    "02-Example/03-criteria.md",
+    "02-Example/04-wireframe.md",
+    "03-Architect/05-design.md",
+    "03-Architect/07-tasks.md",
+];
+
 pub const ALL_DOC_KINDS: [DocKind; 5] = [
     DocKind::Idea,
     DocKind::Spec,
@@ -42,73 +55,23 @@ impl DocKind {
 
     pub fn paths(self, storage: &StorageRoot, slug: &str) -> Vec<PathBuf> {
         match self {
-            Self::Idea => vec![storage.ideas_dir().join(format!("{slug}.md"))],
-            Self::Spec => {
-                let dir = storage.specs_dir().join(slug);
-                vec![
-                    dir.join("00-status.md"),
-                    dir.join("01-Learn/01-intent.md"),
-                    dir.join("01-Learn/02-unknowns.md"),
-                    dir.join("01-Learn/02-references/README.md"),
-                    dir.join("02-Example/03-criteria.md"),
-                    dir.join("02-Example/04-wireframe.md"),
-                    dir.join("03-Architect/05-design.md"),
-                    dir.join("03-Architect/06-tasks.md"),
-                ]
-            }
+            Self::Idea => leaf_paths(storage.ideas_dir().join(slug)),
+            Self::Spec => leaf_paths(storage.specs_dir().join(slug)),
             Self::Task => vec![storage.tasks_dir().join(format!("{slug}.toml"))],
             Self::Workflow => vec![storage.workflows_dir().join(format!("{slug}.toml"))],
             Self::Retrospect => vec![
                 storage
                     .specs_dir()
                     .join(slug)
-                    .join("04-Feedback/09-retrospect.md"),
+                    .join("04-Feedback/10-retrospect.md"),
             ],
         }
     }
 
     pub fn render(self, slug: &str) -> Vec<(PathBuf, String)> {
         match self {
-            Self::Idea => vec![(
-                PathBuf::from(format!("planning/ideas/{slug}.md")),
-                render_idea(slug),
-            )],
-            Self::Spec => vec![
-                (
-                    PathBuf::from(format!("planning/specs/{slug}/00-status.md")),
-                    render_spec_status(slug),
-                ),
-                (
-                    PathBuf::from(format!("planning/specs/{slug}/01-Learn/01-intent.md")),
-                    render_spec_intent(slug),
-                ),
-                (
-                    PathBuf::from(format!("planning/specs/{slug}/01-Learn/02-unknowns.md")),
-                    render_spec_unknowns(),
-                ),
-                (
-                    PathBuf::from(format!(
-                        "planning/specs/{slug}/01-Learn/02-references/README.md"
-                    )),
-                    render_spec_references_readme(),
-                ),
-                (
-                    PathBuf::from(format!("planning/specs/{slug}/02-Example/03-criteria.md")),
-                    render_spec_criteria(),
-                ),
-                (
-                    PathBuf::from(format!("planning/specs/{slug}/02-Example/04-wireframe.md")),
-                    render_spec_wireframe(),
-                ),
-                (
-                    PathBuf::from(format!("planning/specs/{slug}/03-Architect/05-design.md")),
-                    render_spec_design(),
-                ),
-                (
-                    PathBuf::from(format!("planning/specs/{slug}/03-Architect/06-tasks.md")),
-                    render_spec_tasks(),
-                ),
-            ],
+            Self::Idea => render_leaf_documents(slug, LeafKind::Idea),
+            Self::Spec => render_leaf_documents(slug, LeafKind::Spec),
             Self::Task => vec![(
                 PathBuf::from(format!("execution/tasks/{slug}.toml")),
                 render_task_document(&TaskDocument::empty(slug)),
@@ -119,7 +82,7 @@ impl DocKind {
             )],
             Self::Retrospect => vec![(
                 PathBuf::from(format!(
-                    "planning/specs/{slug}/04-Feedback/09-retrospect.md"
+                    "planning/specs/{slug}/04-Feedback/10-retrospect.md"
                 )),
                 render_retrospect(slug),
             )],
@@ -127,41 +90,69 @@ impl DocKind {
     }
 }
 
-fn render_idea(slug: &str) -> String {
-    format!(
-        "# {slug}\n\n\
-## 원문 의도\n\
-- \n\n\
-## 미지 (Unknowns)\n\
-- Domain (blocking now): \n\
-- Standards / conventions (blocking now): \n\
-- External (useful later): \n\
-- Internal (blocking now): \n\n\
-## 맥락 / 레퍼런스 탐색\n\
-- 로컬: \n\
-- 외부: \n\
-- 참고한 방향: \n\n\
-## 목적 / 성공 기준\n\
-- \n\n\
-## 선택지\n\
-- 선택지 A: \n\
-- 선택지 B: \n\n\
-## 트레이드오프\n\
-- \n\n\
-## 리스크 / 함정\n\
-- \n\n\
-## 비목표\n\
-- \n\n\
-## 열린 질문\n\
-- \n\n\
-## 다음 단계\n\
-- \n"
-    )
+#[derive(Clone, Copy)]
+enum LeafKind {
+    Idea,
+    Spec,
 }
 
-fn render_spec_status(slug: &str) -> String {
+impl LeafKind {
+    fn root(self, slug: &str) -> String {
+        match self {
+            Self::Idea => format!("planning/ideas/{slug}"),
+            Self::Spec => format!("planning/specs/{slug}"),
+        }
+    }
+}
+
+fn leaf_paths(base: PathBuf) -> Vec<PathBuf> {
+    LEAF_FILES.iter().map(|name| base.join(name)).collect()
+}
+
+fn render_leaf_documents(slug: &str, kind: LeafKind) -> Vec<(PathBuf, String)> {
+    let root = kind.root(slug);
+    vec![
+        (
+            PathBuf::from(format!("{root}/00-status.md")),
+            render_leaf_status(slug),
+        ),
+        (
+            PathBuf::from(format!("{root}/01-Learn/01-intent.md")),
+            render_leaf_intent(slug),
+        ),
+        (
+            PathBuf::from(format!("{root}/01-Learn/02-unknowns.md")),
+            render_leaf_unknowns(),
+        ),
+        (
+            PathBuf::from(format!("{root}/01-Learn/02-references/README.md")),
+            render_leaf_references_readme(),
+        ),
+        (
+            PathBuf::from(format!("{root}/02-Example/03-criteria.md")),
+            render_leaf_criteria(),
+        ),
+        (
+            PathBuf::from(format!("{root}/02-Example/04-wireframe.md")),
+            render_leaf_wireframe(),
+        ),
+        (
+            PathBuf::from(format!("{root}/03-Architect/05-design.md")),
+            render_leaf_design(),
+        ),
+        (
+            PathBuf::from(format!("{root}/03-Architect/07-tasks.md")),
+            render_leaf_tasks(),
+        ),
+    ]
+}
+
+fn render_leaf_status(slug: &str) -> String {
     format!(
         "# {slug} — Status\n\n\
+## 위치 / Commitment\n\
+- planning/ideas/{slug}/: exploration, not execution-prep\n\
+- planning/specs/{slug}/: committed execution-prep\n\n\
 ## 현재 상태\n\
 - 현재 phase / gate: \n\
 - 첫 미충족 gate: \n\
@@ -178,28 +169,30 @@ progress: 0 / 25 / 50 / 75 / 100, state: not-started / active / needs-approval /
 | 3 Criteria | 0 | not-started |\n\
 | 4 Wireframe | 0 | not-started |\n\
 | 5 Design | 0 | not-started |\n\
-| 6 Tasks | 0 | not-started |\n\
-| 7 Execution | 0 | not-started |\n\
-| 8 Review | 0 | not-started |\n\
-| 9 Retrospect | 0 | not-started |\n\n\
+| 6 Critic | 0 | not-started |\n\
+| 7 Tasks | 0 | not-started |\n\
+| 8 Artifact / Execution | 0 | not-started |\n\
+| 9 Review | 0 | not-started |\n\
+| 10 Retrospect | 0 | not-started |\n\n\
 ## Return Log\n\
 - \n"
     )
 }
 
-fn render_spec_intent(slug: &str) -> String {
+fn render_leaf_intent(slug: &str) -> String {
     format!(
         "# {slug}\n\n\
 ## 원문 의도\n\
 - \n\n\
 ## 해석한 의도\n\
 - \n\n\
-## Promotion\n\
-- source: direct | ideas/{slug}.md\n"
+## Origin / Promotion\n\
+- source: direct | planning/ideas/{slug}/\n\
+- promotion: move planning/ideas/{slug}/ to planning/specs/{slug}/ when committed\n"
     )
 }
 
-fn render_spec_unknowns() -> String {
+fn render_leaf_unknowns() -> String {
     "## Domain concepts\n\n\
 - [blocking now] \n\n\
 ## Standards / conventions\n\n\
@@ -219,7 +212,7 @@ fn render_spec_unknowns() -> String {
         .to_string()
 }
 
-fn render_spec_references_readme() -> String {
+fn render_leaf_references_readme() -> String {
     "# References (② Unknowns & Context)\n\n\
 덩치 큰 원본 자료(긴 문서·로그·스크린샷·외부 캡처 등)를 여기 둔다.\n\
 이 폴더는 보관소일 뿐, 쓸모 있는 답·요약·판단 근거는 `../02-unknowns.md`로 되돌린다.\n\n\
@@ -227,7 +220,7 @@ fn render_spec_references_readme() -> String {
         .to_string()
 }
 
-fn render_spec_criteria() -> String {
+fn render_leaf_criteria() -> String {
     "사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.\n\n\
 ## 목적 / 성공 기준\n\n\
 - \n\n\
@@ -245,7 +238,7 @@ fn render_spec_criteria() -> String {
         .to_string()
 }
 
-fn render_spec_wireframe() -> String {
+fn render_leaf_wireframe() -> String {
     "## Concrete instance\n\n\
 - \n\n\
 ## Text-first wireframe\n\n\
@@ -267,7 +260,7 @@ fn render_spec_wireframe() -> String {
         .to_string()
 }
 
-fn render_spec_design() -> String {
+fn render_leaf_design() -> String {
     "## 결정사항\n\n\
 - \n\n\
 ## 원칙 (Principles)\n\n\
@@ -295,7 +288,7 @@ fn render_spec_design() -> String {
         .to_string()
 }
 
-fn render_spec_tasks() -> String {
+fn render_leaf_tasks() -> String {
     "## 작업 목록\n\n\
 작고 검토 가능한 구현 단위로 나눈다. 의존성(`[blocked by: T1]`)과 병렬 가능성(`[parallel: T2, T3]`)을 명시해서 실행 형태를 고를 수 있게 한다.\n\n\
 - [ ] T1 — <짧은 제목>\n\
@@ -344,6 +337,13 @@ fn render_retrospect(slug: &str) -> String {
 mod tests {
     use super::*;
 
+    fn expected_leaf_paths(root: &str) -> Vec<String> {
+        LEAF_FILES
+            .iter()
+            .map(|file| format!("{root}/{file}"))
+            .collect()
+    }
+
     #[test]
     fn paths_return_expected_storage_locations() {
         let dir = tempfile::tempdir().unwrap();
@@ -351,27 +351,17 @@ mod tests {
 
         assert_eq!(
             DocKind::Idea.paths(&storage, "foo"),
-            vec![dir.path().join(".wt/planning/ideas/foo.md")]
+            LEAF_FILES
+                .iter()
+                .map(|file| dir.path().join(".wt/planning/ideas/foo").join(file))
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             DocKind::Spec.paths(&storage, "foo"),
-            vec![
-                dir.path().join(".wt/planning/specs/foo/00-status.md"),
-                dir.path()
-                    .join(".wt/planning/specs/foo/01-Learn/01-intent.md"),
-                dir.path()
-                    .join(".wt/planning/specs/foo/01-Learn/02-unknowns.md"),
-                dir.path()
-                    .join(".wt/planning/specs/foo/01-Learn/02-references/README.md"),
-                dir.path()
-                    .join(".wt/planning/specs/foo/02-Example/03-criteria.md"),
-                dir.path()
-                    .join(".wt/planning/specs/foo/02-Example/04-wireframe.md"),
-                dir.path()
-                    .join(".wt/planning/specs/foo/03-Architect/05-design.md"),
-                dir.path()
-                    .join(".wt/planning/specs/foo/03-Architect/06-tasks.md")
-            ]
+            LEAF_FILES
+                .iter()
+                .map(|file| dir.path().join(".wt/planning/specs/foo").join(file))
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             DocKind::Task.paths(&storage, "foo"),
@@ -385,7 +375,7 @@ mod tests {
             DocKind::Retrospect.paths(&storage, "foo"),
             vec![
                 dir.path()
-                    .join(".wt/planning/specs/foo/04-Feedback/09-retrospect.md")
+                    .join(".wt/planning/specs/foo/04-Feedback/10-retrospect.md")
             ]
         );
     }
@@ -415,28 +405,15 @@ mod tests {
     fn spec_render_includes_tasks_skeleton() {
         let spec = DocKind::Spec.render("foo");
         assert_eq!(spec.len(), 8);
-        assert_eq!(spec[0].0, PathBuf::from("planning/specs/foo/00-status.md"));
         assert_eq!(
-            spec[1].0,
-            PathBuf::from("planning/specs/foo/01-Learn/01-intent.md")
-        );
-        assert_eq!(
-            spec[3].0,
-            PathBuf::from("planning/specs/foo/01-Learn/02-references/README.md")
-        );
-        assert_eq!(
-            spec[4].0,
-            PathBuf::from("planning/specs/foo/02-Example/03-criteria.md")
-        );
-        assert_eq!(
-            spec[5].0,
-            PathBuf::from("planning/specs/foo/02-Example/04-wireframe.md")
-        );
-        assert_eq!(
-            spec[7].0,
-            PathBuf::from("planning/specs/foo/03-Architect/06-tasks.md")
+            spec.iter()
+                .map(|(path, _)| path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            expected_leaf_paths("planning/specs/foo")
         );
         assert!(spec[0].1.contains("## Gate 진행"));
+        assert!(spec[0].1.contains("planning/specs/foo/"));
+        assert!(spec[1].1.contains("move planning/ideas/foo/"));
         assert!(spec[2].1.contains("## Domain concepts"));
         assert!(spec[2].1.contains("## Verified facts"));
         assert!(spec[3].1.contains("02-unknowns.md"));
@@ -450,10 +427,17 @@ mod tests {
     #[test]
     fn idea_render_uses_korean_work_sequence_headings() {
         let idea = DocKind::Idea.render("foo");
-        assert_eq!(idea.len(), 1);
-        assert!(idea[0].1.contains("## 원문 의도"));
-        assert!(idea[0].1.contains("## 맥락 / 레퍼런스 탐색"));
-        assert!(idea[0].1.contains("## 목적 / 성공 기준"));
+        assert_eq!(idea.len(), 8);
+        assert_eq!(
+            idea.iter()
+                .map(|(path, _)| path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            expected_leaf_paths("planning/ideas/foo")
+        );
+        assert!(idea[0].1.contains("planning/ideas/foo/"));
+        assert!(idea[1].1.contains("## 원문 의도"));
+        assert!(idea[2].1.contains("## Domain concepts"));
+        assert!(idea[4].1.contains("## 목적 / 성공 기준"));
         assert!(!idea[0].1.contains("Outcome / problem"));
     }
 

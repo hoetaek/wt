@@ -172,13 +172,13 @@ pub enum Commands {
     },
     /// Create blank skeleton documents for a feature
     #[command(
-        long_about = "Create blank skeleton documents for a feature under <repo-root>/.wt/planning/ideas, numbered specs, tasks, workflows, and spec-local retrospects. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
+        long_about = "Create blank skeleton documents for a feature under LEAF idea/spec directories, tasks, workflows, and spec-local retrospects. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
     )]
     Scaffold {
         /// Feature slug to use for every generated path
         #[arg(value_name = "FEATURE")]
         feature: String,
-        /// Create <repo-root>/.wt/planning/ideas/<feature>.md
+        /// Create LEAF idea files under <repo-root>/.wt/planning/ideas/<feature>/
         #[arg(long)]
         idea: bool,
         /// Create phase-folder prep files under <repo-root>/.wt/planning/specs/<feature>/
@@ -190,7 +190,7 @@ pub enum Commands {
         /// Create <repo-root>/.wt/execution/workflows/<feature>.toml
         #[arg(long)]
         workflow: bool,
-        /// Create <repo-root>/.wt/planning/specs/<feature>/04-Feedback/09-retrospect.md
+        /// Create <repo-root>/.wt/planning/specs/<feature>/04-Feedback/10-retrospect.md
         #[arg(long)]
         retrospect: bool,
         /// Create all scaffold document kinds
@@ -1908,6 +1908,8 @@ mod tests {
         assert!(help.contains("Create blank skeleton documents for a feature"));
         assert!(help.contains("<FEATURE>"));
         assert!(help.contains("--idea"));
+        assert!(help.contains("LEAF idea files"));
+        assert!(help.contains("planning/ideas/<feature>/"));
         assert!(help.contains("--spec"));
         assert!(help.contains("--task"));
         assert!(help.contains("--workflow"));

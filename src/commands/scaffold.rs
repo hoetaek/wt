@@ -1,5 +1,5 @@
 use crate::context::{Ctx, PromptOption, PromptRow};
-use crate::scaffold::{ALL_DOC_KINDS, DocKind};
+use crate::scaffold::{ALL_DOC_KINDS, DocKind, LEAF_PHASE_DIRS};
 use crate::task::safe_task_key;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -53,14 +53,14 @@ fn execute(ctx: &Ctx, feature: &str, flags: ScaffoldFlags) -> Result<ScaffoldRep
 
     ensure_no_legacy_scaffold_roots(ctx, &kinds)?;
     let planned = planned_documents(ctx, &slug, &kinds)?;
-    let legacy_conflicts = legacy_spec_conflicts(ctx, &slug, &kinds);
+    let legacy_conflicts = legacy_scaffold_conflicts(ctx, &slug, &kinds);
     if !legacy_conflicts.is_empty() {
         let conflicts = legacy_conflicts
             .iter()
             .map(|path| ctx.storage_root.display_path(path))
             .collect::<Vec<_>>();
         bail!(
-            "Legacy spec files from an older numbering already exist; rename or remove them before creating nine-gate spec files:\n{}",
+            "Legacy scaffold files already exist; move or remove them before creating canonical LEAF scaffold files:\n{}",
             conflicts.join("\n")
         );
     }
@@ -83,6 +83,7 @@ fn execute(ctx: &Ctx, feature: &str, flags: ScaffoldFlags) -> Result<ScaffoldRep
         write_document(ctx, &document.path, &document.content, flags.force)?;
         created.push(ctx.storage_root.display_path(&document.path));
     }
+    ensure_phase_directories(ctx, &slug, &kinds)?;
 
     Ok(ScaffoldReport {
         feature: slug,
@@ -169,6 +170,32 @@ fn ensure_no_legacy_scaffold_roots(ctx: &Ctx, kinds: &[DocKind]) -> Result<()> {
     Ok(())
 }
 
+fn ensure_phase_directories(ctx: &Ctx, slug: &str, kinds: &[DocKind]) -> Result<()> {
+    for base in leaf_base_dirs(ctx, slug, kinds) {
+        for phase in LEAF_PHASE_DIRS {
+            let dir = base.join(phase);
+            fs::create_dir_all(&dir).with_context(|| {
+                format!(
+                    "Failed to create scaffold directory: {}",
+                    ctx.storage_root.display_path(&dir)
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn leaf_base_dirs(ctx: &Ctx, slug: &str, kinds: &[DocKind]) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if kinds.contains(&DocKind::Idea) {
+        dirs.push(ctx.storage_root.ideas_dir().join(slug));
+    }
+    if kinds.contains(&DocKind::Spec) {
+        dirs.push(ctx.storage_root.specs_dir().join(slug));
+    }
+    dirs
+}
+
 fn planned_documents(ctx: &Ctx, slug: &str, kinds: &[DocKind]) -> Result<Vec<PlannedDocument>> {
     let mut planned = Vec::new();
     for kind in kinds {
@@ -187,37 +214,53 @@ fn planned_documents(ctx: &Ctx, slug: &str, kinds: &[DocKind]) -> Result<Vec<Pla
     Ok(planned)
 }
 
-fn legacy_spec_conflicts(ctx: &Ctx, slug: &str, kinds: &[DocKind]) -> Vec<PathBuf> {
+fn legacy_scaffold_conflicts(ctx: &Ctx, slug: &str, kinds: &[DocKind]) -> Vec<PathBuf> {
+    let mut conflicts = Vec::new();
+    if kinds.contains(&DocKind::Idea) {
+        conflicts.extend(
+            ["md", "markdown", "toml"]
+                .into_iter()
+                .map(|ext| ctx.storage_root.ideas_dir().join(format!("{slug}.{ext}")))
+                .filter(|path| path.exists()),
+        );
+    }
+
     if !kinds
         .iter()
         .any(|kind| matches!(kind, DocKind::Spec | DocKind::Retrospect))
     {
-        return Vec::new();
+        return conflicts;
     }
 
     let spec_dir = ctx.storage_root.specs_dir().join(slug);
-    [
-        // Unnumbered pre-work-sequence files.
-        "requirements.md",
-        "design.md",
-        "tasks.md",
-        "workflow.md",
-        "mid-process-discoveries.md",
-        // Pre-9-gate numbered files (older work-sequence numbering).
-        "01-Learn/03-context.md",
-        "02-Example/04+05-requirements.md",
-        "02-Example/04+05+06-requirements.md",
-        "02-Example/06-wireframe.md",
-        "03-Architect/07-design.md",
-        "03-Architect/08-tasks.md",
-        "03-Architect/09-execution.md",
-        "04-Feedback/10-review.md",
-        "04-Feedback/11-retrospect.md",
-    ]
-    .into_iter()
-    .map(|name| spec_dir.join(name))
-    .filter(|path| path.exists())
-    .collect()
+    conflicts.extend(
+        [
+            // Unnumbered pre-work-sequence files.
+            "requirements.md",
+            "design.md",
+            "tasks.md",
+            "workflow.md",
+            "mid-process-discoveries.md",
+            // Pre-10-gate numbered files (older work-sequence numbering).
+            "01-Learn/03-context.md",
+            "02-Example/04+05-requirements.md",
+            "02-Example/04+05+06-requirements.md",
+            "02-Example/06-wireframe.md",
+            "03-Architect/06-tasks.md",
+            "03-Architect/07-design.md",
+            "03-Architect/07-execution.md",
+            "03-Architect/08-tasks.md",
+            "03-Architect/09-execution.md",
+            "04-Feedback/08-review.md",
+            "04-Feedback/09-retrospect.md",
+            "04-Feedback/10-review.md",
+            "04-Feedback/11-retrospect.md",
+        ]
+        .into_iter()
+        .map(|name| spec_dir.join(name))
+        .filter(|path| path.exists()),
+    );
+    conflicts
 }
 
 fn write_document(ctx: &Ctx, path: &Path, content: &str, force: bool) -> Result<()> {
@@ -336,6 +379,22 @@ mod tests {
         }
     }
 
+    fn leaf_files(root: &str) -> Vec<String> {
+        [
+            "00-status.md",
+            "01-Learn/01-intent.md",
+            "01-Learn/02-references/README.md",
+            "01-Learn/02-unknowns.md",
+            "02-Example/03-criteria.md",
+            "02-Example/04-wireframe.md",
+            "03-Architect/05-design.md",
+            "03-Architect/07-tasks.md",
+        ]
+        .into_iter()
+        .map(|file| format!("{root}/{file}"))
+        .collect()
+    }
+
     #[test]
     fn rejects_invalid_feature_slugs() {
         let dir = tempfile::tempdir().unwrap();
@@ -355,15 +414,18 @@ mod tests {
 
         run(&ctx, "foo", flags(&[DocKind::Idea, DocKind::Task])).unwrap();
 
-        assert_eq!(
-            relative_files(&ctx),
-            vec![
-                "execution/tasks/foo.toml".to_string(),
-                "planning/ideas/foo.md".to_string()
-            ]
+        let mut expected = vec!["execution/tasks/foo.toml".to_string()];
+        expected.extend(leaf_files("planning/ideas/foo"));
+        expected.sort();
+        assert_eq!(relative_files(&ctx), expected);
+        assert!(
+            ctx.storage_root
+                .ideas_dir()
+                .join("foo/04-Feedback")
+                .is_dir()
         );
         assert_eq!(
-            fs::read_to_string(ctx.storage_root.ideas_dir().join("foo.md")).unwrap(),
+            fs::read_to_string(ctx.storage_root.ideas_dir().join("foo/00-status.md")).unwrap(),
             DocKind::Idea.render("foo")[0].1
         );
         assert_eq!(
@@ -381,19 +443,8 @@ mod tests {
 
         let spec_dir = ctx.storage_root.specs_dir().join("foo");
         assert!(spec_dir.is_dir());
-        assert_eq!(
-            relative_files(&ctx),
-            vec![
-                "planning/specs/foo/00-status.md".to_string(),
-                "planning/specs/foo/01-Learn/01-intent.md".to_string(),
-                "planning/specs/foo/01-Learn/02-references/README.md".to_string(),
-                "planning/specs/foo/01-Learn/02-unknowns.md".to_string(),
-                "planning/specs/foo/02-Example/03-criteria.md".to_string(),
-                "planning/specs/foo/02-Example/04-wireframe.md".to_string(),
-                "planning/specs/foo/03-Architect/05-design.md".to_string(),
-                "planning/specs/foo/03-Architect/06-tasks.md".to_string()
-            ]
-        );
+        assert!(spec_dir.join("04-Feedback").is_dir());
+        assert_eq!(relative_files(&ctx), leaf_files("planning/specs/foo"));
         assert_eq!(
             fs::read_to_string(spec_dir.join("00-status.md")).unwrap(),
             DocKind::Spec.render("foo")[0].1
@@ -419,26 +470,45 @@ mod tests {
             DocKind::Spec.render("foo")[6].1
         );
         assert_eq!(
-            fs::read_to_string(spec_dir.join("03-Architect/06-tasks.md")).unwrap(),
+            fs::read_to_string(spec_dir.join("03-Architect/07-tasks.md")).unwrap(),
             DocKind::Spec.render("foo")[7].1
         );
     }
 
     #[test]
-    fn spec_scaffold_rejects_legacy_unnumbered_spec_files() {
+    fn spec_scaffold_rejects_legacy_numbered_spec_files() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = text_ctx(dir.path());
         let spec_dir = ctx.storage_root.specs_dir().join("foo");
-        fs::create_dir_all(&spec_dir).unwrap();
-        fs::write(spec_dir.join("requirements.md"), "legacy").unwrap();
+        let architect_dir = spec_dir.join("03-Architect");
+        fs::create_dir_all(&architect_dir).unwrap();
+        fs::write(architect_dir.join("06-tasks.md"), "legacy").unwrap();
 
         let err = run(&ctx, "foo", flags(&[DocKind::Spec])).unwrap_err();
 
         assert!(
-            format!("{err:#}").contains("Legacy spec files from an older numbering already exist"),
+            format!("{err:#}").contains("Legacy scaffold files already exist"),
             "{err:#}"
         );
-        assert!(!spec_dir.join("01-Learn/01-intent.md").exists());
+        assert!(!spec_dir.join("03-Architect/07-tasks.md").exists());
+    }
+
+    #[test]
+    fn idea_scaffold_rejects_legacy_flat_idea_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = text_ctx(dir.path());
+        fs::create_dir_all(ctx.storage_root.ideas_dir()).unwrap();
+        fs::write(ctx.storage_root.ideas_dir().join("foo.md"), "legacy").unwrap();
+
+        let err = run(&ctx, "foo", flags(&[DocKind::Idea])).unwrap_err();
+
+        assert!(format!("{err:#}").contains("Legacy scaffold files already exist"));
+        assert!(
+            !ctx.storage_root
+                .ideas_dir()
+                .join("foo/00-status.md")
+                .exists()
+        );
     }
 
     #[test]
@@ -450,13 +520,13 @@ mod tests {
 
         assert_eq!(
             relative_files(&ctx),
-            vec!["planning/specs/foo/04-Feedback/09-retrospect.md".to_string()]
+            vec!["planning/specs/foo/04-Feedback/10-retrospect.md".to_string()]
         );
         assert_eq!(
             fs::read_to_string(
                 ctx.storage_root
                     .specs_dir()
-                    .join("foo/04-Feedback/09-retrospect.md")
+                    .join("foo/04-Feedback/10-retrospect.md")
             )
             .unwrap(),
             DocKind::Retrospect.render("foo")[0].1
@@ -478,23 +548,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            relative_files(&ctx),
-            vec![
-                "execution/tasks/foo.toml".to_string(),
-                "execution/workflows/foo.toml".to_string(),
-                "planning/ideas/foo.md".to_string(),
-                "planning/specs/foo/00-status.md".to_string(),
-                "planning/specs/foo/01-Learn/01-intent.md".to_string(),
-                "planning/specs/foo/01-Learn/02-references/README.md".to_string(),
-                "planning/specs/foo/01-Learn/02-unknowns.md".to_string(),
-                "planning/specs/foo/02-Example/03-criteria.md".to_string(),
-                "planning/specs/foo/02-Example/04-wireframe.md".to_string(),
-                "planning/specs/foo/03-Architect/05-design.md".to_string(),
-                "planning/specs/foo/03-Architect/06-tasks.md".to_string(),
-                "planning/specs/foo/04-Feedback/09-retrospect.md".to_string()
-            ]
-        );
+        let mut expected = vec![
+            "execution/tasks/foo.toml".to_string(),
+            "execution/workflows/foo.toml".to_string(),
+            "planning/specs/foo/04-Feedback/10-retrospect.md".to_string(),
+        ];
+        expected.extend(leaf_files("planning/ideas/foo"));
+        expected.extend(leaf_files("planning/specs/foo"));
+        expected.sort();
+        assert_eq!(relative_files(&ctx), expected);
     }
 
     #[test]
@@ -506,13 +568,10 @@ mod tests {
 
         run(&ctx, "foo", ScaffoldFlags::default()).unwrap();
 
-        assert_eq!(
-            relative_files(&ctx),
-            vec![
-                "planning/ideas/foo.md".to_string(),
-                "planning/specs/foo/04-Feedback/09-retrospect.md".to_string()
-            ]
-        );
+        let mut expected = vec!["planning/specs/foo/04-Feedback/10-retrospect.md".to_string()];
+        expected.extend(leaf_files("planning/ideas/foo"));
+        expected.sort();
+        assert_eq!(relative_files(&ctx), expected);
     }
 
     #[test]
@@ -527,7 +586,12 @@ mod tests {
             .to_string();
 
         assert!(err.contains("<repo-root>/.wt/execution/tasks/foo.toml"));
-        assert!(!ctx.storage_root.ideas_dir().join("foo.md").exists());
+        assert!(
+            !ctx.storage_root
+                .ideas_dir()
+                .join("foo/00-status.md")
+                .exists()
+        );
     }
 
     #[test]
@@ -551,7 +615,12 @@ mod tests {
             fs::read_to_string(ctx.storage_root.tasks_dir().join("foo.toml")).unwrap(),
             DocKind::Task.render("foo")[0].1
         );
-        assert!(ctx.storage_root.ideas_dir().join("foo.md").exists());
+        assert!(
+            ctx.storage_root
+                .ideas_dir()
+                .join("foo/00-status.md")
+                .exists()
+        );
     }
 
     #[test]
@@ -566,7 +635,7 @@ mod tests {
         assert_eq!(json["feature"], "foo");
         assert_eq!(
             json["created"].as_array().unwrap()[0],
-            "<repo-root>/.wt/planning/specs/foo/04-Feedback/09-retrospect.md"
+            "<repo-root>/.wt/planning/specs/foo/04-Feedback/10-retrospect.md"
         );
         assert!(json["skipped"].as_array().unwrap().is_empty());
     }

@@ -263,7 +263,7 @@ gh pr create --base <integration-branch> --head land-<slug>-recover \
 
 The original PRs stay `MERGED` (just into the wrong base); the recovery PR is
 the one that actually lands the content. Document the recovery in the
-workflow's spec or `03-Architect/07-execution.md` so future readers understand the history.
+workflow's spec or `03-Architect/08-execution.md` so future readers understand the history.
 
 The robust path is to prevent mis-targeting up front via the explicit
 re-target step above. Treat the recovery procedure as a fallback, not a
@@ -296,7 +296,7 @@ Minimum rule:
 
 - Write a timing entry for every closed work item, even when no broader
   keep/problem/try lesson emerged.
-- Prefer `<repo-root>/.wt/planning/specs/<slug>/04-Feedback/09-retrospect.md` for
+- Prefer `<repo-root>/.wt/planning/specs/<slug>/04-Feedback/10-retrospect.md` for
   spec-backed work.
 - Use `<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` only for
   cross-work, spec-less, or intentionally split lessons.

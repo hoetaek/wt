@@ -18,7 +18,7 @@ use crate::workflow::run::{
 };
 use crate::workflow::{self, WorkflowMetadata, WorkflowMode};
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -515,14 +515,9 @@ struct InvalidRecord {
     source_text: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
-struct IdeaToml {
-    title: Option<String>,
-    status: Option<String>,
-    source: Option<String>,
-    tags: Option<Vec<String>>,
-    updated_at: Option<String>,
-    body: Option<String>,
+enum IdeaEntry {
+    Leaf(PathBuf),
+    LegacyFlat(PathBuf),
 }
 
 pub fn build(state: &SnapshotState) -> Result<Snapshot> {
@@ -547,7 +542,7 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
             retrospecs: ctx
                 .storage_root
                 .display_path(&ctx.storage_root.retrospectives_dir())
-                + " + <repo-root>/.wt/planning/specs/*/04-Feedback/09-retrospect.md",
+                + " + <repo-root>/.wt/planning/specs/*/04-Feedback/10-retrospect.md",
             config_paths: config_source_paths(&ctx),
         },
         config: config_summary(&ctx),
@@ -573,98 +568,124 @@ fn collect_ideas(ctx: &Ctx) -> Result<IdeaCollection> {
         ));
     }
 
-    for path in idea_paths(ctx)? {
-        let key = file_stem(&path).unwrap_or_else(|| "idea".into());
-        let relative_path = relative_path(ctx, &path);
-        match read_idea(ctx, &path) {
-            Ok(summary) => items.push(summary),
-            Err(err) => invalid.push(InvalidRecord {
-                key,
-                path: relative_path,
-                error: format!("{err:#}"),
+    for entry in idea_entries(ctx)? {
+        match entry {
+            IdeaEntry::Leaf(path) => match read_leaf_idea(ctx, &path) {
+                Ok(summary) => items.push(summary),
+                Err(err) => invalid.push(InvalidRecord {
+                    key: file_name(&path).unwrap_or_else(|| "idea".into()),
+                    path: relative_path(ctx, &path),
+                    error: format!("{err:#}"),
+                    source_text: read_known_source_text(ctx, &path),
+                }),
+            },
+            IdeaEntry::LegacyFlat(path) => invalid.push(InvalidRecord {
+                key: file_stem(&path).unwrap_or_else(|| "idea".into()),
+                path: relative_path(ctx, &path),
+                error: "Legacy flat idea file is not canonical. Move this exploration into planning/ideas/<slug>/ LEAF files or promote it to planning/specs/<slug>/ before relying on it.".into(),
                 source_text: read_known_source_text(ctx, &path),
             }),
-        }
+        };
     }
 
     Ok(IdeaCollection { items, invalid })
 }
 
-fn idea_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
+fn idea_entries(ctx: &Ctx) -> Result<Vec<IdeaEntry>> {
     let ideas_dir = ctx.storage_root.ideas_dir();
     if !ideas_dir.exists() {
         return Ok(Vec::new());
     }
 
-    let mut paths = Vec::new();
+    let mut entries = Vec::new();
     let display = ctx.storage_root.display_path(&ideas_dir);
     for entry in fs::read_dir(&ideas_dir)
         .with_context(|| format!("Failed to read idea directory: {display}"))?
     {
         let path = entry?.path();
-        let ext = path.extension().and_then(|ext| ext.to_str());
-        if matches!(ext, Some("toml" | "md" | "markdown")) {
-            paths.push(path);
+        if path.is_dir() {
+            entries.push(IdeaEntry::Leaf(path));
+            continue;
+        }
+
+        if path.is_file() {
+            let ext = path.extension().and_then(|ext| ext.to_str());
+            if matches!(ext, Some("toml" | "md" | "markdown")) {
+                entries.push(IdeaEntry::LegacyFlat(path));
+            }
         }
     }
-    paths.sort();
-    Ok(paths)
+    entries.sort_by(|a, b| idea_entry_path(a).cmp(idea_entry_path(b)));
+    Ok(entries)
 }
 
-fn read_idea(ctx: &Ctx, path: &Path) -> Result<IdeaSummary> {
-    match path.extension().and_then(|ext| ext.to_str()) {
-        Some("toml") => read_toml_idea(ctx, path),
-        Some("md" | "markdown") => read_markdown_idea(ctx, path),
-        _ => bail!("Unsupported idea file type: {}", path.display()),
+fn idea_entry_path(entry: &IdeaEntry) -> &Path {
+    match entry {
+        IdeaEntry::Leaf(path) | IdeaEntry::LegacyFlat(path) => path,
     }
 }
 
-fn read_toml_idea(ctx: &Ctx, path: &Path) -> Result<IdeaSummary> {
-    let relative_path = relative_path(ctx, path);
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read idea: {relative_path}"))?;
-    let idea: IdeaToml = toml::from_str(&content)
-        .with_context(|| format!("Failed to parse idea: {relative_path}"))?;
-    let key = file_stem(path).unwrap_or_else(|| "idea".into());
-    let title = non_empty_string(idea.title).unwrap_or_else(|| key.clone());
-    Ok(IdeaSummary {
-        key,
-        path: relative_path,
-        kind: "toml".into(),
-        title,
-        status: non_empty_string(idea.status),
-        source: non_empty_string(idea.source),
-        tags: idea.tags.unwrap_or_default(),
-        updated_at: non_empty_string(idea.updated_at),
-        body_summary: idea.body.as_deref().and_then(body_summary),
-        body: non_empty_string(idea.body),
-        source_text: non_empty_body(&content),
-    })
-}
-
-fn read_markdown_idea(ctx: &Ctx, path: &Path) -> Result<IdeaSummary> {
-    let relative_path = relative_path(ctx, path);
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read idea: {relative_path}"))?;
-    let key = file_stem(path).unwrap_or_else(|| "idea".into());
-    let title = content
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("# ").map(str::trim))
-        .filter(|title| !title.is_empty())
-        .map(str::to_string)
+fn read_leaf_idea(ctx: &Ctx, dir: &Path) -> Result<IdeaSummary> {
+    let key = file_name(dir).unwrap_or_else(|| "idea".into());
+    let relative_path = relative_path(ctx, dir);
+    let status_path = dir.join("00-status.md");
+    let intent_path = dir.join("01-Learn/01-intent.md");
+    let status = fs::read_to_string(&status_path).with_context(|| {
+        format!(
+            "Failed to read idea status: {}",
+            ctx.storage_root.display_path(&status_path)
+        )
+    })?;
+    let intent = fs::read_to_string(&intent_path).with_context(|| {
+        format!(
+            "Failed to read idea intent: {}",
+            ctx.storage_root.display_path(&intent_path)
+        )
+    })?;
+    let unknowns = fs::read_to_string(dir.join("01-Learn/02-unknowns.md")).ok();
+    let body = [
+        Some(status.as_str()),
+        Some(intent.as_str()),
+        unknowns.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("\n\n");
+    let title = markdown_title(&intent)
+        .or_else(|| markdown_title(&status))
         .unwrap_or_else(|| key.clone());
     Ok(IdeaSummary {
         key,
         path: relative_path,
-        kind: "markdown".into(),
+        kind: "leaf".into(),
         title,
-        status: None,
+        status: markdown_field(&status, "idea status"),
         source: None,
         tags: Vec::new(),
         updated_at: None,
-        body_summary: body_summary(&content),
-        body: non_empty_body(&content),
-        source_text: non_empty_body(&content),
+        body_summary: body_summary(&body),
+        body: non_empty_body(&body),
+        source_text: non_empty_body(&body),
+    })
+}
+
+fn markdown_title(content: &str) -> Option<String> {
+    content
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("# ").map(str::trim))
+        .filter(|title| !title.is_empty())
+        .map(str::to_string)
+}
+
+fn markdown_field(content: &str, field: &str) -> Option<String> {
+    let needle = format!("- {field}:");
+    content.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(&needle)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
     })
 }
 
@@ -1290,7 +1311,7 @@ fn retrospec_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
         {
             let path = entry?.path();
             if path.is_dir() {
-                let retrospec = path.join("04-Feedback/09-retrospect.md");
+                let retrospec = path.join("04-Feedback/10-retrospect.md");
                 if retrospec.exists() {
                     paths.push(retrospec);
                 }
@@ -1311,7 +1332,7 @@ fn retrospec_identity(ctx: &Ctx, path: &Path) -> (String, String, Option<String>
             .and_then(|component| component.as_os_str().to_str())
         {
             return (
-                format!("{spec}/09-retrospect"),
+                format!("{spec}/10-retrospect"),
                 "spec-local".into(),
                 Some(spec.to_string()),
             );
@@ -1832,6 +1853,13 @@ fn file_stem(path: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+fn file_name(path: &Path) -> Option<String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_string)
+}
+
 fn label(value: &str) -> String {
     value
         .split('_')
@@ -1882,7 +1910,7 @@ fn is_known_state_or_config_path(relative: &str) -> bool {
                 Some("toml" | "md" | "markdown")
             ))
         || (relative.starts_with("<repo-root>/.wt/planning/specs/")
-            && relative.ends_with("/04-Feedback/09-retrospect.md"))
+            && relative.ends_with("/04-Feedback/10-retrospect.md"))
         || (relative.starts_with("<repo-root>/.wt/execution/tasks/") && relative.ends_with(".toml"))
         || (relative.starts_with("<repo-root>/.wt/execution/workflows/")
             && relative.ends_with(".toml"))
@@ -2011,12 +2039,12 @@ mod tests {
             "title = \"Workflow demo\"\nbody = \"Workflow body\"\nmode = \"batch\"\nbase_mode = \"explicit\"\nbase = \"main\"\ncreated_at = \"2026-05-18T00:00:00Z\"\nupdated_at = \"2026-05-18T00:00:00Z\"\n\n[policy]\npull_request = \"none\"\nlanding = \"manual\"\n\n[[tasks]]\ntask = \"demo\"\nrun = \"run-demo\"\n",
         );
         write_workflow(dir.path(), "bad", "mode = \"batch\"\n");
-        write_idea(
+        write_leaf_idea(
             dir.path(),
             "idea",
-            "title = \"Idea\"\nstatus = \"ready\"\ntags = [\"ui\"]\nbody = \"Idea body\"\n",
+            "# Idea\n\n## Commitment\n- idea status: ready_for_prep\n",
         );
-        write_idea(dir.path(), "bad", "title = [\n");
+        write_flat_idea(dir.path(), "bad", "title = [\n");
         write_profile(
             dir.path(),
             "codex",
@@ -2203,7 +2231,22 @@ mod tests {
                 .unwrap()
                 .contains("branch = \"feature/demo\"")
         );
-        assert_eq!(snapshot.ideas.items[0].body.as_deref(), Some("Idea body"));
+        assert_eq!(snapshot.ideas.items[0].kind, "leaf");
+        assert_eq!(
+            snapshot.ideas.items[0].path,
+            "<repo-root>/.wt/planning/ideas/idea"
+        );
+        assert_eq!(
+            snapshot.ideas.items[0].status.as_deref(),
+            Some("ready_for_prep")
+        );
+        assert!(
+            snapshot.ideas.items[0]
+                .body
+                .as_deref()
+                .unwrap()
+                .contains("## 원문 의도")
+        );
         assert!(
             snapshot.task_runs.items[0]
                 .source_text
@@ -2264,7 +2307,7 @@ mod tests {
             Some("Context\nGoal: Retro goal\n\nKeep\n- Keep this")
         );
         assert_eq!(snapshot.retrospecs.items[0].scope, "cross-work");
-        assert_eq!(snapshot.retrospecs.items[1].key, "demo-spec/09-retrospect");
+        assert_eq!(snapshot.retrospecs.items[1].key, "demo-spec/10-retrospect");
         assert_eq!(snapshot.retrospecs.items[1].scope, "spec-local");
         assert_eq!(
             snapshot.retrospecs.items[1].spec.as_deref(),
@@ -2272,7 +2315,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.retrospecs.items[1].path,
-            "<repo-root>/.wt/planning/specs/demo-spec/04-Feedback/09-retrospect.md"
+            "<repo-root>/.wt/planning/specs/demo-spec/04-Feedback/10-retrospect.md"
         );
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
@@ -2502,7 +2545,23 @@ mod tests {
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
-    fn write_idea(root: &Path, name: &str, content: &str) {
+    fn write_leaf_idea(root: &Path, name: &str, status: &str) {
+        let dir = root.join(".wt/planning/ideas").join(name);
+        fs::create_dir_all(dir.join("01-Learn")).unwrap();
+        fs::write(dir.join("00-status.md"), status).unwrap();
+        fs::write(
+            dir.join("01-Learn/01-intent.md"),
+            "# Idea\n\n## 원문 의도\n- Idea body\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("01-Learn/02-unknowns.md"),
+            "## Verified facts\n\n- Idea fact\n",
+        )
+        .unwrap();
+    }
+
+    fn write_flat_idea(root: &Path, name: &str, content: &str) {
         let dir = root.join(".wt/planning/ideas");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
@@ -2526,6 +2585,6 @@ mod tests {
             .join(spec)
             .join("04-Feedback");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("09-retrospect.md"), content).unwrap();
+        fs::write(dir.join("10-retrospect.md"), content).unwrap();
     }
 }

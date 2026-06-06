@@ -24,10 +24,12 @@ Inspect local truth before asking questions:
 git status --short --branch
 find . -maxdepth 2 -name AGENTS.md -o -name AGENTS.override.md
 repo_root="$(git rev-parse --show-toplevel)"
-# execution/tasks, execution/workflows, planning/ideas hold flat files;
-# planning/specs holds one directory per slug.
-find "$repo_root/.wt/execution/tasks" "$repo_root/.wt/execution/workflows" "$repo_root/.wt/planning/ideas" -maxdepth 1 -type f 2>/dev/null | sort
-find "$repo_root/.wt/planning/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
+# execution/tasks and execution/workflows hold flat files;
+# planning/ideas and planning/specs hold one LEAF directory per slug.
+find "$repo_root/.wt/execution/tasks" "$repo_root/.wt/execution/workflows" -maxdepth 1 -type f 2>/dev/null | sort
+find "$repo_root/.wt/planning/ideas" "$repo_root/.wt/planning/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
+# Flat idea files are legacy context, not canonical new targets.
+find "$repo_root/.wt/planning/ideas" -maxdepth 1 -type f 2>/dev/null | sort
 ```
 
 For `wt` itself, read `docs/consistency.md` before proposing model, CLI,
@@ -42,16 +44,15 @@ preparation. Implementation belongs in a wt task/workflow branch.
 
 An idea is exploration. It is allowed to die.
 
-- Use `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}` when the user is still
-  exploring future work and should not commit to a spec, TaskDocument, or
-  workflow yet.
-- The idea body is scratch surface, not a contract. It may be deleted,
-  rewritten, split, or archived without any state transition that other
-  components observe.
-- No downstream consumer depends on an idea file continuing to exist. Removing
-  one is not breakage.
+- Use `<repo-root>/.wt/planning/ideas/<slug>/` when the user is still exploring
+  future work and should not commit to treating it as executable work yet.
+- The idea uses the same LEAF structure as a spec, but it is still exploratory
+  scratch surface, not a launch contract. It may be deleted, rewritten, split,
+  or archived without any state transition that other components observe.
+- No downstream consumer depends on an idea directory continuing to exist.
+  Removing one is not breakage.
 - If the user asks only to capture, compare, enrich, defer, or review ideas,
-  stop at the idea file. Do not create specs, TaskDocuments, workflows, or
+  stop at the idea directory. Do not create specs, TaskDocuments, workflows, or
   branches.
 
 Capture enough that a later prep pass can continue without rediscovering the
@@ -64,20 +65,22 @@ basics:
 - assumptions, risks, non-goals, and open questions
 - recommendation: enrich more, promote to spec, defer, archive, or split
 
-Use these idea statuses when writing TOML or a status line in Markdown:
+Use these idea statuses in `00-status.md`:
 
 - `captured`: raw idea saved with minimal context.
 - `enriched`: meaningful context, references, or alternatives were gathered.
-- `ready_for_prep`: enough information exists to promote into spec prep without
-  rediscovering raw intent, plausible frames, tradeoffs, and the next question.
+- `ready_for_prep`: enough information exists to promote into executable-work
+  prep without rediscovering raw intent, plausible frames, tradeoffs, and the
+  next question.
 - `archived`: intentionally not pursuing now.
 
-To seed a Markdown idea, run `wt scaffold <slug> --idea`. Use lowercase ASCII
-kebab-case slugs. Prefer Markdown for loose notes; use TOML only when simple
-top-level fields plus a `body` string help. If an idea already exists at either
-extension, update that file instead of creating a duplicate.
+To seed an idea, run `wt scaffold <slug> --idea`. Use lowercase ASCII kebab-case
+slugs. If `planning/ideas/<slug>/` already exists, update that directory instead
+of creating a duplicate. If a legacy flat idea exists at
+`planning/ideas/<slug>.{md,toml,markdown}`, normalize it into the LEAF directory
+before continuing.
 
-End an idea-only pass with the idea path, status, evidence checked, related
+End an idea-only pass with the idea directory path, status, evidence checked, related
 artifacts found, why it is or is not ready for prep, and the missing LEAF gate
 when it is not ready.
 
@@ -135,25 +138,37 @@ ride along as facts into the next gate.
 When intent is still soft, use bounded context/reference exploration before
 forcing purpose or requirements. Gather enough local or external examples to
 name 2-4 plausible frames, record why each fits or fails, and then either:
-continue to purpose/success criteria, stop with/update an idea file, or ask one
+continue to purpose/success criteria, stop with/update an idea directory, or ask one
 HITL question that chooses the next exploration direction.
 
 ## LEAF Work
 
 Leaf before tree: validate one cheap, inspectable instance before growing it
-into the whole artifact or runnable work. Before promoting an idea, writing
-specs, or preparing TaskDocuments, work through gates by phase and stop at the
-earliest missing LEAF gate:
+into the whole artifact or runnable work. The core move is not to generate the
+whole artifact upfront; it is to learn first, make one instance right, then
+expand. Before promoting an idea, writing specs, or preparing TaskDocuments,
+work through gates by phase and stop at the earliest missing LEAF gate:
 
-- Learn: 1 Intent, 2 Unknowns & Context
-- Example: 3 Criteria, 4 Wireframe
-- Architect: 5 Design, 5.5 optional Critic, 6 Tasks, 7 Artifact / execution handoff
-- Feedback: 8 Review/sync, 9 Retrospect
+| Phase | What it makes wt-ready able to do | Gates |
+| --- | --- | --- |
+| Learn | Judge what the work needs, learned rather than guessed | 1 Intent, 2 Unknowns & Context |
+| Example | Prove one cheap instance right before scaling | 3 Criteria, 4 Wireframe |
+| Architect | Generalize that instance into a shippable generator | 5 Design, 6 Critic, 7 Tasks, 8 Artifact / execution handoff |
+| Feedback | Confirm it still holds and settle the lessons | 9 Review/sync, 10 Retrospect |
 
 Learn asks whether the user has learned what this needs well enough to judge
 it. Do not treat Learn as a private research phase where the agent silently
 collects facts and then hands back criteria. The user's ability to name what to
 choose between, and why, is the output that Example consumes.
+
+Scaffolding is the first act for wt LEAF prep, so the work stands on a firm
+foundation. Run or normalize `wt scaffold <slug> --idea` for exploratory prep
+and `wt scaffold <slug> --spec` only after the user commits to treating the work
+as executable. In both locations the scaffold creates `00-status.md` and the
+four phase folders before any gate work, making "which gate am I in / what is
+the first missing gate" inspectable before each gate file fills in. If the work
+is too small for that body, keep it as a direct note or direct edit instead of
+invoking LEAF.
 
 Start from `00-status.md` when it exists. It is the project dashboard for
 current phase/gate, first missing gate, next action, and progress; gate files
@@ -161,9 +176,11 @@ remain authoritative. Keep it current when a gate starts, becomes ready for
 approval, is approved, returns to an earlier gate, is blocked/deferred, or when
 the next action changes materially.
 
-The moment you judge whether a wt LEAF gate passes, propose a transition, or
-handle a return, read that gate's wt-specific entry/exit/return conditions in
-`references/leaf-work.md` first. `SKILL.md` gives the operating shape;
+With the scaffold and `00-status.md` in hand, read `references/leaf-work.md`,
+identify the current wt gate, tell the user that gate, and proceed by that
+gate's wt-specific entry/exit/return conditions. Read it before judging gate
+readiness, creating or revising a gate artifact, proposing a transition, or
+handling a return. `SKILL.md` gives the operating shape;
 `references/leaf-work.md` gives the wt pass/fail test. Skip it only to start a
 small run that needs no gate judgment. Do not treat the sequence as a
 waterfall. Gates loop: when a downstream gate overturns an assumption or
@@ -171,33 +188,40 @@ surfaces a new unknown, return to `01-Learn/02-unknowns.md`, update only the
 later files that depended on what changed, and record the return in
 `00-status.md` as a Return Log event, not as a gate state. For wt specs,
 generic leaf-work's
-`04-Feedback/09-retrospective/mid-process-discoveries.md` maps to wt's
-deterministic `04-Feedback/09-retrospect.md`; do not create the generic nested
+`04-Feedback/10-retrospective/mid-process-discoveries.md` maps to wt's
+deterministic `04-Feedback/10-retrospect.md`; do not create the generic nested
 folder inside a wt spec. If execution/review evidence caused the return,
-`wt-work` also records that discovery in `04-Feedback/08-review.md` for
+`wt-work` also records that discovery in `04-Feedback/09-review.md` for
 review/sync evidence.
 
 For wt specs, keep the `.wt/planning/specs/<slug>/` personal-state bucket and
 store LEAF artifacts under phase folders inside it: `01-Learn/`,
 `02-Example/`, `03-Architect/`, and `04-Feedback/`. The slug already names the
-work item, so canonical wt files use stable names like `03-Architect/05-design.md`
-and `04-Feedback/09-retrospect.md` instead of leaf-work's generic
-artifact-suffixed forms.
+work item, so canonical wt files use stable names like `03-Architect/05-design.md`,
+`03-Architect/08-execution.md`, and `04-Feedback/10-retrospect.md` instead of
+leaf-work's generic artifact-suffixed forms. Gate 6 Critic is lazy: create
+`03-Architect/06-critic.md` only when critic triggers fire, otherwise record
+the accepted skip/low-risk rationale in `03-Architect/05-design.md`.
 
 If a user enters with implementation-shaped wording, reconstruct the missing
 intent, purpose/success criteria, and output form first. If Learn is incomplete,
 surface unknowns, resolve enough context in the same file, and only then enter
 Example.
 If Example is incomplete, stop at criteria or wireframe instead of design.
-If the Architect gates are incomplete, stop at design, task graph, or execution
-handoff instead of fabricating a TaskDocument.
+If the Architect gates are incomplete, stop at design, critic, task graph, or
+execution handoff instead of fabricating a TaskDocument.
 
-Once the current one-sentence intent is available, show a compact LEAF route
-preview before deep prep. Phrase each phase as a question about this specific
-intent: what the user must learn from facts/conventions through judgment in
-Learn, what cheap example to validate in Example, what design/tasks/handoff to
-architect in Architect, and what to review or learn in Feedback. This is
-orientation, not a fixed plan.
+Once the current one-sentence intent is available, show a compact opening
+preview before deep prep. Phrase the four phases as the capability each builds
+for this specific intent, not as generic labels or a fixed plan:
+
+- Learn: by the end the user can judge what this specific work needs, having
+  learned the facts, conventions, and alternatives instead of guessing them.
+- Example: one cheap instance can be proven right before scaling it up.
+- Architect: that passed case can be generalized into reusable structure, task
+  order, and a shippable result.
+- Feedback: the plan can be checked against review/sync evidence and the
+  lessons can be carried forward.
 
 Before Gate 2, run a lightweight topology confirmation when the request has
 more than one possible outcome. Name the top-level outcomes, surfaces,
@@ -206,8 +230,8 @@ whether any should be added, removed, merged, split, or explicitly deferred.
 Store the confirmed topology in the idea/spec note. Do not let the most
 described component stand in for quieter sibling components.
 
-During Gates 1-3, keep a compact clarity ledger instead of asking questions in
-conversation order:
+Use the compact clarity ledger at its intended gate, not as a running
+conversation-order checklist:
 
 - intent: desired effect and core noun are stable
 - topology: independent outcomes/components are named
@@ -216,12 +240,21 @@ conversation order:
 - output form: idea, spec, TaskDocument, workflow, prototype, docs-only, or
   mixed handoff is explicit
 
-Target the weakest ledger row with the next question. Say why that row is the
-current bottleneck before asking. If the core noun changes across answers
-(`idea`, `spec`, `task`, `workflow`, `decision`, etc.), pause feature questions
-and ask which noun is the actual object of the work and which are supporting
-views or artifacts. A row is stable only when the user can judge it in their
-own words; a verified fact held only by the agent is not yet a stable row.
+Gate 1 locks the Intent row: desired effect and core noun. During Gate 2,
+use the ledger only as a lens for learning: glance at the weakest row to aim
+domain, standards/conventions, external, or internal unknowns and inventory,
+but do not force the row closed there. Gate 3 scores and locks the full set:
+Intent becomes purpose, and topology, success, constraints, and output form
+become criteria, requirements, principles, or explicit assumptions/risks.
+
+When choosing the next question, target the weakest ledger row and say why
+that row is the current bottleneck before asking. If the core noun changes
+across answers (`idea`, `spec`, `task`, `workflow`, `decision`, etc.), pause
+feature questions and ask which noun is the actual object of the work and which
+are supporting views or artifacts. A row is stable only when the user can judge
+it in their own words; a verified fact held only by the agent is not yet a
+stable row. Once a row is stable, stop re-asking it unless later evidence
+changes it.
 
 Every gate transition requires explicit user approval, including returns to an
 earlier gate. The agent may propose that unknowns/context are adequate,
@@ -231,11 +264,17 @@ gate approved, moves forward, or returns to an earlier gate. For tiny wt work,
 gate artifacts may be brief, but the Gate 3 -> Gate 4 and Gate 4 -> Gate 5 file
 boundaries stay separate.
 
-If the user wants to proceed while any Gate 1-3 ledger row is still weak, state
-the remaining risk and the cheapest next question or artifact that would reduce
-it. Continue only after the user accepts that risk or chooses the next gate.
+If the user wants to proceed past Gate 3 while any ledger row is still weak,
+state the remaining risk and the cheapest next question or artifact that would
+reduce it. Continue only after the user accepts that risk or chooses the next
+gate.
 
-The middle gates are a produce -> consume engine:
+The middle gates are a criteria -> instance -> generator chain. Gate 3 writes
+the test before any answer exists, Gate 4 locks one concrete instance and its
+contract, and Gate 5 generalizes that contract across valid variation. When
+entering Gate 3, read the middle-engine material in `references/leaf-work.md`
+for the wt mechanics: contract, variation points, the falsification loop, and
+the gate return rules.
 
 - Gate 3 Criteria is the arbiter plus test: write the intended effect and
   observable criteria before the answer exists.
@@ -248,7 +287,7 @@ The middle gates are a produce -> consume engine:
 Never hide disagreement across a produce/consume edge.
 `02-Example/03-criteria.md` and `02-Example/04-wireframe.md` stay separate;
 `03+04`, `04+05`, and `03+04+05` are not canonical wt forms. If inherited work
-still has pre-9-gate files such as `04+05-requirements.md`,
+still has pre-10-gate files such as `04+05-requirements.md`,
 `04+05+06-requirements.md`, or `06-wireframe.md`, treat them as legacy/starter
 context and split them into current ③ criteria and ④ wireframe artifacts before
 launch-ready handoff. When Gate 5 has to invent an artifact shape, Gate 4
@@ -267,19 +306,20 @@ repo docs or code, point to the conflict and propose the canonical term.
 
 When authoring a spec file (`01-Learn/02-unknowns.md`,
 `02-Example/03-criteria.md`, `02-Example/04-wireframe.md`,
-`03-Architect/05-design.md`, `03-Architect/06-tasks.md`,
-`03-Architect/07-execution.md`), use the
+`03-Architect/05-design.md`, `03-Architect/06-critic.md`,
+`03-Architect/07-tasks.md`, `03-Architect/08-execution.md`), use the
 **Grill The Spec** cycle instead.
 
 ## Set Output Form
 
-After purpose, requirements, and principles are clear, decide what kind of
-artifact this preparation should produce. This is part of requirements, not a
-separate gate. Do it before wireframe, design, and task graph work so an
+Lock the output form while authoring Gate 3 Criteria, once Gate 1 intent and
+Gate 2 context give the user enough basis to judge it. Output form is one
+clarity-ledger row and part of criteria, not a separate gate or a late design
+choice. Do it before wireframe, design, and task graph work so an
 implementation PR is not assumed by default.
 
 Record the output form in `02-Example/03-criteria.md`, TaskDocument
-`계획 (Planning)` section, or `03-Architect/07-execution.md` rationale:
+`계획 (Planning)` section, or `03-Architect/08-execution.md` rationale:
 
 - docs-only change
 - implementation PR
@@ -390,78 +430,28 @@ For each slice, record:
 - expected duration before first coordinator review, such as `20m`, `45m`, or
   `2h`; derive this from similar retrospectives when available, otherwise mark
   it as a conservative planning guess or range
-- estimate basis: previous `04-Feedback/09-retrospect.md`, cross-work `timing.md`,
+- estimate basis: previous `04-Feedback/10-retrospect.md`, cross-work `timing.md`,
   `wt agent wait-stats`, user-provided target, or conservative planning guess
 - suggested watch cadence: launch validation and steady heartbeat interval for
   `wt-work`, based on expected duration and prior timing evidence
 - acceptance checks
 - notes for experiments or tradeoffs that shaped the slice
 
-Record this planning context in the TaskDocument `body` as a text section, not
-as top-level TOML fields (only canonical task fields are accepted). Every
-TaskDocument or workflow task must include an expected duration in its
-`계획 (Planning)` body section before `wt-work`, plus the estimate basis when
-known. Prefer Korean human-facing labels with the stable English key in
-parentheses.
-
-Example body section:
-
-```text
-## 계획 (Planning)
-- 유형 (type): AFK
-- 예상 소요 (expected duration): 45m
-- 예상 근거 (estimate basis): conservative planning guess
-- 권장 watch cadence (suggested watch cadence): launch 45s, steady heartbeat 5-10m
-- 막힘 / 의존성 (blocked by): workflow-policy-contract-simplified
-- 실행 형태 (execution shape): stack child
-- 크기 (size class): medium
-- 확인 방법 (acceptance checks): update docs, run cargo fmt --all --check
-```
+Record this planning context in the TaskDocument `body` `## 계획 (Planning)`
+section, not as top-level TOML fields (only canonical task fields are
+accepted). Every TaskDocument or workflow task must include an expected
+duration there before `wt-work`, plus the estimate basis when known. The
+section format and field labels are defined by the wt-writing-tasks skill.
 
 Prefer several narrow slices over one broad task.
 
-### TaskDocument body placement
+### TaskDocument body authoring
 
-The agent reads task body top-down and often acts before reaching the end. Place
-**hard constraints the agent must not miss** in the top of the body, not at the
-bottom. In particular, when a slice carries any of these:
-
-- Design language or visual-grade requirements (specific fonts, banned fonts,
-  layout archetype, container/shadow rules, motion easing, allowlisted icon
-  set)
-- Security envelope (path allowlist, sandbox boundary, secret handling)
-- Cross-cutting prohibitions (e.g. "do not touch `wt ui`", "do not bump
-  `Cargo.toml` version", "do not introduce dependency X")
-- Base-branch / parent-branch restriction (especially when the agent might
-  default to a different base)
-
-place them in a dedicated top-level section that appears within the first ~30
-lines of the body — **immediately after `## 계획 (Planning)`, before `## 맥락`**
-— and reference the canonical spec/contract by path so the agent can pull
-detail without scrolling.
-
-Example body order:
-
-```text
-## 계획 (Planning)
-- ...
-
-## 필수 준수 (Hard constraints)
-- Design language: Soft Structuralism + Geist + Phosphor Light. 금지: Inter,
-  generic border. 정본: `<spec-path>/03-Architect/05-design.md` "Design language" 절.
-- Security: write 는 `<repo-root>/.wt/execution/tasks/*.toml` 만.
-- 회귀: `wt ui` 손대지 않음. `Cargo.toml` version 변경 금지.
-- Base: develop (master 아님).
-
-## 맥락
-- ...
-```
-
-Background reason: empirically
-(`<repo-root>/.wt/planning/specs/wt-studio-authoring-surface/04-Feedback/09-retrospect.md`),
-visual-grade constraints buried in the lower half of a long task body are
-silently dropped by the first agent turn even when the spec file fully states
-them. Top-of-body placement is the cheap structural fix.
+**REQUIRED SUB-SKILL:** Use wt-writing-tasks when authoring or revising any
+TaskDocument body. It owns the body structure (계획 / 필수 준수 / 맥락 / 작업),
+the hard-constraint top-of-body placement rule and its retrospect evidence,
+implementation-grade task steps with complete failing tests and implementation
+contracts, the no-placeholder rule, and the pre-handoff self-review.
 
 ### Task and PR size budget
 
@@ -499,18 +489,18 @@ only because they came from the same conversation. A stack is a dependency
 claim. When unsure, explain the dependency assumption and prefer batch or
 separate workflows over a false parent chain.
 
-### Derive workflow mode from `03-Architect/06-tasks.md`
+### Derive workflow mode from `03-Architect/07-tasks.md`
 
 When a spec exists at `<repo-root>/.wt/planning/specs/<slug>/`, derive the
-execution shape from `03-Architect/06-tasks.md`. Read the slice graph
+execution shape from `03-Architect/07-tasks.md`. Read the slice graph
 (dependencies, parallel groups, shared base, lifecycle) and consult the
 canonical mapping below to pick a workflow mode. Then record the choice and the
-reasoning in `planning/specs/<slug>/03-Architect/07-execution.md` (see Spec
+reasoning in `planning/specs/<slug>/03-Architect/08-execution.md` (see Spec
 Deliverables for authoring shape).
 
-Canonical `03-Architect/06-tasks.md` → workflow mode mapping:
+Canonical `03-Architect/07-tasks.md` → workflow mode mapping:
 
-| `03-Architect/06-tasks.md` slice graph | Workflow mode |
+| `03-Architect/07-tasks.md` slice graph | Workflow mode |
 |---|---|
 | All sequential, single agent | `single` |
 | All independent, same base | `batch` |
@@ -522,7 +512,7 @@ Then act on the chosen mode:
 
 - `single` / `batch` / `stack` — create the workflow TOML via
   `wt workflow task --mode <mode> ...` at
-  `<repo-root>/.wt/execution/workflows/<id>.toml`. Record its path in `03-Architect/07-execution.md`
+  `<repo-root>/.wt/execution/workflows/<id>.toml`. Record its path in `03-Architect/08-execution.md`
   under "Linked workflow TOML".
 - `matrix` — create the workflow TOML via
   `wt workflow task --mode matrix <task> --profiles <profile-a>,<profile-b> ...`.
@@ -570,61 +560,69 @@ phase folders inside its `.wt` personal-state buckets instead of creating
 repo-root leaf-work folders.
 
 Do not create nested leaf-work folders inside a wt spec. If a work item cannot
-fit as a single reviewable line in `03-Architect/06-tasks.md`, split it into
+fit as a single reviewable line in `03-Architect/07-tasks.md`, split it into
 several slices there. If it truly needs its own LEAF cycle, create a separate
 sibling spec folder under `planning/specs/` and reference that spec from the
 task graph. External non-text artifacts such as code, video, design, music, or
 physical outputs live outside the spec folder; record the reference and
-handoff in `03-Architect/07-execution.md` instead of storing the artifact as
+handoff in `03-Architect/08-execution.md` instead of storing the artifact as
 LEAF process material.
 
 Prepared wt work uses three canonical locations under the planning/execution
 buckets:
 
-- `planning/ideas/<slug>.{md,toml}` — kill-able exploration captured by
-  `wt-ready`. Free-form Markdown or TOML. May be deleted at any time. No
-  commitment.
-- `planning/specs/<slug>/` — committed prep artifact. Holds numbered LEAF files:
+- `planning/ideas/<slug>/` — kill-able LEAF exploration captured by `wt-ready`.
+  Holds the same numbered LEAF files as a spec, but may be deleted, rewritten,
+  split, or archived at any time. No downstream consumer may depend on it.
+- `planning/specs/<slug>/` — executable-work baseline prep artifact. Holds
+  numbered LEAF files:
   `00-status.md`, `01-Learn/01-intent.md`, `01-Learn/02-unknowns.md`,
   `01-Learn/02-references/` (always scaffolded as a holding slot),
   `02-Example/03-criteria.md`,
   `02-Example/04-wireframe.md` / `02-Example/04-wireframe/`,
-  `03-Architect/05-design.md`, `03-Architect/06-tasks.md`, lazy
-  `03-Architect/07-execution.md`, lazy `04-Feedback/08-review.md`, and lazy
-  `04-Feedback/09-retrospect.md`.
-  This is the canonical location for prep work that has been promoted past
-  exploration and for spec-backed review/retrospect records.
+  `03-Architect/05-design.md`, lazy `03-Architect/06-critic.md`,
+  `03-Architect/07-tasks.md`, lazy `03-Architect/08-execution.md`, lazy
+  `04-Feedback/09-review.md`, and lazy `04-Feedback/10-retrospect.md`.
+  This is the canonical location for work promoted past exploration into an
+  executable-work baseline and for spec-backed review/retrospect records.
 - `execution/tasks/<slug>.toml` — TaskDocument, the launch unit. Schema
   unchanged. The body may reference `planning/specs/<slug>/` files by relative
   path.
 
-The wt CLI does not parse or manage `planning/specs/` as executable state.
-`wt scaffold <slug> --spec` may seed starter files depending on the installed
-wt version; if it creates pre-9-gate files such as `03-context.md`,
-`04+05-requirements.md`, `06-wireframe.md`, `07-design.md`, or
-`08-tasks.md`, normalize them into the current layout before launch-ready
-handoff. Spec authoring stays a human/AI artifact. TaskDocument and TaskRun
-models are unchanged.
+The wt CLI does not parse or manage `planning/ideas/` or `planning/specs/` as
+executable state. `wt scaffold <slug> --idea` and `wt scaffold <slug> --spec`
+may seed starter files depending on the installed wt version; if they create
+pre-10-gate files such as `03-context.md`,
+`04+05-requirements.md`, `06-wireframe.md`, `07-design.md`, `08-tasks.md`,
+or the old 9-gate wt files `03-Architect/06-tasks.md`,
+`03-Architect/07-execution.md`, `04-Feedback/08-review.md`, and
+`04-Feedback/09-retrospect.md`, normalize them into the current layout before
+launch-ready handoff. Spec authoring stays a human/AI artifact. TaskDocument
+and TaskRun models are unchanged.
 
 ### Promotion (idea → spec)
 
-When `wt-ready` is invoked and the user commits to preparing the work, an
-existing idea file is promoted, not copied:
+When `wt-ready` is invoked and the user commits to treating the work as
+executable, an existing idea directory is promoted, not copied:
 
-- `rm <repo-root>/.wt/planning/ideas/<slug>.{md,toml}` — the visible commit gate
-  that distinguishes exploration from committed prep.
-- Create or normalize the spec files: `00-status.md`, `01-Learn/01-intent.md`,
+- Move `<repo-root>/.wt/planning/ideas/<slug>/` into
+  `<repo-root>/.wt/planning/specs/<slug>/` — the visible commit gate that
+  distinguishes exploration from executable-work baseline.
+- Preserve and update the LEAF files: `00-status.md`, `01-Learn/01-intent.md`,
   `01-Learn/02-unknowns.md`, `02-Example/03-criteria.md`,
   `02-Example/04-wireframe.md`, `03-Architect/05-design.md`, and
-  `03-Architect/06-tasks.md`.
-- If a mode decision is recorded at prep time, create `03-Architect/07-execution.md`
+  `03-Architect/07-tasks.md`.
+- Record in `01-Learn/01-intent.md` that the spec was promoted from
+  `planning/ideas/<slug>/`; if a legacy flat idea was normalized, record that
+  legacy source too.
+- If a mode decision is recorded at prep time, create `03-Architect/08-execution.md`
   by hand. Treat it as a decision and handoff artifact, not a blank prep
   skeleton.
 
-The deletion plus spec directory creation is the visible commit gate that
-distinguishes exploration from committed prep. Work that the user requests
+The directory move plus spec-location update is the visible commit gate that
+distinguishes exploration from executable-work prep. Work that the user requests
 directly, without a prior idea, may go straight into `planning/specs/<slug>/`
-without an idea file existing first.
+without an idea directory existing first.
 
 ### Authoring conventions
 
@@ -632,7 +630,7 @@ without an idea file existing first.
 
 - Preserve the user's raw wording and the coordinator's interpreted intent as
   separate text.
-- Record whether this spec was promoted from an idea path or entered prep
+- Record whether this spec was promoted from an idea directory or entered prep
   directly.
 
 `00-status.md`:
@@ -678,7 +676,7 @@ without an idea file existing first.
 - Regression-sensitive behavior is stated explicitly:
   `WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>`.
 - If inherited work still has `04+05-requirements.md` or
-  `04+05+06-requirements.md`, treat it as pre-9-gate legacy context. Move
+  `04+05+06-requirements.md`, treat it as pre-10-gate legacy context. Move
   purpose/requirements into `02-Example/03-criteria.md` and Gate 4 material into
   `02-Example/04-wireframe.md` before launch-ready handoff.
 
@@ -739,22 +737,36 @@ without an idea file existing first.
   - **Layered or cross-spec relationships** — how this design depends on or is
     depended on by sibling specs (dependency direction, layer assignment).
 
-`03-Architect/06-tasks.md`:
+`03-Architect/06-critic.md` (LAZY, only when critic triggers fire):
+
+- Record the reviewer surface: user, human reviewer, another agent, or subagent.
+- Use verdicts from `references/design-critic.md`: `APPROVE`, `ITERATE`, or
+  `REJECT`.
+- For `ITERATE` or `REJECT`, name the smallest design revision needed before
+  Gate 7 Tasks can start.
+- If critic triggers are considered but skipped, record that accepted
+  low-risk/skip rationale in `03-Architect/05-design.md` instead of creating a
+  blank critic file.
+
+`03-Architect/07-tasks.md`:
 
 - Checkbox items, sequenced as atomic units of work.
 - Mark dependencies or parallelism explicitly so downstream steps can pick the
   right execution shape.
+- Keep this file at slice-graph level: titles, dependencies, parallel groups,
+  and TaskDocument paths. Implementation-grade steps live in each TaskDocument
+  body (wt-writing-tasks); do not duplicate them here.
 
-`03-Architect/07-execution.md` (LAZY, only when launch handoff exists):
+`03-Architect/08-execution.md` (LAZY, only when launch handoff exists):
 
 - Prose record of the chosen execution shape and the reasoning derived from
-  `03-Architect/06-tasks.md`. wt CLI does not read or write this file; it is for
+  `03-Architect/07-tasks.md`. wt CLI does not read or write this file; it is for
   the human and the agent.
 - Recommended sections:
   - **선택한 모드**: one of `single` / `batch` / `stack` / `matrix` / `none`.
-  - **이유**: dependency analysis from `03-Architect/06-tasks.md` (sequential vs
+  - **이유**: dependency analysis from `03-Architect/07-tasks.md` (sequential vs
     independent, shared base, lifecycle, parallel groups).
-  - **슬라이스 → TaskDocument 매핑**: how `03-Architect/06-tasks.md` slices became
+  - **슬라이스 → TaskDocument 매핑**: how `03-Architect/07-tasks.md` slices became
     one or more TaskDocuments (or direct local edits), with paths.
   - **연결된 workflow TOML**: `<repo-root>/.wt/execution/workflows/<id>.toml` when
     applicable; `none` otherwise.
@@ -762,21 +774,21 @@ without an idea file existing first.
   - **시간 가정 / watch cadence**: expected duration, estimate basis, launch
     validation cadence, and steady watch cadence to hand to `wt-work`.
   - **리스크**: anything to watch when execution starts.
-- When mode = `none`, `03-Architect/07-execution.md` may be very brief (one
+- When mode = `none`, `03-Architect/08-execution.md` may be very brief (one
   paragraph plus the slice → TaskDocument mapping) or omitted entirely.
 - The executable workflow is still the TOML at
   `<repo-root>/.wt/execution/workflows/<id>.toml`, created via
-  `wt workflow task --mode ...`. `03-Architect/07-execution.md` is prose only
+  `wt workflow task --mode ...`. `03-Architect/08-execution.md` is prose only
   and never replaces the TOML.
 
 Spec files are not frozen at handoff. `wt-work` may update
-`03-Architect/05-design.md`, `03-Architect/06-tasks.md`,
-`03-Architect/07-execution.md`, and `04-Feedback/08-review.md` in place during
+`03-Architect/05-design.md`, `03-Architect/07-tasks.md`,
+`03-Architect/08-execution.md`, and `04-Feedback/09-review.md` in place during
 execution to reflect findings; treat the spec as a living artifact that the
 running work writes back to. The two-way sync rule applies to
-`03-Architect/07-execution.md` the same way it applies to
-`03-Architect/05-design.md` / `03-Architect/06-tasks.md`: when execution drifts
-from the chosen mode, update `03-Architect/07-execution.md` rather than silently
+`03-Architect/08-execution.md` the same way it applies to
+`03-Architect/05-design.md` / `03-Architect/07-tasks.md`: when execution drifts
+from the chosen mode, update `03-Architect/08-execution.md` rather than silently
 changing the workflow TOML.
 
 ## Grill The Spec
@@ -807,8 +819,10 @@ makes a file authoritative.
 
 `01-Learn/02-unknowns.md`:
 
-- Whether the clarity ledger names the weakest row instead of hiding vague
-  intent inside later requirements.
+- Whether the clarity ledger was used only as a lens to aim learning, instead
+  of forcing decisions that belong in Gate 3 Criteria.
+- Whether the weakest row is visible enough that vague intent is not hidden
+  inside later requirements.
 - Whether unknowns are grouped by domain, standards/conventions, external, and
   internal categories.
 - Whether each blocking unknown has a verified answer, explicit assumption,
@@ -819,6 +833,9 @@ makes a file authoritative.
 
 `02-Example/03-criteria.md`:
 
+- Whether Gate 3 scores and locks the clarity-ledger rows: intent as purpose,
+  and topology, success, constraints, and output form as requirements,
+  principles, acceptance checks, or explicit assumptions/risks.
 - Whether the purpose/success criteria explain the desired effect rather than
   only naming an artifact to produce.
 - Whether principles/constraints are specific enough to reject unsuitable
@@ -893,7 +910,17 @@ makes a file authoritative.
   wide cross-module changes as critic-pass triggers unless the user explicitly
   accepts skipping review.
 
-`03-Architect/06-tasks.md`:
+`03-Architect/06-critic.md`:
+
+- Whether the critic trigger is real enough to require a durable Gate 6 file,
+  or whether the accepted skip/low-risk rationale belongs in design.
+- Whether the verdict is one of `APPROVE`, `ITERATE`, or `REJECT`.
+- Whether required revisions are small and specific enough to route back to
+  Gate 5 Design instead of drifting into implementation planning.
+- Whether residual risks are explicit enough for Gate 7 Tasks to carry into
+  acceptance checks.
+
+`03-Architect/07-tasks.md`:
 
 - Slice granularity. Is a slice too coarse to review safely, or too fine to
   justify its own branch?
@@ -904,10 +931,10 @@ makes a file authoritative.
 - Whether each slice is independently demoable, and what the acceptance check
   actually proves.
 
-`03-Architect/07-execution.md`:
+`03-Architect/08-execution.md`:
 
 - Mode-choice rationale. Walk the canonical mapping table from **Derive
-  workflow mode from `03-Architect/06-tasks.md`** and ask which row this spec
+  workflow mode from `03-Architect/07-tasks.md`** and ask which row this spec
   sits on.
 - Alternatives considered. Could this be `batch` instead of `stack`? `matrix`
   for variant exploration? If the answer is "I didn't consider them", grill
@@ -930,7 +957,7 @@ drift is the cheapest defect to fix during grilling.
 
 End with one of these concrete outputs:
 
-- idea captured/updated at `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}`
+- idea captured/updated at `<repo-root>/.wt/planning/ideas/<slug>/`
   when the user is still exploring
 - spec deliverables prepared (or promoted from `planning/ideas/`) at
   `<repo-root>/.wt/planning/specs/<slug>/`, recording the chosen execution shape
@@ -939,12 +966,13 @@ End with one of these concrete outputs:
 - a saved workflow prepared (mode, base, order, policy)
 - a short list of unresolved HITL decisions that blocks launch
 
-Use existing repo patterns for TaskDocument bodies. Avoid stale implementation
-file paths unless they are necessary for the task.
+Author TaskDocument bodies with the wt-writing-tasks skill. Avoid stale
+implementation file paths; verify every referenced path and symbol against the
+repo before handoff.
 
 Report:
 
-- the four LEAF route questions after a current one-sentence intent is
+- the opening LEAF capability preview after a current one-sentence intent is
   available
 - current phase/gate and the first missing gate, if any
 - why the next move belongs to Learn, Example, Architect, or Feedback

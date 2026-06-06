@@ -1,10 +1,11 @@
-# Design Critic Pass
+# Gate 6 Design Critic Pass
 
 Use this reference when a Gate 5 design is high-risk, non-obvious, or likely to
-shape several downstream tasks. This is an optional review surface for
-`wt-ready`; it is not an automatic consensus loop and does not require a
-specific agent runtime. The reviewer may be the user, another human, another
-agent, or a subagent.
+shape several downstream tasks. Gate 6 is triggered by risk: create a durable
+critic artifact when the triggers fire, or record the accepted skip/low-risk
+rationale in design when they do not. It is not an automatic consensus loop and
+does not require a specific agent runtime. The reviewer may be the user,
+another human, another agent, or a subagent.
 
 ## When To Request It
 
@@ -23,7 +24,7 @@ Request or prepare a critic pass when the design involves:
 Use one verdict:
 
 - `APPROVE`: the design is actionable without guessing.
-- `ITERATE`: the design is promising but needs specific revision before Gate 6.
+- `ITERATE`: the design is promising but needs specific revision before Gate 7.
 - `REJECT`: the design is not safe or coherent enough to task.
 
 ## Review Criteria
@@ -45,7 +46,7 @@ Check:
 - Risk mitigation: security, migration, compatibility, performance, and
   operational risks have concrete mitigations or explicit accepted residual
   risk.
-- Verification path: Gate 6 can produce tasks with acceptance checks that would
+- Verification path: Gate 7 can produce tasks with acceptance checks that would
   prove the design works.
 
 ## Output Shape
@@ -65,4 +66,4 @@ Residual risks:
 
 For `ITERATE` or `REJECT`, name the smallest change that would let the design
 return to review. Do not expand into implementation planning; that belongs in
-Gate 6 after the design is settled.
+Gate 7 after the design is settled.

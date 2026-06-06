@@ -34,28 +34,35 @@ Example:     3 Criteria
        -> 4 Wireframe with mock data
 
 Architect:   5 Design
-       -> 5.5 Critic pass (optional)
-       -> 6 Task graph
-       -> 7 Execution handoff
+       -> 6 Critic pass
+       -> 7 Task graph
+       -> 8 Artifact / execution handoff
 
-Feedback:    8 Review / sync record
-       -> 9 Retrospect
+Feedback:    9 Review / sync record
+       -> 10 Retrospect
 ```
 
 `wt-ready` owns Learn, Example, and Architect until the handoff is runnable.
 Later `wt-work` and `wt-land` continue the loop by creating, checking,
-integrating, and retrospecting the result. In generic LEAF work, Gate 7 may be
-the artifact itself; in `wt-ready`, Gate 7 is deliberately narrower: it prepares
+integrating, and retrospecting the result. In generic LEAF work, Gate 8 may be
+the artifact itself; in `wt-ready`, Gate 8 is deliberately narrower: it prepares
 the runnable handoff because the implementation result is produced after
 `wt-work`.
 
-Once Gate 1 has a current one-sentence intent, show the user a compact LEAF
-route preview. Phrase each phase as a question about that intent: what the user
-must learn from facts/conventions through judgment in Learn, what cheap example
-to validate in Example, what design/tasks/handoff to architect in Architect, and
-what to review or learn in Feedback. Keep it as orientation, not a fixed plan.
+For wt LEAF prep, scaffolding is the first act: run
+`wt scaffold <slug> --idea` for exploratory work and `wt scaffold <slug> --spec`
+only after the user commits to treating the work as executable. Both locations
+create `00-status.md` and the four phase folders before any gate work. If the
+work is too small to deserve that body, do not promote it into LEAF prep.
 
-Gates 1-3 use a lightweight clarity ledger to keep preparation focused:
+Once Gate 1 has a current one-sentence intent, show the user a compact opening
+preview. Phrase each phase as the capability it builds for that intent: learned
+judgment in Learn, one cheap proven instance in Example, reusable structure and
+handoff in Architect, and review/sync lessons in Feedback. Keep it as
+orientation, not a fixed plan.
+
+Use a lightweight clarity ledger to keep preparation focused, but apply it
+differently by gate:
 
 ```text
 Intent      Is the desired effect and core noun stable?
@@ -65,11 +72,21 @@ Constraints What boundaries, non-goals, and preserved behaviors matter?
 Output form What artifact or lifecycle should this produce?
 ```
 
+Gate 1 locks the Intent row: the desired effect and core noun. Gate 2 uses the
+ledger only as a lens to aim learning: ask which domain,
+standards/conventions, external, or internal unknown would help the user judge
+the weakest row, but do not force the row closed there. Gate 3 scores and locks
+the full set: Intent becomes purpose, and topology, success, constraints, and
+output form become requirements, principles, acceptance checks, or explicit
+assumptions/risks.
+
 Ask the next question against the weakest ledger row, not against the next
-topic that happens to come to mind. If the user accepts moving forward while a
-row is still weak, record the residual risk and the cheapest follow-up that
-would reduce it. A row is stable only when the user can judge it in their own
-words; a verified fact held only by the agent is not yet a stable row.
+topic that happens to come to mind. If the user accepts moving past Gate 3
+while a row is still weak, record the residual risk and the cheapest follow-up
+that would reduce it. A row is stable only when the user can judge it in their
+own words; a verified fact held only by the agent is not yet a stable row.
+Once a row is stable, it stops appearing in questions unless later evidence
+changes it.
 
 The middle engine maps to:
 
@@ -77,19 +94,26 @@ The middle engine maps to:
 02-Example/03-criteria.md
 -> 02-Example/04-wireframe.md or 02-Example/04-wireframe/
 -> 03-Architect/05-design.md
--> 03-Architect/06-tasks.md
 ```
 
-New wt specs keep Criteria, Wireframe, and Design separate. Treat pre-9-gate
-files such as `04+05-requirements.md`, `04+05+06-requirements.md`,
-`06-wireframe.md`, `07-design.md`, and `08-tasks.md` as legacy/starter context
-and normalize them before launch-ready handoff.
+The remaining Architect gates then consume that design:
+
+```text
+03-Architect/06-critic.md? (when triggers fire)
+-> 03-Architect/07-tasks.md
+-> 03-Architect/08-execution.md?
+```
+
+New wt ideas and specs keep Criteria, Wireframe, and Design separate. Treat
+pre-10-gate files such as `04+05-requirements.md`,
+`04+05+06-requirements.md`, `06-wireframe.md`, `07-design.md`, and
+`08-tasks.md` as legacy/starter context and normalize them before launch-ready
+handoff.
 
 Operational mapping for wt:
 
 ```text
-planning/ideas/<slug>.{md,toml}
--> planning/specs/<slug>/
+planning/ideas/<slug>/
    00-status.md
    01-Learn/
      01-intent.md
@@ -100,11 +124,30 @@ planning/ideas/<slug>.{md,toml}
      04-wireframe.md or 04-wireframe/
    03-Architect/
      05-design.md
-     06-tasks.md
-     07-execution.md?
+     06-critic.md?
+     07-tasks.md
+     08-execution.md?
    04-Feedback/
-     08-review.md?
-     09-retrospect.md?
+     09-review.md?
+     10-retrospect.md?
+-- promote when the user commits to executable work -->
+planning/specs/<slug>/
+   00-status.md
+   01-Learn/
+     01-intent.md
+     02-unknowns.md
+     02-references/
+   02-Example/
+     03-criteria.md
+     04-wireframe.md or 04-wireframe/
+   03-Architect/
+     05-design.md
+     06-critic.md?
+     07-tasks.md
+     08-execution.md?
+   04-Feedback/
+     09-review.md?
+     10-retrospect.md?
 -> execution/tasks/<slug>.toml and/or execution/workflows/<id>.toml
 -> execution/task-runs/<id>.toml
 -> review, land, retrospect
@@ -114,9 +157,10 @@ planning/ideas/<slug>.{md,toml}
 
 Owner: `wt-ready`, then whichever lifecycle skill changes gate state.
 
-Artifact: `planning/specs/<slug>/00-status.md`.
+Artifact: `planning/ideas/<slug>/00-status.md` while exploratory, then
+`planning/specs/<slug>/00-status.md` after promotion.
 
-Purpose: make a durable spec resumable. It is an index, not the source of
+Purpose: make a durable idea/spec resumable. It is an index, not the source of
 truth; gate files remain authoritative.
 
 Update when:
@@ -134,9 +178,9 @@ events, not a gate state. Put blocked/deferred reasons in `Next / Waiting on`.
 
 Owner: `wt-ready`.
 
-Artifact: `planning/ideas/<slug>.{md,toml}` when the thought is exploratory;
-otherwise `planning/specs/<slug>/01-Learn/01-intent.md` or a short intent note
-in the TaskDocument body.
+Artifact: `planning/ideas/<slug>/01-Learn/01-intent.md` when the thought is
+exploratory; otherwise `planning/specs/<slug>/01-Learn/01-intent.md` or a short
+intent note in the TaskDocument body.
 
 Gate to next step:
 
@@ -167,7 +211,8 @@ Return here when:
 Owner: `wt-ready`, with later lifecycle skills returning here when a missed
 unknown appears.
 
-Artifact: idea body section, or `planning/specs/<slug>/01-Learn/02-unknowns.md`.
+Artifact: `planning/ideas/<slug>/01-Learn/02-unknowns.md`, or
+`planning/specs/<slug>/01-Learn/02-unknowns.md`.
 `01-Learn/02-references/` is always scaffolded as a holding slot (with a README
 template); put bulky source material there and summarize the useful answer back
 in `02-unknowns.md`.
@@ -218,7 +263,7 @@ Gate to next step:
 Return here when:
 
 - A new unknown surfaces mid-work and is researched on the spot. Log it under
-  `planning/specs/<slug>/04-Feedback/08-review.md` so `wt-land` can diagnose
+  `planning/specs/<slug>/04-Feedback/09-review.md` so `wt-land` can diagnose
   which category was missed next time.
 - Repeated unplanned research detours start interrupting drafting or
   implementation.
@@ -228,7 +273,8 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: idea body, then `planning/specs/<slug>/02-Example/03-criteria.md`.
+Artifact: `planning/ideas/<slug>/02-Example/03-criteria.md`, or
+`planning/specs/<slug>/02-Example/03-criteria.md`.
 
 Purpose: combine purpose and requirements because both are pre-instance
 judgment: the intended effect and the checks that make that effect observable.
@@ -265,8 +311,9 @@ Return here when:
 Owner: `wt-ready`, with `wt-work` updating it when execution findings show that
 the validated structure was wrong.
 
-Artifact: `planning/specs/<slug>/02-Example/04-wireframe.md` for one compact
-artifact, or `02-Example/04-wireframe/` for several screens/flows/examples.
+Artifact: `planning/ideas/<slug>/02-Example/04-wireframe.md` while exploratory,
+then `planning/specs/<slug>/02-Example/04-wireframe.md` after promotion. Use
+`02-Example/04-wireframe/` for several screens/flows/examples.
 
 Purpose: validate concrete structure, workflow, and visual judgment before
 design generalizes. The wireframe is not the generalized system; it is a check
@@ -320,7 +367,8 @@ Return here when:
 Owner: `wt-ready`, with `wt-work` updating it when execution findings invalidate
 assumptions.
 
-Artifact: `planning/specs/<slug>/03-Architect/05-design.md`.
+Artifact: `planning/ideas/<slug>/03-Architect/05-design.md` while exploratory,
+then `planning/specs/<slug>/03-Architect/05-design.md` after promotion.
 
 Purpose: consume the Gate 4 instance, contracts, and variation points, then
 generalize them into implementation-facing design rules: component boundaries,
@@ -357,25 +405,43 @@ Return here when:
 - The design cannot generalize without inventing missing cases; return to Gate
   4 and add another concrete case.
 
-## 5.5 Design Critic Pass (optional)
+## 6. Design Critic Pass (Architect)
 
-Owner: `wt-ready`, only when risk triggers fire.
+Owner: `wt-ready`, when risk triggers fire.
 
-Artifact: review note in the conversation, in `03-Architect/05-design.md`, or in
-a short adjacent note if a durable record is needed.
+Artifact: `planning/ideas/<slug>/03-Architect/06-critic.md` while exploratory,
+then `planning/specs/<slug>/03-Architect/06-critic.md` after promotion, when a
+durable critic pass is required. Otherwise record an accepted skip/low-risk
+rationale in `03-Architect/05-design.md`.
 
 Use `references/design-critic.md` when the design involves security, migration,
 public CLI/config/state shape, cross-module coupling, new user-facing terms,
 large UI/workflow behavior shifts, or one asserted option with weak
 alternatives. Verdicts are `APPROVE`, `ITERATE`, or `REJECT`.
 
-## 6. Task graph (Architect)
+Gate to next step:
+
+- A triggered critic pass has an `APPROVE` verdict, or the user accepted the
+  explicit skip/low-risk rationale.
+- `ITERATE` and `REJECT` verdicts name the smallest design revision before
+  tasking can start.
+- Residual risks are concrete enough for Gate 7 Tasks to carry into acceptance
+  checks.
+
+Return here when:
+
+- A high-risk design proceeds to tasking without critic approval or accepted
+  skip rationale.
+- The critic expands into implementation planning instead of reviewing design.
+
+## 7. Task graph (Architect)
 
 Owner: `wt-ready`.
 
-Artifact: `planning/specs/<slug>/03-Architect/06-tasks.md`, optional
-`03-Architect/07-execution.md`, TaskDocuments, and saved Workflow TOML when
-needed.
+Artifact: `planning/ideas/<slug>/03-Architect/07-tasks.md` while exploratory,
+then `planning/specs/<slug>/03-Architect/07-tasks.md` after promotion. Use
+optional `03-Architect/08-execution.md`, TaskDocuments, and saved Workflow TOML
+when needed.
 
 Gate to next step:
 
@@ -396,11 +462,11 @@ Return here when:
 - A slice is too large to review or too small to justify its own branch.
 - The proposed stack is only a packaging choice, not a dependency claim.
 
-## 7. Execution handoff (Architect)
+## 8. Artifact / execution handoff (Architect)
 
 Owner: `wt-ready` prepares; `wt-work` launches.
 
-Artifact: `03-Architect/07-execution.md`, TaskDocument body `계획 (Planning)`
+Artifact: `03-Architect/08-execution.md`, TaskDocument body `계획 (Planning)`
 section, optional Workflow policy snapshot, and exact `wt-work` target.
 
 Gate to next step:
@@ -421,14 +487,14 @@ Return here when:
 - The handoff asks an agent to "improve", "build", "fix this", or otherwise
   execute without a concrete signal or explicit accepted risk.
 
-## 8. Review / sync record (Feedback material)
+## 9. Review / sync record (Feedback material)
 
 Owner: `wt-work` records the evidence while doing Architect execution;
 `wt-land` consumes it as Feedback material.
 
 Artifact: reviewed diff/check evidence, updated `03-Architect/05-design.md`,
-`03-Architect/06-tasks.md`, `03-Architect/07-execution.md`, and
-`04-Feedback/08-review.md` when execution reality changes the plan.
+`03-Architect/07-tasks.md`, `03-Architect/08-execution.md`, and
+`04-Feedback/09-review.md` when execution reality changes the plan.
 
 Gate to next step:
 
@@ -436,7 +502,7 @@ Gate to next step:
   report.
 - Checks are scaled to risk and recorded.
 - Spec drift is fixed in the spec instead of being left as a stale artifact.
-- Unplanned research is logged to `04-Feedback/08-review.md` so the
+- Unplanned research is logged to `04-Feedback/09-review.md` so the
   retrospective can diagnose which Unknowns & Context category was missed.
 - Workflow-linked runs are completed only after review passes.
 
@@ -445,11 +511,11 @@ Return here when:
 - Implementation reveals a criterion or design assumption was wrong.
 - The diff is too broad for the prepared task and needs re-slicing.
 
-## 9. Retrospect (Feedback)
+## 10. Retrospect (Feedback)
 
 Owner: `wt-land` after landing or explicit discard.
 
-Artifact: `planning/specs/<slug>/04-Feedback/09-retrospect.md` for spec-backed
+Artifact: `planning/specs/<slug>/04-Feedback/10-retrospect.md` for spec-backed
 work, or `<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` for
 cross-work or spec-less retrospectives.
 
@@ -460,7 +526,7 @@ Gate to future work:
   skill/docs changes.
 - Harness tuning names the exact file and section to update when the lesson
   should permanently change agent behavior.
-- When `04-Feedback/08-review.md` records mid-process discoveries for this run,
+- When `04-Feedback/09-review.md` records mid-process discoveries for this run,
   each discovery is classified against the Unknowns & Context categories
   (domain / standards / external / internal). The missed category becomes a
   `try` item or a `harness_tuning` entry for the next run's surfacing pass.
@@ -488,7 +554,7 @@ the work is ready for the next one. Examples:
   `02-Example/04-wireframe.md` before design; add an artifact-specific
   wireframe only when needed.
 - Missing ownership/boundary decision: write or grill `03-Architect/05-design.md`.
-- Missing dependency graph: write or grill `03-Architect/06-tasks.md` /
-  `03-Architect/07-execution.md`.
+- Missing dependency graph: write or grill `03-Architect/07-tasks.md` /
+  `03-Architect/08-execution.md`.
 - Missing reviewable size: split the task graph.
 - Missing execution target: stop with unresolved `wt-work` handoff.
