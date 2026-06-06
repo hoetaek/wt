@@ -1,6 +1,7 @@
 use crate::context::CommandRunner;
 use crate::services::issues::{
-    CreateIssueRequest, EnsuredBranch, IssueInfo, IssueListItem, IssueProvider,
+    CreateIssueRequest, EnsuredBranch, IssueDetail, IssueInfo, IssueListItem, IssueProvider,
+    IssueReader,
 };
 use crate::services::linear::LinearService;
 use anyhow::Result;
@@ -98,6 +99,12 @@ impl IssueProvider for LinearIssueProvider<'_> {
 
     fn on_clean(&self, _id: &str, _branch: &str) -> Result<()> {
         Ok(())
+    }
+}
+
+impl IssueReader for LinearIssueProvider<'_> {
+    fn get_issue_detail(&self, id: &str) -> Result<IssueDetail> {
+        Ok(self.get_issue(id)?.into())
     }
 }
 

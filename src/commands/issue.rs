@@ -13,7 +13,7 @@ use crate::parallel::{self, ParallelControl};
 use crate::services::git::{CreateType, GitService};
 use crate::services::issues::github::GithubIssueProvider;
 use crate::services::issues::linear::LinearIssueProvider;
-use crate::services::issues::{IssueInfo, IssueProvider};
+use crate::services::issues::{IssueCapabilities, IssueInfo, IssueProvider, IssueProviderFacade};
 use crate::setup;
 use crate::worktree_naming::{self, WorktreeNamingResult};
 use anyhow::{Context, Result, bail};
@@ -1213,6 +1213,13 @@ pub fn build_provider<'a>(ctx: &'a Ctx) -> Result<Box<dyn IssueProvider + 'a>> {
             issues_config.gh_user.clone(),
         ))),
     }
+}
+
+pub fn build_provider_facade<'a>(ctx: &'a Ctx) -> Result<IssueProviderFacade<'a>> {
+    Ok(IssueProviderFacade::new(
+        build_provider(ctx)?,
+        IssueCapabilities::provider_default(),
+    ))
 }
 
 fn create_worktree(

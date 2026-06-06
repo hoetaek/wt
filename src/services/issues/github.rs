@@ -1,7 +1,8 @@
 use crate::context::CmdOutput;
 use crate::context::CommandRunner;
 use crate::services::issues::{
-    CreateIssueRequest, EnsuredBranch, IssueInfo, IssueListItem, IssueProvider,
+    CreateIssueRequest, EnsuredBranch, IssueDetail, IssueInfo, IssueListItem, IssueProvider,
+    IssueReader,
 };
 use anyhow::{Result, bail};
 use serde::Deserialize;
@@ -182,6 +183,12 @@ impl IssueProvider for GithubIssueProvider<'_> {
 
     fn on_clean(&self, _id: &str, _branch: &str) -> Result<()> {
         Ok(())
+    }
+}
+
+impl IssueReader for GithubIssueProvider<'_> {
+    fn get_issue_detail(&self, id: &str) -> Result<IssueDetail> {
+        Ok(self.get_issue(id)?.into())
     }
 }
 
