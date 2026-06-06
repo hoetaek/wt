@@ -8,6 +8,25 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.45.0 - 2026-06-06
+
+- Changed spec and idea scaffolding to share the ten-gate LEAF layout, adding
+  `01-Learn/01-intent.md` as the shared opening gate and aligning `wt scaffold`,
+  `wt ui` snapshots, `docs/consistency.md`, and the wt skill pack around the
+  same structure.
+
+- Added the `wt-writing-tasks` skill for implementation-grade TaskDocument body
+  authoring, with the matching OpenAI agent profile.
+
+- Changed `wt-ready` to delegate detailed TaskDocument body writing to
+  `wt-writing-tasks`, leaving `wt-ready` focused on evidence gathering, slicing,
+  and launch readiness.
+
+- Updated dependency and CI maintenance: `signal-hook` 0.4.4,
+  `toml_edit` 0.25.12, and `taiki-e/install-action` 2.81.3.
+
+## 0.44.0 - 2026-06-04
+
 - Added automatic chrome-devtools MCP wiring for Claude and Codex agents when
   workspace browser mode is `chrome_devtools`, using worktree-local launch-time
   config without changing tracked or global agent settings.
