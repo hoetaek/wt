@@ -188,7 +188,26 @@ impl IssueProvider for GithubIssueProvider<'_> {
 
 impl IssueReader for GithubIssueProvider<'_> {
     fn get_issue_detail(&self, id: &str) -> Result<IssueDetail> {
-        Ok(self.get_issue(id)?.into())
+        let out = self.runner.run(
+            "gh",
+            &["issue", "view", id, "--json", "number,title,body,url"],
+            self.cwd,
+        )?;
+        if !out.success {
+            bail!("Failed to fetch issue #{id}");
+        }
+        let gh_issue: GhIssue = serde_json::from_str(&out.stdout)?;
+
+        Ok(IssueDetail {
+            identifier: format!("#{}", gh_issue.number),
+            title: gh_issue.title,
+            body: gh_issue.body.filter(|body| !body.trim().is_empty()),
+            url: gh_issue.url,
+            status: None,
+            labels: Vec::new(),
+            comments_count: None,
+            updated_at: None,
+        })
     }
 }
 
@@ -324,6 +343,26 @@ mod tests {
         let issue = provider.get_issue("42").unwrap();
         assert_eq!(issue.identifier, "#42");
         assert!(issue.branch_name.is_none());
+    }
+
+    #[test]
+    fn get_issue_detail_preserves_url() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"number":52,"title":"Fix editor","body":"Long issue body","url":"https://github.com/acme/repo/issues/52"}"#,
+            true,
+        );
+
+        let provider = GithubIssueProvider::new(&runner, None, None);
+        let detail = provider.get_issue_detail("52").unwrap();
+
+        assert_eq!(detail.identifier, "#52");
+        assert_eq!(detail.title, "Fix editor");
+        assert_eq!(
+            detail.url.as_deref(),
+            Some("https://github.com/acme/repo/issues/52")
+        );
+        assert_eq!(detail.body.as_deref(), Some("Long issue body"));
     }
 
     #[test]
