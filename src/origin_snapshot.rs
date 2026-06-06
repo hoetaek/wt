@@ -107,6 +107,15 @@ pub struct OriginSnapshot {
     pub provider_context: ProviderContext,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OriginHealthSummary {
+    pub status: String,
+    pub origin_label: String,
+    pub last_fetched: Option<String>,
+    pub divergence: Option<String>,
+    pub next_action: String,
+}
+
 impl OriginSnapshot {
     pub fn task(
         owner: impl Into<String>,
@@ -171,6 +180,182 @@ impl OriginSnapshot {
             },
             provider_context: ProviderContext::default(),
         }
+    }
+}
+
+impl OriginHealthSummary {
+    pub fn task_without_origin() -> Self {
+        Self {
+            status: "local".into(),
+            origin_label: "not published".into(),
+            last_fetched: None,
+            divergence: None,
+            next_action: "pub".into(),
+        }
+    }
+
+    pub fn workflow_without_origin() -> Self {
+        Self {
+            status: "local".into(),
+            origin_label: "none".into(),
+            last_fetched: None,
+            divergence: None,
+            next_action: "attach".into(),
+        }
+    }
+
+    pub fn from_snapshot(
+        provider: &str,
+        id: &str,
+        local_fields: &FieldSnapshot,
+        snapshot: Option<&OriginSnapshot>,
+        fresh_next_action: &str,
+    ) -> Self {
+        let origin_label = origin_label(provider, id);
+        let Some(snapshot) = snapshot else {
+            return Self {
+                status: "stale".into(),
+                origin_label,
+                last_fetched: None,
+                divergence: None,
+                next_action: "fetch".into(),
+            };
+        };
+
+        if !snapshot.matches_origin(provider, id) {
+            return Self {
+                status: "stale".into(),
+                origin_label,
+                last_fetched: None,
+                divergence: Some("snapshot origin changed".into()),
+                next_action: "fetch".into(),
+            };
+        }
+
+        let title = field_divergence(
+            &snapshot.baseline.fields.title,
+            &snapshot.baseline.local_hashes.title,
+            &local_fields.title,
+            &snapshot.remote.fields.title,
+        );
+        let body = field_divergence(
+            &snapshot.baseline.fields.body,
+            &snapshot.baseline.local_hashes.body,
+            &local_fields.body,
+            &snapshot.remote.fields.body,
+        );
+        let status = if [title.status, body.status]
+            .iter()
+            .any(|status| *status == FieldDivergenceStatus::Conflict)
+        {
+            "conflict"
+        } else if [title.status, body.status]
+            .iter()
+            .any(|status| *status != FieldDivergenceStatus::Unchanged)
+        {
+            "stale"
+        } else {
+            "fresh"
+        };
+        let next_action = match status {
+            "fresh" => fresh_next_action,
+            _ => "diff",
+        };
+
+        Self {
+            status: status.into(),
+            origin_label,
+            last_fetched: Some(snapshot.remote.fetched_at.clone()),
+            divergence: divergence_summary([("title", title), ("body", body)]),
+            next_action: next_action.into(),
+        }
+    }
+
+    pub fn from_snapshot_error(provider: &str, id: &str, error: &anyhow::Error) -> Self {
+        Self {
+            status: "error".into(),
+            origin_label: origin_label(provider, id),
+            last_fetched: None,
+            divergence: Some(one_line(&format!("{error:#}"))),
+            next_action: "fetch".into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FieldDivergenceStatus {
+    Unchanged,
+    LocalChanged,
+    RemoteChanged,
+    Conflict,
+    NoBaseline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FieldDivergence {
+    status: FieldDivergenceStatus,
+}
+
+fn field_divergence(
+    baseline: &str,
+    baseline_local_hash: &str,
+    local: &str,
+    remote: &str,
+) -> FieldDivergence {
+    let has_baseline = !baseline_local_hash.trim().is_empty();
+    let local_hash = field_hash(local);
+    let local_changed = has_baseline && local_hash != baseline_local_hash;
+    let remote_changed = has_baseline && remote != baseline;
+    let status = if !has_baseline {
+        FieldDivergenceStatus::NoBaseline
+    } else if local_changed && remote_changed {
+        FieldDivergenceStatus::Conflict
+    } else if local_changed {
+        FieldDivergenceStatus::LocalChanged
+    } else if remote_changed {
+        FieldDivergenceStatus::RemoteChanged
+    } else {
+        FieldDivergenceStatus::Unchanged
+    };
+
+    FieldDivergence { status }
+}
+
+fn divergence_summary<const N: usize>(fields: [(&str, FieldDivergence); N]) -> Option<String> {
+    let parts = fields
+        .into_iter()
+        .filter_map(|(field, divergence)| match divergence.status {
+            FieldDivergenceStatus::Unchanged => None,
+            FieldDivergenceStatus::LocalChanged => Some(format!("{field} local")),
+            FieldDivergenceStatus::RemoteChanged => Some(format!("{field} remote")),
+            FieldDivergenceStatus::Conflict => Some(format!("{field} conflict")),
+            FieldDivergenceStatus::NoBaseline => Some(format!("{field} no baseline")),
+        })
+        .collect::<Vec<_>>();
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("; "))
+    }
+}
+
+pub fn origin_label(provider: &str, id: &str) -> String {
+    let provider = provider_display_label(provider);
+    let id = id.trim();
+    if id.is_empty() {
+        provider
+    } else {
+        format!("{provider} {id}")
+    }
+}
+
+pub fn provider_display_label(provider: &str) -> String {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "github" => "GitHub".into(),
+        "linear" => "Linear".into(),
+        "" => "external".into(),
+        other => other.to_string(),
     }
 }
 
@@ -241,6 +426,10 @@ fn read_snapshot_path(path: &std::path::Path) -> Result<Option<OriginSnapshot>> 
     let snapshot = toml::from_str(&content)
         .with_context(|| format!("Failed to parse origin snapshot: {}", path.display()))?;
     Ok(Some(snapshot))
+}
+
+fn one_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn field_hash(content: &str) -> String {

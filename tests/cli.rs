@@ -1405,6 +1405,9 @@ id = "PROJ-123"
     assert_eq!(no_run["publish_state"], "local");
     assert_eq!(no_run["source"], "local");
     assert!(no_run["origin"].is_null());
+    assert_eq!(no_run["origin_health"]["status"], "local");
+    assert_eq!(no_run["origin_health"]["origin_label"], "not published");
+    assert_eq!(no_run["origin_health"]["next_action"], "pub");
 
     let provider = tasks
         .iter()
@@ -1416,6 +1419,9 @@ id = "PROJ-123"
     assert_eq!(provider["source"], "provider-origin");
     assert_eq!(provider["origin"]["provider"], "linear");
     assert_eq!(provider["origin"]["id"], "PROJ-123");
+    assert_eq!(provider["origin_health"]["status"], "stale");
+    assert_eq!(provider["origin_health"]["origin_label"], "Linear PROJ-123");
+    assert_eq!(provider["origin_health"]["next_action"], "fetch");
     assert_eq!(provider["body_summary"], "Imported provider task body");
 
     assert_eq!(invalid[0]["key"], "bad");
@@ -1504,10 +1510,10 @@ id = "PROJ-123"
         .stdout(predicate::str::contains("│ provider-origin"))
         .stdout(predicate::str::contains("│ local"))
         .stdout(predicate::str::contains(
-            "•  local  not published  task local  branch feature/local",
+            "•  local  not published  local  task local  pub  branch feature/local",
         ))
         .stdout(predicate::str::contains(
-            "•  Provider task  Linear PROJ-123  task provider  branch alice/provider-task",
+            "•  stale  Linear PROJ-123  Provider task  task provider  fetch  branch alice/provider-task",
         ))
         .stdout(predicate::str::contains(
             "2 tasks hidden; use wt task list --all to show the full inventory",
@@ -1601,7 +1607,7 @@ id = "PROJ-123"
         .stdout(predicate::str::contains("task running"))
         .stdout(predicate::str::contains("branch feature/running"))
         .stdout(predicate::str::contains(
-            "•  Provider task  Linear PROJ-123  task provider  branch alice/provider-task",
+            "•  stale  Linear PROJ-123  Provider task  task provider  fetch  branch alice/provider-task",
         ))
         .stdout(predicate::str::contains("tasks hidden").not())
         .stderr(predicate::str::contains(

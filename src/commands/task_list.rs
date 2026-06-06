@@ -1,4 +1,5 @@
 use crate::context::Ctx;
+use crate::origin_snapshot::{FieldSnapshot, OriginHealthSummary, read_task_snapshot};
 use crate::task::{self, TaskDocument};
 use crate::task_run;
 use anyhow::{Context, Result};
@@ -12,9 +13,11 @@ const LIST_START: &str = "◆";
 const BAR: &str = "│";
 const FOOTER: &str = "└";
 const BULLET: &str = "•";
+const STATUS_COLUMN_MAX: usize = 10;
 const TITLE_COLUMN_MAX: usize = 56;
 const SOURCE_COLUMN_MAX: usize = 18;
 const TASK_COLUMN_MAX: usize = 34;
+const NEXT_COLUMN_MAX: usize = 8;
 const BRANCH_COLUMN_MAX: usize = 48;
 
 pub(crate) fn run(ctx: &Ctx, all: bool) -> Result<()> {
@@ -44,6 +47,7 @@ struct TaskListRow {
     title: String,
     branch: Option<String>,
     origin: Option<TaskOriginSummary>,
+    origin_health: OriginHealthSummary,
     publish_state: String,
     source: String,
     body_summary: Option<String>,
@@ -103,15 +107,16 @@ fn read_task_row(ctx: &Ctx, path: &Path) -> Result<TaskListRow> {
         .with_context(|| format!("Failed to read task: {relative_path}"))?;
     let document: TaskDocument = toml::from_str(&content)
         .with_context(|| format!("Failed to parse task: {relative_path}"))?;
-    Ok(task_row(key, relative_path, document))
+    Ok(task_row(ctx, key, relative_path, document))
 }
 
-fn task_row(key: String, path: String, document: TaskDocument) -> TaskListRow {
+fn task_row(ctx: &Ctx, key: String, path: String, document: TaskDocument) -> TaskListRow {
     let display = task::TaskDocumentDisplay::for_document(&key, &document);
     let origin = document.origin.as_ref().map(|origin| TaskOriginSummary {
         provider: origin.provider.clone(),
         id: origin.id.clone(),
     });
+    let origin_health = task_origin_health(ctx, &key, &document);
     let publish_state = if origin.is_some() {
         "published"
     } else {
@@ -129,10 +134,28 @@ fn task_row(key: String, path: String, document: TaskDocument) -> TaskListRow {
         title: document.title,
         branch: task::prepared_branch_name(&document.branch).map(str::to_string),
         origin,
+        origin_health,
         publish_state: publish_state.into(),
         source: source.into(),
         body_summary: body_summary(&document.body),
         display,
+    }
+}
+
+fn task_origin_health(ctx: &Ctx, key: &str, document: &TaskDocument) -> OriginHealthSummary {
+    let Some(origin) = document.origin.as_ref() else {
+        return OriginHealthSummary::task_without_origin();
+    };
+    let local_fields = FieldSnapshot::new(document.title.clone(), document.body.clone());
+    match read_task_snapshot(&ctx.storage_root, key) {
+        Ok(snapshot) => OriginHealthSummary::from_snapshot(
+            &origin.provider,
+            &origin.id,
+            &local_fields,
+            snapshot.as_ref(),
+            "run",
+        ),
+        Err(err) => OriginHealthSummary::from_snapshot_error(&origin.provider, &origin.id, &err),
     }
 }
 
@@ -243,26 +266,32 @@ fn hidden_task_count_hint(count: usize) -> String {
 
 #[derive(Debug, Clone, Copy)]
 struct TaskListColumnWidths {
+    status: usize,
     title: usize,
     source: usize,
     task: usize,
+    next: usize,
     branch: usize,
 }
 
 fn task_list_column_widths(rows: &[&TaskListRow]) -> TaskListColumnWidths {
     rows.iter().fold(
         TaskListColumnWidths {
+            status: 0,
             title: 0,
             source: 0,
             task: 0,
+            next: 0,
             branch: 0,
         },
         |widths, row| {
             let columns = task_inventory_columns(row);
             TaskListColumnWidths {
+                status: capped_width(widths.status, &columns.status, STATUS_COLUMN_MAX),
                 title: capped_width(widths.title, &columns.title, TITLE_COLUMN_MAX),
                 source: capped_width(widths.source, &columns.source, SOURCE_COLUMN_MAX),
                 task: capped_width(widths.task, &columns.task, TASK_COLUMN_MAX),
+                next: capped_width(widths.next, &columns.next, NEXT_COLUMN_MAX),
                 branch: columns.branch.as_deref().map_or(widths.branch, |branch| {
                     capped_width(widths.branch, branch, BRANCH_COLUMN_MAX)
                 }),
@@ -273,49 +302,33 @@ fn task_list_column_widths(rows: &[&TaskListRow]) -> TaskListColumnWidths {
 
 #[derive(Debug, Clone)]
 struct TaskInventoryColumns {
+    status: String,
     title: String,
     source: String,
     task: String,
+    next: String,
     branch: Option<String>,
 }
 
 fn task_inventory_columns(row: &TaskListRow) -> TaskInventoryColumns {
     TaskInventoryColumns {
+        status: row.origin_health.status.clone(),
         title: row.display.label().to_string(),
-        source: task_inventory_source(row),
+        source: row.origin_health.origin_label.clone(),
         task: format!("task {}", row.key),
+        next: row.origin_health.next_action.clone(),
         branch: row.branch.as_ref().map(|branch| format!("branch {branch}")),
-    }
-}
-
-fn task_inventory_source(row: &TaskListRow) -> String {
-    row.origin
-        .as_ref()
-        .map(|origin| {
-            format!(
-                "{} {}",
-                provider_display_label(&origin.provider),
-                origin.id.trim()
-            )
-        })
-        .unwrap_or_else(|| "not published".into())
-}
-
-fn provider_display_label(provider: &str) -> String {
-    match provider.trim().to_ascii_lowercase().as_str() {
-        "github" => "GitHub".into(),
-        "linear" => "Linear".into(),
-        "" => "external".into(),
-        other => other.to_string(),
     }
 }
 
 fn task_inventory_label(row: &TaskListRow, widths: &TaskListColumnWidths) -> String {
     let columns = task_inventory_columns(row);
     let mut parts = vec![
-        pad_column(&columns.title, widths.title),
+        pad_column(&columns.status, widths.status),
         pad_column(&columns.source, widths.source),
+        pad_column(&columns.title, widths.title),
         pad_column(&columns.task, widths.task),
+        pad_column(&columns.next, widths.next),
     ];
     if let Some(branch) = columns.branch {
         parts.push(truncate_display_width(&branch, widths.branch));
@@ -428,10 +441,52 @@ id = "PROJ-123"
         assert_eq!(report.tasks[0].publish_state, "published");
         assert_eq!(report.tasks[0].source, "provider-origin");
         assert_eq!(report.tasks[0].origin.as_ref().unwrap().provider, "linear");
+        assert_eq!(report.tasks[0].origin_health.status, "stale");
+        assert_eq!(report.tasks[0].origin_health.next_action, "fetch");
+        assert_eq!(
+            report.tasks[0].origin_health.origin_label,
+            "Linear PROJ-123"
+        );
         assert_eq!(report.tasks[1].key, "local");
         assert_eq!(report.tasks[1].publish_state, "local");
         assert_eq!(report.tasks[1].source, "local");
+        assert_eq!(report.tasks[1].origin_health.status, "local");
+        assert_eq!(report.tasks[1].origin_health.next_action, "pub");
+        assert_eq!(report.tasks[1].origin_health.origin_label, "not published");
         assert_eq!(report.invalid_tasks[0].key, "bad");
+    }
+
+    #[test]
+    fn origin_health_uses_snapshot_without_provider_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Local title"
+branch = "origin-sync-tui"
+body = "local body"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+        let snapshot = crate::origin_snapshot::OriginSnapshot::task(
+            "origin-sync-tui",
+            crate::origin_snapshot::OriginRef::new("linear", "WT-142"),
+            crate::origin_snapshot::FieldSnapshot::new("Original title", "local body"),
+            crate::origin_snapshot::FieldSnapshot::new("Remote title", "local body"),
+        );
+        crate::origin_snapshot::write_snapshot(&ctx.storage_root, &snapshot).unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+
+        assert_eq!(report.tasks[0].origin_health.status, "conflict");
+        assert_eq!(report.tasks[0].origin_health.next_action, "diff");
+        assert_eq!(report.tasks[0].origin_health.origin_label, "Linear WT-142");
     }
 
     #[test]
