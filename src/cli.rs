@@ -820,9 +820,18 @@ pub enum TaskCommand {
         #[arg(long)]
         all: bool,
     },
-    /// Import provider issues as local TaskDocuments
+    /// Manage provider issue origin links for local TaskDocuments
     #[command(
-        long_about = "Import existing provider issues into <repo-root>/.wt/execution/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
+        long_about = "Manage provider issue origin links for local <repo-root>/.wt/execution/tasks/<task>.toml TaskDocuments.\n\nImport creates local TaskDocuments from provider issues, publish creates provider issues from local TaskDocuments, and attach/fetch/diff/pull/push are reserved provider issue origin actions for existing TaskDocuments."
+    )]
+    Origin {
+        #[command(subcommand)]
+        command: TaskOriginCommand,
+    },
+    /// Legacy migration alias for wt task origin import
+    #[command(
+        hide = true,
+        long_about = "Legacy migration alias for `wt task origin import`.\n\nImport existing provider issues into <repo-root>/.wt/execution/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
     )]
     Import {
         /// Provider issue ids to import
@@ -839,9 +848,10 @@ pub enum TaskCommand {
         )]
         args: Vec<String>,
     },
-    /// Publish local TaskDocuments as provider issues
+    /// Legacy migration alias for wt task origin publish
     #[command(
-        long_about = "Create provider issues from selected <repo-root>/.wt/execution/tasks/<task>.toml files, then rewrite branch to a provider-keyed branch and write [origin] with the configured provider and created issue id. This command does not start workspaces, create local branches, create TaskRuns, or run workflow work.\n\nAfter branch and [origin] are written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, the task has an empty title, or rewriting the old branch would be unsafe because it already has a TaskRun, checked-out worktree, local branch, or remote branch."
+        hide = true,
+        long_about = "Legacy migration alias for `wt task origin publish`.\n\nCreate provider issues from selected <repo-root>/.wt/execution/tasks/<task>.toml files, then rewrite branch to a provider-keyed branch and write [origin] with the configured provider and created issue id. This command does not start workspaces, create local branches, create TaskRuns, or run workflow work.\n\nAfter branch and [origin] are written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, the task has an empty title, or rewriting the old branch would be unsafe because it already has a TaskRun, checked-out worktree, local branch, or remote branch."
     )]
     Publish {
         /// Local task keys from <repo-root>/.wt/execution/tasks/<task>.toml
@@ -881,6 +891,59 @@ pub enum TaskCommand {
         /// Review feedback message to send
         #[arg(value_name = "MESSAGE", num_args = 1..)]
         message: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum TaskOriginCommand {
+    /// Import provider issues as local TaskDocuments
+    #[command(
+        long_about = "Import existing provider issues into <repo-root>/.wt/execution/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
+    )]
+    Import {
+        /// Provider issue ids to import
+        #[arg(value_name = "ISSUE")]
+        issues: Vec<String>,
+    },
+    /// Publish local TaskDocuments as provider issues
+    #[command(
+        long_about = "Create provider issues from selected <repo-root>/.wt/execution/tasks/<task>.toml files, then rewrite branch to a provider-keyed branch and write [origin] with the configured provider and created issue id. This command does not start workspaces, create local branches, create TaskRuns, or run workflow work.\n\nAfter branch and [origin] are written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, the task has an empty title, or rewriting the old branch would be unsafe because it already has a TaskRun, checked-out worktree, local branch, or remote branch."
+    )]
+    Publish {
+        /// Local task keys from <repo-root>/.wt/execution/tasks/<task>.toml
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+    },
+    /// Attach a local TaskDocument to an existing provider issue origin
+    Attach {
+        /// Local task key from <repo-root>/.wt/execution/tasks/<task>.toml
+        task: String,
+        /// Provider issue id to record as the TaskDocument origin
+        issue: String,
+    },
+    /// Fetch provider issue evidence for TaskDocument origin comparison
+    Fetch {
+        /// Local task keys with provider issue origins
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+    },
+    /// Compare local TaskDocuments with provider issue origin evidence
+    Diff {
+        /// Local task keys with provider issue origins
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+    },
+    /// Pull provider issue fields into local TaskDocuments after preview
+    Pull {
+        /// Local task keys with provider issue origins
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+    },
+    /// Push local TaskDocument fields or status notes to provider issues
+    Push {
+        /// Local task keys with provider issue origins
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
     },
 }
 
@@ -975,6 +1038,14 @@ pub enum WorkflowCommand {
         #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
         pr: Option<WorkflowPrModeArg>,
     },
+    /// Manage provider issue origin links for saved Workflows
+    #[command(
+        long_about = "Manage provider issue origin links for saved <repo-root>/.wt/execution/workflows/<id>.toml Workflow files.\n\nWorkflow origin actions affect the Workflow title, body, and [origin] only. They do not update child TaskDocuments, TaskRun status, or pull request closing references."
+    )]
+    Origin {
+        #[command(subcommand)]
+        command: WorkflowOriginCommand,
+    },
     #[command(name = "run", hide = true, disable_help_flag = true)]
     DeprecatedRun {
         #[arg(
@@ -1051,6 +1122,41 @@ pub enum WorkflowCommand {
         /// Start the next stack-mode workflow task after marking this one passed
         #[arg(long)]
         run_next: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum WorkflowOriginCommand {
+    /// Attach a saved Workflow to an existing provider issue origin
+    Attach {
+        /// Workflow TOML path or shorthand id
+        workflow: String,
+        /// Provider issue id to record as the Workflow origin
+        issue: String,
+    },
+    /// Fetch provider issue evidence for Workflow origin comparison
+    Fetch {
+        /// Workflow TOML paths or shorthand ids with provider issue origins
+        #[arg(value_name = "WORKFLOW")]
+        workflows: Vec<String>,
+    },
+    /// Compare saved Workflows with provider issue origin evidence
+    Diff {
+        /// Workflow TOML paths or shorthand ids with provider issue origins
+        #[arg(value_name = "WORKFLOW")]
+        workflows: Vec<String>,
+    },
+    /// Pull provider issue fields into saved Workflows after preview
+    Pull {
+        /// Workflow TOML paths or shorthand ids with provider issue origins
+        #[arg(value_name = "WORKFLOW")]
+        workflows: Vec<String>,
+    },
+    /// Push local Workflow fields or status notes to provider issues
+    Push {
+        /// Workflow TOML paths or shorthand ids with provider issue origins
+        #[arg(value_name = "WORKFLOW")]
+        workflows: Vec<String>,
     },
 }
 
@@ -1744,6 +1850,46 @@ mod tests {
     }
 
     #[test]
+    fn task_origin_import_accepts_issue_id() {
+        let cli = parse(&["wt", "task", "origin", "import", "PROJ-123"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Origin {
+                    command: TaskOriginCommand::Import { ref issues }
+                }
+            }) if issues == &vec!["PROJ-123".to_string()]
+        ));
+    }
+
+    #[test]
+    fn task_origin_publish_accepts_task_key() {
+        let cli = parse(&["wt", "task", "origin", "publish", "origin-docs"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Origin {
+                    command: TaskOriginCommand::Publish { ref tasks }
+                }
+            }) if tasks == &vec!["origin-docs".to_string()]
+        ));
+    }
+
+    #[test]
+    fn task_help_shows_origin_not_legacy_import_publish() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("origin"));
+        assert!(!help.contains("Import provider issues as local TaskDocuments"));
+        assert!(!help.contains("Publish local TaskDocuments as provider issues"));
+    }
+
+    #[test]
     fn task_import_accepts_multiple_issue_ids() {
         let cli = parse(&["wt", "task", "import", "PROJ-123", "#42"]);
         assert!(matches!(
@@ -1864,6 +2010,19 @@ mod tests {
         assert!(help.contains("no issue provider"));
         assert!(help.contains("already has origin"));
         assert!(help.contains("checked-out worktree"));
+    }
+
+    #[test]
+    fn workflow_origin_fetch_accepts_workflow_id() {
+        let cli = parse(&["wt", "workflow", "origin", "fetch", "2026-06-06-001"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Origin {
+                    command: WorkflowOriginCommand::Fetch { ref workflows }
+                }
+            }) if workflows == &vec!["2026-06-06-001".to_string()]
+        ));
     }
 
     #[test]

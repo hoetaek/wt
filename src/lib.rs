@@ -27,7 +27,7 @@ pub mod worktree_naming;
 use anyhow::{Result, bail};
 use cli::{
     AgentCommand, AgentSupervisorCommand, Commands, ConfigCommand, MsgCommand, RunCommand,
-    SessionCommand, TaskCommand, WorkflowCommand,
+    SessionCommand, TaskCommand, TaskOriginCommand, WorkflowCommand, WorkflowOriginCommand,
 };
 use commands::agent_runtime::KnownAgentCli;
 use context::{Ctx, MachineCtx};
@@ -104,11 +104,22 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         }
         Commands::Task { command } => match command {
             TaskCommand::List { all } => commands::task_list::run(ctx, *all),
-            TaskCommand::Import { issues } => commands::task::import(ctx, issues),
+            TaskCommand::Origin { command } => match command {
+                TaskOriginCommand::Import { issues } => commands::task_origin::import(ctx, issues),
+                TaskOriginCommand::Publish { tasks } => commands::task_origin::publish(ctx, tasks),
+                TaskOriginCommand::Attach { task, issue } => {
+                    commands::task_origin::attach(ctx, task, issue)
+                }
+                TaskOriginCommand::Fetch { tasks } => commands::task_origin::fetch(ctx, tasks),
+                TaskOriginCommand::Diff { tasks } => commands::task_origin::diff(ctx, tasks),
+                TaskOriginCommand::Pull { tasks } => commands::task_origin::pull(ctx, tasks),
+                TaskOriginCommand::Push { tasks } => commands::task_origin::push(ctx, tasks),
+            },
+            TaskCommand::Import { issues } => commands::task_origin::import(ctx, issues),
             TaskCommand::DeprecatedRun { .. } => {
                 deprecated_start_command_error("wt task run", "wt run task")
             }
-            TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
+            TaskCommand::Publish { tasks } => commands::task_origin::publish(ctx, tasks),
             TaskCommand::Report { message } => commands::task_report::run(ctx, message),
             TaskCommand::Review {
                 task_run_id,
@@ -186,6 +197,23 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     pr: *pr,
                 },
             ),
+            WorkflowCommand::Origin { command } => match command {
+                WorkflowOriginCommand::Attach { workflow, issue } => {
+                    commands::workflow::origin_attach(ctx, workflow, issue)
+                }
+                WorkflowOriginCommand::Fetch { workflows } => {
+                    commands::workflow::origin_fetch(ctx, workflows)
+                }
+                WorkflowOriginCommand::Diff { workflows } => {
+                    commands::workflow::origin_diff(ctx, workflows)
+                }
+                WorkflowOriginCommand::Pull { workflows } => {
+                    commands::workflow::origin_pull(ctx, workflows)
+                }
+                WorkflowOriginCommand::Push { workflows } => {
+                    commands::workflow::origin_push(ctx, workflows)
+                }
+            },
             WorkflowCommand::DeprecatedRun { .. } => {
                 deprecated_start_command_error("wt workflow run", "wt run workflow")
             }
