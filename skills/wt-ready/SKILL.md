@@ -453,6 +453,12 @@ the hard-constraint top-of-body placement rule and its retrospect evidence,
 implementation-grade task steps with complete failing tests and implementation
 contracts, the no-placeholder rule, and the pre-handoff self-review.
 
+After wt-writing-tasks finishes, return to wt-ready Gate 8. TaskDocument bodies
+alone are not launch-ready when the slice graph calls for saved orchestration.
+Derive the workflow mode from `03-Architect/07-tasks.md`, create any required
+workflow TOML, and write/update `03-Architect/08-execution.md` before reporting
+the work as ready for `wt-work`.
+
 ### Task and PR size budget
 
 When deciding whether one slice is reviewable, consult
@@ -520,6 +526,14 @@ Then act on the chosen mode:
   profiles.
 - `none` — no workflow TOML. Slices launch as direct TaskDocuments
   (`wt run task <slug>`) or as direct local edits outside the wt-managed repo.
+
+If the graph is wave-shaped rather than one clean mode, do not force it into a
+single false workflow. Split it into explicit launch waves and create one
+workflow TOML per wave that has a real saved-workflow mode. Record every wave,
+its TaskDocuments, linked workflow TOML path, and `wt-work` launch target in
+`03-Architect/08-execution.md`. A prep pass that has authored TaskDocuments but
+has not made this workflow/no-workflow decision remains Gate 8 active, not
+launch-ready.
 
 ## Workflow Policy
 

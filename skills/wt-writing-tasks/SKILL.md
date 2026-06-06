@@ -21,6 +21,26 @@ input. Spec files support the body, they do not replace it.
   durable contracts, but the agent must be able to execute from the body
   alone.
 
+## Workflow handoff boundary
+
+This skill writes TaskDocument bodies; it does not derive execution shape or
+create saved Workflow TOML. When the spec's `03-Architect/07-tasks.md` contains
+parallel groups, dependencies, or any slice marked for `batch`, `stack`,
+`single`, `matrix`, or separate workflow execution, the prep pass must return
+to wt-ready after the bodies are written. wt-ready owns:
+
+- deriving direct vs `single` / `batch` / `stack` / `matrix` / wave-shaped
+  orchestration from `03-Architect/07-tasks.md`;
+- creating `<repo-root>/.wt/execution/workflows/<id>.toml` with
+  `wt workflow task --mode ...` when a saved workflow is needed;
+- writing `planning/specs/<slug>/03-Architect/08-execution.md` with the
+  TaskDocument mapping, linked workflow TOML path, `wt-work` launch target,
+  policy source, and watch cadence.
+
+Do not call work launch-ready merely because all TaskDocument bodies are
+authored. If a workflow decision is still missing, report that Gate 8 execution
+handoff remains active.
+
 ## Body structure
 
 Top-down order. The agent reads top-down and often acts before reaching the
@@ -143,6 +163,10 @@ Run this checklist on the finished body; fix inline.
 5. **Command check** — every `Run:` line is executable verbatim from the
    worktree root, and the `계획` acceptance checks match commands the steps
    actually run.
+6. **Workflow handoff check** — if the slice graph has dependencies, parallel
+   groups, or any non-direct execution shape, verify that wt-ready will create
+   or update `03-Architect/08-execution.md` and any required
+   `.wt/execution/workflows/*.toml` before `wt-work`.
 
 ## Rationalizations
 
