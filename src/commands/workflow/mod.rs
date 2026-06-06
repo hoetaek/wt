@@ -46,6 +46,7 @@ mod archive;
 mod codex_base_review;
 mod display;
 mod list_command;
+mod origin;
 mod repair;
 mod selection;
 mod show_command;
@@ -252,6 +253,26 @@ fn run_after_workflow_selection(ctx: &Ctx, workflow: Option<&str>, jobs: usize) 
 
 pub fn pass(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
     pass_workflow(ctx, workflow, task, run_next)
+}
+
+pub fn origin_attach(ctx: &Ctx, workflow: &str, issue: &str) -> Result<()> {
+    origin::attach(ctx, workflow, issue)
+}
+
+pub fn origin_fetch(ctx: &Ctx, workflows: &[String]) -> Result<()> {
+    origin::fetch(ctx, workflows)
+}
+
+pub fn origin_diff(ctx: &Ctx, workflows: &[String]) -> Result<()> {
+    origin::diff(ctx, workflows)
+}
+
+pub fn origin_pull(ctx: &Ctx, workflows: &[String]) -> Result<()> {
+    origin::pull(ctx, workflows)
+}
+
+pub fn origin_push(ctx: &Ctx, workflows: &[String]) -> Result<()> {
+    origin::push(ctx, workflows)
 }
 
 pub fn deprecated_complete(workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {

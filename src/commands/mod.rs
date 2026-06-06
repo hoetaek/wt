@@ -30,6 +30,7 @@ pub mod site;
 pub mod studio;
 pub mod task;
 pub mod task_list;
+pub(crate) mod task_origin;
 pub mod task_publish;
 pub mod task_report;
 pub mod task_review;

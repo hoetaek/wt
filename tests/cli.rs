@@ -1259,15 +1259,16 @@ fn run_task_help_explains_task_execution() {
 }
 
 #[test]
-fn task_help_lists_list_import_and_publish() {
+fn task_help_lists_list_origin_and_hides_legacy_import_publish() {
     wt_command()
         .args(["task", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("list"))
-        .stdout(predicate::str::contains("import"))
+        .stdout(predicate::str::contains("origin"))
         .stdout(predicate::str::contains("run").not())
-        .stdout(predicate::str::contains("publish"));
+        .stdout(predicate::str::contains("import").not())
+        .stdout(predicate::str::contains("publish").not());
 }
 
 #[test]
