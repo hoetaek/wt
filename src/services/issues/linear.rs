@@ -1,7 +1,7 @@
 use crate::context::CommandRunner;
 use crate::services::issues::{
-    CreateIssueRequest, EnsuredBranch, IssueDetail, IssueInfo, IssueListItem, IssueProvider,
-    IssueReader,
+    CreateIssueRequest, EnsuredBranch, IssueComment, IssueCommenter, IssueDetail, IssueFieldUpdate,
+    IssueInfo, IssueListItem, IssueProvider, IssueReader, IssueUpdater,
 };
 use crate::services::linear::LinearService;
 use anyhow::Result;
@@ -105,6 +105,25 @@ impl IssueProvider for LinearIssueProvider<'_> {
 impl IssueReader for LinearIssueProvider<'_> {
     fn get_issue_detail(&self, id: &str) -> Result<IssueDetail> {
         Ok(self.get_issue(id)?.into())
+    }
+}
+
+impl IssueUpdater for LinearIssueProvider<'_> {
+    fn update_issue_fields(&self, id: &str, update: IssueFieldUpdate) -> Result<IssueDetail> {
+        self.linear
+            .update_issue_fields(id, update.title.as_deref(), update.body.as_deref())?;
+        self.get_issue_detail(id)
+    }
+}
+
+impl IssueCommenter for LinearIssueProvider<'_> {
+    fn create_comment(&self, id: &str, body: &str) -> Result<IssueComment> {
+        let comment_id = self.linear.create_comment(id, body)?;
+        Ok(IssueComment {
+            id: comment_id,
+            body: body.to_string(),
+            created_at: None,
+        })
     }
 }
 
@@ -280,6 +299,67 @@ mod tests {
             calls[0].1,
             vec!["issue", "update", "PROJ-680", "--state", "In Progress"]
         );
+    }
+
+    #[test]
+    fn create_comment_delegates_to_linear_cli() {
+        let mut runner = MockRunner::new();
+        runner.add_response("COMMENT-1", true);
+        let provider = LinearIssueProvider::new(&runner, None);
+
+        let comment = IssueCommenter::create_comment(&provider, "PROJ-1", "status note").unwrap();
+
+        assert_eq!(comment.body, "status note");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "issue",
+                "comment",
+                "create",
+                "PROJ-1",
+                "--body",
+                "status note"
+            ]
+        );
+    }
+
+    #[test]
+    fn update_issue_fields_delegates_to_linear_cli_and_refreshes_detail() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        runner.add_response(
+            r#"{"identifier":"PROJ-1","title":"New title","description":"New body"}"#,
+            true,
+        );
+        let provider = LinearIssueProvider::new(&runner, None);
+
+        let detail = IssueUpdater::update_issue_fields(
+            &provider,
+            "PROJ-1",
+            IssueFieldUpdate {
+                title: Some("New title".into()),
+                body: Some("New body".into()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(detail.title, "New title");
+        assert_eq!(detail.body.as_deref(), Some("New body"));
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "issue",
+                "update",
+                "PROJ-1",
+                "--title",
+                "New title",
+                "--description",
+                "New body",
+            ]
+        );
+        assert_eq!(calls[1].1, vec!["issue", "view", "PROJ-1", "--json"]);
     }
 
     #[test]

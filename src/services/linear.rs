@@ -117,6 +117,44 @@ impl<'a> LinearService<'a> {
         }
         Ok(())
     }
+
+    pub fn update_issue_fields(
+        &self,
+        identifier: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<()> {
+        let mut args = vec!["issue", "update", identifier];
+        if let Some(title) = title {
+            args.extend_from_slice(&["--title", title]);
+        }
+        if let Some(description) = description {
+            args.extend_from_slice(&["--description", description]);
+        }
+        let out = self.runner.run("linear", &args, self.cwd)?;
+        if !out.success {
+            bail!(
+                "Linear issue update failed: {}",
+                command_failure_detail(&out)
+            );
+        }
+        Ok(())
+    }
+
+    pub fn create_comment(&self, identifier: &str, body: &str) -> Result<String> {
+        let out = self.runner.run(
+            "linear",
+            &["issue", "comment", "create", identifier, "--body", body],
+            self.cwd,
+        )?;
+        if !out.success {
+            bail!(
+                "Linear issue comment creation failed: {}",
+                command_failure_detail(&out)
+            );
+        }
+        Ok(out.stdout.trim().to_string())
+    }
 }
 
 fn parse_created_identifier(stdout: &str, stderr: &str) -> Option<String> {

@@ -822,7 +822,7 @@ pub enum TaskCommand {
     },
     /// Manage provider issue origin links for local TaskDocuments
     #[command(
-        long_about = "Manage provider issue origin links for local <repo-root>/.wt/execution/tasks/<task>.toml TaskDocuments.\n\nImport creates local TaskDocuments from provider issues, publish creates provider issues from local TaskDocuments, fetch refreshes provider issue evidence without changing TaskDocuments, and diff compares local title/body with fetched provider evidence. attach/pull/push remain reserved provider issue origin actions for existing TaskDocuments."
+        long_about = "Manage provider issue origin links for local <repo-root>/.wt/execution/tasks/<task>.toml TaskDocuments.\n\nImport creates local TaskDocuments from provider issues, publish creates provider issues from local TaskDocuments, attach links an existing TaskDocument to a provider issue, fetch refreshes provider issue evidence without changing TaskDocuments, diff compares local title/body with fetched provider evidence, pull applies selected provider title/body fields locally after preview, and push appends provider comments or selected title/body overwrites after preview."
     )]
     Origin {
         #[command(subcommand)]
@@ -1882,7 +1882,7 @@ mod tests {
     }
 
     #[test]
-    fn task_origin_help_marks_fetch_and_diff_as_enabled() {
+    fn task_origin_help_marks_origin_sync_actions_as_enabled() {
         let mut command = Cli::command();
         let help = command
             .find_subcommand_mut("task")
@@ -1894,7 +1894,10 @@ mod tests {
 
         assert!(help.contains("fetch refreshes provider issue evidence"));
         assert!(help.contains("diff compares local title/body with fetched provider evidence"));
-        assert!(help.contains("attach/pull/push remain reserved"));
+        assert!(help.contains("attach links an existing TaskDocument to a provider issue"));
+        assert!(help.contains("pull applies selected provider title/body fields locally"));
+        assert!(help.contains("push appends provider comments or selected title/body overwrites"));
+        assert!(!help.contains("remain reserved"));
         assert!(!help.contains("attach/fetch/diff/pull/push are reserved"));
     }
 

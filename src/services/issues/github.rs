@@ -1,8 +1,8 @@
 use crate::context::CmdOutput;
 use crate::context::CommandRunner;
 use crate::services::issues::{
-    CreateIssueRequest, EnsuredBranch, IssueDetail, IssueInfo, IssueListItem, IssueProvider,
-    IssueReader,
+    CreateIssueRequest, EnsuredBranch, IssueComment, IssueCommenter, IssueDetail, IssueFieldUpdate,
+    IssueInfo, IssueListItem, IssueProvider, IssueReader, IssueUpdater,
 };
 use anyhow::{Result, bail};
 use serde::Deserialize;
@@ -207,6 +207,45 @@ impl IssueReader for GithubIssueProvider<'_> {
             labels: Vec::new(),
             comments_count: None,
             updated_at: None,
+        })
+    }
+}
+
+impl IssueUpdater for GithubIssueProvider<'_> {
+    fn update_issue_fields(&self, id: &str, update: IssueFieldUpdate) -> Result<IssueDetail> {
+        let mut args = vec!["issue", "edit", id];
+        if let Some(title) = update.title.as_deref() {
+            args.extend_from_slice(&["--title", title]);
+        }
+        if let Some(body) = update.body.as_deref() {
+            args.extend_from_slice(&["--body", body]);
+        }
+        let out = self.runner.run("gh", &args, self.cwd)?;
+        if !out.success {
+            bail!(
+                "GitHub issue update failed: {}",
+                command_failure_detail(&out)
+            );
+        }
+        self.get_issue_detail(id)
+    }
+}
+
+impl IssueCommenter for GithubIssueProvider<'_> {
+    fn create_comment(&self, id: &str, body: &str) -> Result<IssueComment> {
+        let out = self
+            .runner
+            .run("gh", &["issue", "comment", id, "--body", body], self.cwd)?;
+        if !out.success {
+            bail!(
+                "GitHub issue comment creation failed: {}",
+                command_failure_detail(&out)
+            );
+        }
+        Ok(IssueComment {
+            id: out.stdout.trim().to_string(),
+            body: body.to_string(),
+            created_at: None,
         })
     }
 }
@@ -471,6 +510,66 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("did not return an issue URL")
+        );
+    }
+
+    #[test]
+    fn create_comment_delegates_to_gh_cli() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            "https://github.com/acme/widgets/issues/42#issuecomment-1",
+            true,
+        );
+        let provider = GithubIssueProvider::new(&runner, None, None);
+
+        let comment = IssueCommenter::create_comment(&provider, "42", "status note").unwrap();
+
+        assert_eq!(comment.body, "status note");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["issue", "comment", "42", "--body", "status note"]
+        );
+    }
+
+    #[test]
+    fn update_issue_fields_delegates_to_gh_cli_and_refreshes_detail() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        runner.add_response(
+            r#"{"number":42,"title":"New title","body":"New body"}"#,
+            true,
+        );
+        let provider = GithubIssueProvider::new(&runner, None, None);
+
+        let detail = IssueUpdater::update_issue_fields(
+            &provider,
+            "42",
+            IssueFieldUpdate {
+                title: Some("New title".into()),
+                body: Some("New body".into()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(detail.title, "New title");
+        assert_eq!(detail.body.as_deref(), Some("New body"));
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "issue",
+                "edit",
+                "42",
+                "--title",
+                "New title",
+                "--body",
+                "New body",
+            ]
+        );
+        assert_eq!(
+            calls[1].1,
+            vec!["issue", "view", "42", "--json", "number,title,body,url"]
         );
     }
 
