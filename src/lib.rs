@@ -9,6 +9,7 @@ pub mod error;
 pub mod local_ui;
 pub mod messages;
 pub mod names;
+pub mod origin_snapshot;
 pub(crate) mod parallel;
 pub(crate) mod personal_storage;
 pub mod runner;

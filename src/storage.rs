@@ -106,6 +106,35 @@ impl StorageRoot {
         self.execution_dir().join("workflows")
     }
 
+    pub fn origins_dir(&self) -> PathBuf {
+        self.execution_dir().join("origins")
+    }
+
+    pub fn origin_task_snapshots_dir(&self) -> PathBuf {
+        self.origins_dir().join("tasks")
+    }
+
+    pub fn origin_workflow_snapshots_dir(&self) -> PathBuf {
+        self.origins_dir().join("workflows")
+    }
+
+    pub fn origin_task_snapshot_path(&self, owner: impl AsRef<str>) -> PathBuf {
+        self.origin_task_snapshots_dir().join(format!(
+            "{}.toml",
+            crate::task::safe_task_key(owner.as_ref())
+        ))
+    }
+
+    pub fn origin_workflow_snapshot_path(&self, owner: impl AsRef<str>) -> PathBuf {
+        let owner = owner.as_ref();
+        let file_name = if owner.ends_with(".toml") {
+            owner.to_string()
+        } else {
+            format!("{owner}.toml")
+        };
+        self.origin_workflow_snapshots_dir().join(file_name)
+    }
+
     pub fn task_runs_dir(&self) -> PathBuf {
         self.execution_dir().join("task-runs")
     }
@@ -696,6 +725,24 @@ mod tests {
         assert_eq!(
             storage.runtime_agent_anchors_dir(&agent),
             PathBuf::from("/repo/.wt/runtime/agents/codex/anchors")
+        );
+    }
+
+    #[test]
+    fn origin_snapshot_paths_use_execution_origin_dirs() {
+        let root = tempfile::tempdir().unwrap();
+        let storage =
+            StorageRoot::from_git_common_dir_and_repo_root(root.path().join(".git"), root.path());
+
+        assert_eq!(
+            storage.origin_task_snapshot_path("origin-command-namespace"),
+            root.path()
+                .join(".wt/execution/origins/tasks/origin-command-namespace.toml")
+        );
+        assert_eq!(
+            storage.origin_workflow_snapshot_path("2026-06-06-001"),
+            root.path()
+                .join(".wt/execution/origins/workflows/2026-06-06-001.toml")
         );
     }
 
