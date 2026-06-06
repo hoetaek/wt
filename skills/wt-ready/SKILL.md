@@ -437,71 +437,21 @@ For each slice, record:
 - acceptance checks
 - notes for experiments or tradeoffs that shaped the slice
 
-Record this planning context in the TaskDocument `body` as a text section, not
-as top-level TOML fields (only canonical task fields are accepted). Every
-TaskDocument or workflow task must include an expected duration in its
-`계획 (Planning)` body section before `wt-work`, plus the estimate basis when
-known. Prefer Korean human-facing labels with the stable English key in
-parentheses.
-
-Example body section:
-
-```text
-## 계획 (Planning)
-- 유형 (type): AFK
-- 예상 소요 (expected duration): 45m
-- 예상 근거 (estimate basis): conservative planning guess
-- 권장 watch cadence (suggested watch cadence): launch 45s, steady heartbeat 5-10m
-- 막힘 / 의존성 (blocked by): workflow-policy-contract-simplified
-- 실행 형태 (execution shape): stack child
-- 크기 (size class): medium
-- 확인 방법 (acceptance checks): update docs, run cargo fmt --all --check
-```
+Record this planning context in the TaskDocument `body` `## 계획 (Planning)`
+section, not as top-level TOML fields (only canonical task fields are
+accepted). Every TaskDocument or workflow task must include an expected
+duration there before `wt-work`, plus the estimate basis when known. The
+section format and field labels are defined by the wt-writing-tasks skill.
 
 Prefer several narrow slices over one broad task.
 
-### TaskDocument body placement
+### TaskDocument body authoring
 
-The agent reads task body top-down and often acts before reaching the end. Place
-**hard constraints the agent must not miss** in the top of the body, not at the
-bottom. In particular, when a slice carries any of these:
-
-- Design language or visual-grade requirements (specific fonts, banned fonts,
-  layout archetype, container/shadow rules, motion easing, allowlisted icon
-  set)
-- Security envelope (path allowlist, sandbox boundary, secret handling)
-- Cross-cutting prohibitions (e.g. "do not touch `wt ui`", "do not bump
-  `Cargo.toml` version", "do not introduce dependency X")
-- Base-branch / parent-branch restriction (especially when the agent might
-  default to a different base)
-
-place them in a dedicated top-level section that appears within the first ~30
-lines of the body — **immediately after `## 계획 (Planning)`, before `## 맥락`**
-— and reference the canonical spec/contract by path so the agent can pull
-detail without scrolling.
-
-Example body order:
-
-```text
-## 계획 (Planning)
-- ...
-
-## 필수 준수 (Hard constraints)
-- Design language: Soft Structuralism + Geist + Phosphor Light. 금지: Inter,
-  generic border. 정본: `<spec-path>/03-Architect/05-design.md` "Design language" 절.
-- Security: write 는 `<repo-root>/.wt/execution/tasks/*.toml` 만.
-- 회귀: `wt ui` 손대지 않음. `Cargo.toml` version 변경 금지.
-- Base: develop (master 아님).
-
-## 맥락
-- ...
-```
-
-Background reason: empirically
-(`<repo-root>/.wt/planning/specs/wt-studio-authoring-surface/04-Feedback/10-retrospect.md`),
-visual-grade constraints buried in the lower half of a long task body are
-silently dropped by the first agent turn even when the spec file fully states
-them. Top-of-body placement is the cheap structural fix.
+**REQUIRED SUB-SKILL:** Use wt-writing-tasks when authoring or revising any
+TaskDocument body. It owns the body structure (계획 / 필수 준수 / 맥락 / 작업),
+the hard-constraint top-of-body placement rule and its retrospect evidence,
+implementation-grade task steps with complete failing tests and implementation
+contracts, the no-placeholder rule, and the pre-handoff self-review.
 
 ### Task and PR size budget
 
@@ -803,6 +753,9 @@ without an idea directory existing first.
 - Checkbox items, sequenced as atomic units of work.
 - Mark dependencies or parallelism explicitly so downstream steps can pick the
   right execution shape.
+- Keep this file at slice-graph level: titles, dependencies, parallel groups,
+  and TaskDocument paths. Implementation-grade steps live in each TaskDocument
+  body (wt-writing-tasks); do not duplicate them here.
 
 `03-Architect/08-execution.md` (LAZY, only when launch handoff exists):
 
@@ -1013,8 +966,9 @@ End with one of these concrete outputs:
 - a saved workflow prepared (mode, base, order, policy)
 - a short list of unresolved HITL decisions that blocks launch
 
-Use existing repo patterns for TaskDocument bodies. Avoid stale implementation
-file paths unless they are necessary for the task.
+Author TaskDocument bodies with the wt-writing-tasks skill. Avoid stale
+implementation file paths; verify every referenced path and symbol against the
+repo before handoff.
 
 Report:
 
