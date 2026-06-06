@@ -364,6 +364,12 @@ pub fn write(ctx: &Ctx, path: &Path, workflow: &mut WorkflowMetadata) -> Result<
     write_metadata(path, workflow)
 }
 
+pub(crate) fn rewrite(ctx: &Ctx, path: &Path, workflow: &WorkflowMetadata) -> Result<()> {
+    ensure_no_legacy_workflows(ctx)?;
+    ensure_not_legacy_workflow_path(ctx, path)?;
+    write_metadata(path, workflow)
+}
+
 fn write_metadata(path: &Path, workflow: &WorkflowMetadata) -> Result<()> {
     validate_workflow(workflow)?;
     if let Some(parent) = path.parent() {

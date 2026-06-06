@@ -405,6 +405,72 @@ mod tests {
     }
 
     #[test]
+    fn create_comment_delegates_to_gh_issue_comment() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            "https://github.com/acme/repo/issues/52#issuecomment-10",
+            true,
+        );
+
+        let provider = GithubIssueProvider::new(&runner, None, None);
+        let comment = provider
+            .create_comment("52", "Workflow origin status")
+            .unwrap();
+
+        assert_eq!(
+            comment.id,
+            "https://github.com/acme/repo/issues/52#issuecomment-10"
+        );
+        assert_eq!(comment.body, "Workflow origin status");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["issue", "comment", "52", "--body", "Workflow origin status"]
+        );
+    }
+
+    #[test]
+    fn update_issue_fields_edits_then_reads_detail() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        runner.add_response(
+            r#"{"number":52,"title":"Updated","body":"Updated body","url":"https://github.com/acme/repo/issues/52"}"#,
+            true,
+        );
+
+        let provider = GithubIssueProvider::new(&runner, None, None);
+        let detail = provider
+            .update_issue_fields(
+                "52",
+                IssueFieldUpdate {
+                    title: Some("Updated".into()),
+                    body: Some("Updated body".into()),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(detail.title, "Updated");
+        assert_eq!(detail.body.as_deref(), Some("Updated body"));
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "issue",
+                "edit",
+                "52",
+                "--title",
+                "Updated",
+                "--body",
+                "Updated body"
+            ]
+        );
+        assert_eq!(
+            calls[1].1,
+            vec!["issue", "view", "52", "--json", "number,title,body,url"]
+        );
+    }
+
+    #[test]
     fn list_issues_with_gh_user_filter() {
         let mut runner = MockRunner::new();
         runner.add_response(
