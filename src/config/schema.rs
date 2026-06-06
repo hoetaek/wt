@@ -926,6 +926,16 @@ impl Default for OriginPolicy {
     }
 }
 
+impl OriginPolicy {
+    pub fn as_config_value(self) -> &'static str {
+        match self {
+            Self::ProviderPreferred => "provider-preferred",
+            Self::ProviderRequired => "provider-required",
+            Self::LocalOnly => "local-only",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum IssueProviderType {
