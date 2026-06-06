@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 pub(super) struct RunnableWorkflowCandidate {
     pub(super) id: String,
     pub(super) path: PathBuf,
+    creation_order: Option<u64>,
     item: PromptItem,
     group: String,
     label: String,
@@ -80,18 +81,45 @@ pub(super) fn list_runnable_workflow_candidates(
         candidates.push(RunnableWorkflowCandidate {
             id,
             path,
+            creation_order: workflow_candidate_creation_order(&states),
             item,
             group,
             label,
         });
     }
 
-    candidates.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then_with(|| left.label.cmp(&right.label))
-    });
+    candidates.sort_by(compare_runnable_workflow_candidates);
     Ok(candidates)
+}
+
+fn compare_runnable_workflow_candidates(
+    left: &RunnableWorkflowCandidate,
+    right: &RunnableWorkflowCandidate,
+) -> std::cmp::Ordering {
+    match (left.creation_order, right.creation_order) {
+        (Some(left_order), Some(right_order)) => left_order
+            .cmp(&right_order)
+            .then_with(|| compare_runnable_workflow_candidate_fallbacks(left, right)),
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (None, None) => compare_runnable_workflow_candidate_fallbacks(left, right),
+    }
+}
+
+fn compare_runnable_workflow_candidate_fallbacks(
+    left: &RunnableWorkflowCandidate,
+    right: &RunnableWorkflowCandidate,
+) -> std::cmp::Ordering {
+    left.path
+        .cmp(&right.path)
+        .then_with(|| left.label.cmp(&right.label))
+}
+
+fn workflow_candidate_creation_order(states: &[WorkflowTaskState]) -> Option<u64> {
+    states
+        .iter()
+        .filter_map(|state| state.run.creation_order)
+        .min()
 }
 
 fn warn_skipped_workflow(ctx: &Ctx, path: &Path, err: &anyhow::Error) {

@@ -1223,6 +1223,39 @@ mod tests {
     }
 
     #[test]
+    fn task_run_context_resolves_slugged_workflow_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        let runs_dir = dir.path().join(".wt/execution/task-runs");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::create_dir_all(&runs_dir).unwrap();
+        fs::write(
+            workflows_dir.join("20260606-provider-origin-foundation.toml"),
+            "mode = \"batch\"\nbase_mode = \"explicit\"\ncreated_at = \"2026-06-06T00:00:00Z\"\nupdated_at = \"2026-06-06T00:00:00Z\"\n\n[policy]\npull_request = \"none\"\nlanding = \"manual\"\n\n[[tasks]]\ntask = \"origin-snapshot-store\"\nrun = \"run-1\"\n",
+        )
+        .unwrap();
+        fs::write(
+            runs_dir.join("run-1.toml"),
+            "task = \"origin-snapshot-store\"\nbranch = \"origin-snapshot-store\"\nstatus = \"prepared\"\ngroup = \"20260606-provider-origin-foundation\"\ncreated_at = \"2026-06-06T00:00:00Z\"\nupdated_at = \"2026-06-06T00:00:00Z\"\n",
+        )
+        .unwrap();
+
+        let path = resolve(&ctx, "run-1").unwrap();
+        let record = TaskRunRecord {
+            id: "run-1".into(),
+            path: path.clone(),
+            run: read(&path).unwrap(),
+        };
+        match resolve_context(&ctx, &record).unwrap() {
+            TaskRunContext::WorkflowLinked(context) => {
+                assert_eq!(context.workflow_id, "20260606-provider-origin-foundation");
+            }
+            other => panic!("expected workflow context, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn task_run_toml_write_read_list_and_update_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());

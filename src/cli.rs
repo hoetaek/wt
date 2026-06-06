@@ -918,6 +918,9 @@ pub enum WorkflowCommand {
         /// Bind the workflow TaskRuns to this coordinator id at creation time
         #[arg(long, value_name = "ID", value_parser = parse_agent_id)]
         coordinator: Option<String>,
+        /// Workflow id/file stem, formatted as YYYYMMDD-<slug>
+        #[arg(long, value_name = "ID")]
+        id: Option<String>,
         /// Short workflow title for list, select, and show surfaces
         #[arg(long)]
         title: Option<String>,
@@ -953,6 +956,9 @@ pub enum WorkflowCommand {
         /// Named profile from <repo-root>/.wt/config/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
+        /// Workflow id/file stem, formatted as YYYYMMDD-<slug>
+        #[arg(long, value_name = "ID")]
+        id: Option<String>,
         /// Short workflow title for list, select, and show surfaces
         #[arg(long)]
         title: Option<String>,
@@ -2053,6 +2059,8 @@ mod tests {
             "codex",
             "--coordinator",
             "coord-split",
+            "--id",
+            "20260606-split-workflow",
             "--title",
             "Split workflow",
             "--body",
@@ -2075,6 +2083,7 @@ mod tests {
                     profile: Some(ref profile),
                     ref profiles,
                     coordinator: Some(ref coordinator),
+                    id: Some(ref id),
                     title: Some(ref title),
                     body: Some(ref body),
                     body_file: None,
@@ -2087,6 +2096,7 @@ mod tests {
                 && profile == "codex"
                 && profiles.is_empty()
                 && coordinator == "agents/coord-split"
+                && id == "20260606-split-workflow"
                 && title == "Split workflow"
                 && body == "Ship the split workflow"
                 && origin_provider == "linear"
@@ -2107,6 +2117,7 @@ mod tests {
                     profile: None,
                     ref profiles,
                     coordinator: None,
+                    id: None,
                     title: None,
                     body: None,
                     body_file: None,
@@ -2217,6 +2228,7 @@ mod tests {
                     ref issues,
                     mode: WorkflowModeArg::Batch,
                     profile: None,
+                    id: None,
                     title: None,
                     body: None,
                     body_file: None,
@@ -2361,6 +2373,8 @@ mod tests {
 
         let task = workflow.find_subcommand_mut("task").unwrap();
         let task_help = task.render_long_help().to_string();
+        assert!(task_help.contains("--id <ID>"));
+        assert!(task_help.contains("YYYYMMDD-<slug>"));
         assert!(task_help.contains("--title"));
         assert!(task_help.contains("--body"));
         assert!(task_help.contains("--body-file"));
@@ -2373,6 +2387,8 @@ mod tests {
 
         let issue = workflow.find_subcommand_mut("issue").unwrap();
         let issue_help = issue.render_long_help().to_string();
+        assert!(issue_help.contains("--id <ID>"));
+        assert!(issue_help.contains("YYYYMMDD-<slug>"));
         assert!(issue_help.contains("--title"));
         assert!(issue_help.contains("--body"));
         assert!(issue_help.contains("--body-file"));

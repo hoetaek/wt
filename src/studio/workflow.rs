@@ -1,16 +1,8 @@
-use crate::workflow::{WORKFLOW_COLOR_ROTATION, WorkflowMetadata};
-use anyhow::{Result, bail};
-use regex::Regex;
-use std::sync::OnceLock;
+use crate::workflow::{self, WORKFLOW_COLOR_ROTATION, WorkflowMetadata};
+use anyhow::Result;
 
 pub(crate) fn validate_workflow_id(id: &str) -> Result<()> {
-    if id.contains('/') || id.contains('\\') || id.contains("..") {
-        bail!("Workflow id must be a date-sequence id like 2026-05-28-001");
-    }
-    if !workflow_id_regex().is_match(id) {
-        bail!("Workflow id must match YYYY-MM-DD-NNN");
-    }
-    Ok(())
+    workflow::validate_workflow_id(id)
 }
 
 pub(crate) fn validate_workflow_candidate(
@@ -70,25 +62,28 @@ fn workflow_color_allowed(color: &str) -> bool {
         .any(|candidate| candidate.eq_ignore_ascii_case(color))
 }
 
-fn workflow_id_regex() -> &'static Regex {
-    static WORKFLOW_ID_REGEX: OnceLock<Regex> = OnceLock::new();
-    WORKFLOW_ID_REGEX.get_or_init(|| {
-        Regex::new(r"^\d{4}-\d{2}-\d{2}-\d{3}$").expect("workflow id regex should compile")
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn workflow_id_validator_accepts_date_sequence_ids() {
+    fn workflow_id_validator_accepts_slugged_and_legacy_ids() {
+        assert!(validate_workflow_id("20260606-provider-origin-foundation").is_ok());
+        assert!(validate_workflow_id("20260606-provider-origin-foundation-002").is_ok());
         assert!(validate_workflow_id("2026-05-28-001").is_ok());
     }
 
     #[test]
-    fn workflow_id_validator_rejects_traversal_and_non_ids() {
-        for id in ["abc", "../etc", "2026-05-28-001/extra", "2026-05-28-1"] {
+    fn workflow_id_validator_rejects_unsafe_ids() {
+        for id in [
+            "abc",
+            "260606-provider",
+            "20260606-Provider",
+            "20260606-provider_origin",
+            "../etc",
+            "20260606-provider/extra",
+            "20260606-",
+        ] {
             assert!(validate_workflow_id(id).is_err(), "{id} should be rejected");
         }
     }

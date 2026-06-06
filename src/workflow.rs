@@ -162,6 +162,11 @@ pub struct WorkflowRecord {
     pub workflow: WorkflowMetadata,
 }
 
+pub(crate) enum WorkflowIdSeed<'a> {
+    Explicit(&'a str),
+    Automatic { date: &'a str, seed: &'a str },
+}
+
 impl WorkflowMetadata {
     pub fn empty(slug: &str) -> Self {
         let mut metadata = Self::new(WorkflowMode::Single, "default", None, Vec::new());
@@ -235,7 +240,7 @@ impl WorkflowTask {
 }
 
 pub fn create(ctx: &Ctx, mut workflow: WorkflowMetadata) -> Result<WorkflowRecord> {
-    let path = next_available_path(ctx)?;
+    let path = next_available_legacy_sequence_path(ctx)?;
     write(ctx, &path, &mut workflow)?;
     Ok(WorkflowRecord {
         id: workflow_id(&path)?,
@@ -321,9 +326,29 @@ pub fn resolve(ctx: &Ctx, target: &str) -> Result<PathBuf> {
 }
 
 pub fn latest_path(ctx: &Ctx) -> Result<PathBuf> {
-    let mut paths = workflow_paths(ctx)?;
-    paths.sort();
-    paths.pop().ok_or_else(|| {
+    let paths = workflow_paths(ctx)?;
+    if paths.is_empty() {
+        return Err(anyhow::anyhow!(
+            "No workflow files found in {}",
+            ctx.storage_root
+                .display_path(&ctx.storage_root.workflows_dir())
+        ));
+    }
+
+    let mut candidates = Vec::new();
+    for path in paths {
+        let sort_key = read(&path).ok().map(|workflow| workflow.created_at);
+        candidates.push((sort_key, path));
+    }
+    candidates.sort_by(|left, right| match (&left.0, &right.0) {
+        (Some(left_created), Some(right_created)) => left_created
+            .cmp(right_created)
+            .then_with(|| left.1.cmp(&right.1)),
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (None, None) => left.1.cmp(&right.1),
+    });
+    candidates.pop().map(|(_, path)| path).ok_or_else(|| {
         anyhow::anyhow!(
             "No workflow files found in {}",
             ctx.storage_root
@@ -365,7 +390,72 @@ fn ensure_color(ctx: &Ctx, path: &Path, workflow: &mut WorkflowMetadata) -> Resu
     Ok(())
 }
 
-pub fn next_available_path(ctx: &Ctx) -> Result<PathBuf> {
+pub(crate) fn next_available_path_for_id_seed(
+    ctx: &Ctx,
+    seed: WorkflowIdSeed<'_>,
+) -> Result<PathBuf> {
+    ensure_no_legacy_workflows(ctx)?;
+    let workflows_dir = workflows_dir(ctx);
+    fs::create_dir_all(&workflows_dir).with_context(|| {
+        format!(
+            "Failed to create workflow directory: {}",
+            ctx.storage_root.display_path(&workflows_dir)
+        )
+    })?;
+
+    match seed {
+        WorkflowIdSeed::Explicit(id) => {
+            validate_workflow_id(id)?;
+            let candidate = workflows_dir.join(format!("{id}.toml"));
+            if candidate.exists() {
+                bail!("Workflow already exists: {id}");
+            }
+            Ok(candidate)
+        }
+        WorkflowIdSeed::Automatic { date, seed } => {
+            let base_id = workflow_id_from_date_and_seed(date, seed)?;
+            let mut seq = 1;
+            loop {
+                let id = if seq == 1 {
+                    base_id.clone()
+                } else {
+                    format!("{base_id}-{seq:03}")
+                };
+                let candidate = workflows_dir.join(format!("{id}.toml"));
+                if !candidate.exists() {
+                    return Ok(candidate);
+                }
+                seq += 1;
+            }
+        }
+    }
+}
+
+pub(crate) fn workflow_id_from_date_and_seed(date: &str, seed: &str) -> Result<String> {
+    let date = compact_workflow_date(date)?;
+    let slug = slugify_workflow_seed(seed);
+    let id = format!("{date}-{slug}");
+    validate_workflow_id(&id)?;
+    Ok(id)
+}
+
+pub(crate) fn validate_workflow_id(id: &str) -> Result<()> {
+    let expected = "Workflow id must match YYYYMMDD-<slug>; legacy YYYY-MM-DD-NNN is accepted for existing local files";
+    if id.trim().is_empty()
+        || id.contains('/')
+        || id.contains('\\')
+        || id.contains("..")
+        || id.chars().any(char::is_whitespace)
+    {
+        bail!("{expected}");
+    }
+    if is_canonical_slugged_workflow_id(id) || is_legacy_date_sequence_workflow_id(id) {
+        return Ok(());
+    }
+    bail!("{expected}");
+}
+
+fn next_available_legacy_sequence_path(ctx: &Ctx) -> Result<PathBuf> {
     ensure_no_legacy_workflows(ctx)?;
     let workflows_dir = workflows_dir(ctx);
     fs::create_dir_all(&workflows_dir).with_context(|| {
@@ -384,6 +474,69 @@ pub fn next_available_path(ctx: &Ctx) -> Result<PathBuf> {
         }
         seq += 1;
     }
+}
+
+fn compact_workflow_date(date: &str) -> Result<String> {
+    let bytes = date.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes
+            .iter()
+            .enumerate()
+            .all(|(idx, byte)| matches!(idx, 4 | 7) || byte.is_ascii_digit())
+    {
+        bail!("Workflow id date seed must match YYYY-MM-DD");
+    }
+    Ok(format!("{}{}{}", &date[0..4], &date[5..7], &date[8..10]))
+}
+
+fn slugify_workflow_seed(seed: &str) -> String {
+    let mut slug = String::new();
+    let mut needs_dash = false;
+    for ch in seed.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if needs_dash && !slug.is_empty() {
+                slug.push('-');
+            }
+            slug.push(ch.to_ascii_lowercase());
+            needs_dash = false;
+        } else {
+            needs_dash = true;
+        }
+    }
+    if slug.is_empty() {
+        "workflow".into()
+    } else {
+        slug
+    }
+}
+
+fn is_canonical_slugged_workflow_id(id: &str) -> bool {
+    let Some((date, slug)) = id.split_once('-') else {
+        return false;
+    };
+    date.len() == 8
+        && date.chars().all(|ch| ch.is_ascii_digit())
+        && !slug.is_empty()
+        && slug.split('-').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+        })
+}
+
+fn is_legacy_date_sequence_workflow_id(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    bytes.len() == 14
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[10] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(idx, byte)| matches!(idx, 4 | 7 | 10) || byte.is_ascii_digit())
 }
 
 fn next_workflow_color(ctx: &Ctx, excluded_path: Option<&Path>) -> Result<String> {
@@ -765,7 +918,7 @@ fn current_utc_timestamp() -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
-fn current_utc_date() -> String {
+pub(crate) fn current_utc_date() -> String {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
@@ -824,6 +977,62 @@ mod tests {
 
     fn task(task: &str, run: &str) -> WorkflowTask {
         WorkflowTask::new(task, run)
+    }
+
+    #[test]
+    fn workflow_slugged_id_from_title_uses_yyyymmdd_prefix() {
+        assert_eq!(
+            workflow_id_from_date_and_seed("2026-06-06", "Provider origin foundation").unwrap(),
+            "20260606-provider-origin-foundation"
+        );
+        assert_eq!(
+            workflow_id_from_date_and_seed("2026-06-06", "스키마 추가").unwrap(),
+            "20260606-workflow"
+        );
+    }
+
+    #[test]
+    fn workflow_validate_id_accepts_new_canonical_and_legacy_ids() {
+        validate_workflow_id("20260606-provider-origin-foundation").unwrap();
+        validate_workflow_id("20260606-provider-origin-foundation-002").unwrap();
+        validate_workflow_id("2026-06-06-002").unwrap();
+
+        for id in [
+            "260606-provider-origin-foundation",
+            "20260606-Provider",
+            "20260606-provider_origin",
+            "20260606-",
+            "../20260606-provider",
+            "20260606-provider/extra",
+        ] {
+            assert!(validate_workflow_id(id).is_err(), "{id} should be rejected");
+        }
+    }
+
+    #[test]
+    fn next_available_slugged_path_appends_suffix_for_auto_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("20260606-provider-origin-foundation.toml"),
+            "mode = \"batch\"\nbase_mode = \"explicit\"\ncreated_at = \"2026-06-06T00:00:00Z\"\nupdated_at = \"2026-06-06T00:00:00Z\"\n",
+        )
+        .unwrap();
+
+        let path = next_available_path_for_id_seed(
+            &ctx,
+            WorkflowIdSeed::Automatic {
+                date: "2026-06-06",
+                seed: "Provider origin foundation",
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "20260606-provider-origin-foundation-002.toml"
+        );
     }
 
     #[test]
@@ -1426,6 +1635,34 @@ run = "workflow-add-schema"
                 .join(".wt/execution/workflows/2026-05-16-001.toml")
         );
         assert_eq!(resolve(&ctx, "2026-05-16-001").unwrap(), old);
+    }
+
+    #[test]
+    fn latest_path_uses_created_at_across_mixed_id_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("20261231-old-format.toml"),
+            "mode = \"batch\"\nbase_mode = \"explicit\"\ncreated_at = \"2026-01-01T00:00:00Z\"\nupdated_at = \"2026-01-01T00:00:00Z\"\n\n[policy]\npull_request = \"none\"\nlanding = \"manual\"\n\n[[tasks]]\ntask = \"old\"\nrun = \"run-old\"\n",
+        )
+        .unwrap();
+        fs::write(
+            workflows_dir.join("2026-06-06-003.toml"),
+            "mode = \"batch\"\nbase_mode = \"explicit\"\ncreated_at = \"2026-06-06T00:00:00Z\"\nupdated_at = \"2026-06-06T00:00:00Z\"\n\n[policy]\npull_request = \"none\"\nlanding = \"manual\"\n\n[[tasks]]\ntask = \"new\"\nrun = \"run-new\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            latest_path(&ctx)
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "2026-06-06-003.toml"
+        );
     }
 
     #[test]

@@ -1443,8 +1443,9 @@ setup은 만들지 않는다는 점, duplicate ids나 existing TaskDocument coll
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `<repo-root>/.wt/execution/task-runs/<id>.toml` 아래에
 task, branch, status, group, error, creation_order, route fields, report/review metadata,
 created_at, updated_at을 저장한다.
-`group`은 Workflow file stem과 맞는 workflow-linked run을 식별하는 link이고, 직접
-`wt run task`로 만든 TaskRun은 group을 저장하지 않는다. Legacy TaskRun TOML의
+`group`은 Workflow id와 정확히 같은 문자열이며, Workflow file stem과 맞는
+workflow-linked run을 식별하는 link다. 직접 `wt run task`로 만든 TaskRun은 group을
+저장하지 않는다. Legacy TaskRun TOML의
 source 값 `new`, `batch`, `stack`은 읽기 전용 migration compatibility로만 받으며 새
 TaskRun 출력에는 쓰지 않는다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
 초 단위 timestamp 우연성에 기대지 않도록 새 TaskRun마다 증가하는 실행 생성 순서다.
@@ -1470,6 +1471,13 @@ Workflow 준비는 `<repo-root>/.wt/execution/workflows/<id>.toml` 하나와 각
 TaskRun id, stack-mode parent처럼 orchestration에 필요한 link와 실행 지시만 저장한다.
 Workflow row는 status/error를 따로 가지지 않고, branch 이름도 복사하지 않는다. 실행
 인스턴스의 canonical 기록은 TaskRun이고, branch name의 canonical 기록은 TaskDocument다.
+새로 준비하는 Workflow의 canonical id와 file stem은 `YYYYMMDD-<slug>`다. `--id`가
+있으면 그 값이 id/file stem이 되고, 없으면 creation-time `title`, selected TaskDocument
+title, task key 순서로 slug seed를 고른다. `title`은 생성 뒤에는 display metadata일 뿐이며
+Workflow id와 동기화되지 않는다. 기존 `YYYY-MM-DD-NNN` Workflow ids는 active local state를
+읽고 실행하기 위한 legacy 형식으로 계속 valid하지만, 새 preparation path의 canonical 형식은
+아니다. 모든 workflow-linked TaskRun의 `group`은 legacy/new 형식과 관계없이 Workflow id,
+즉 Workflow file stem과 정확히 같아야 한다.
 TaskDocument `title`/`body`/`[origin]`은 slice-level source of truth이며 Workflow row로
 복사하지 않는다. Workflow-level `title`/`body`/`[origin]`은 task row가 아니라 Workflow
 top-level metadata다. `wt workflow issue`에서 선택한 provider issue들은 각각 executable
