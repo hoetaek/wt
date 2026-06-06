@@ -126,12 +126,7 @@ impl StorageRoot {
     }
 
     pub fn origin_workflow_snapshot_path(&self, owner: impl AsRef<str>) -> PathBuf {
-        let owner = owner.as_ref();
-        let file_name = if owner.ends_with(".toml") {
-            owner.to_string()
-        } else {
-            format!("{owner}.toml")
-        };
+        let file_name = format!("{}.toml", origin_workflow_snapshot_owner_id(owner.as_ref()));
         self.origin_workflow_snapshots_dir().join(file_name)
     }
 
@@ -449,6 +444,33 @@ impl StorageRoot {
     }
 }
 
+pub(crate) fn origin_workflow_snapshot_owner_id(owner: &str) -> String {
+    let trimmed = owner.trim();
+    let id = Path::new(trimmed)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+        .unwrap_or(trimmed);
+    safe_workflow_snapshot_owner_id(id)
+}
+
+fn safe_workflow_snapshot_owner_id(value: &str) -> String {
+    let id = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+
+    if id.is_empty() { "workflow".into() } else { id }
+}
+
 fn repo_root_from_git_common_dir(git_common_dir: &Path) -> PathBuf {
     git_common_dir
         .parent()
@@ -743,6 +765,34 @@ mod tests {
             storage.origin_workflow_snapshot_path("2026-06-06-001"),
             root.path()
                 .join(".wt/execution/origins/workflows/2026-06-06-001.toml")
+        );
+        assert_eq!(
+            storage.origin_workflow_snapshot_path("2026-06-06-001.toml"),
+            root.path()
+                .join(".wt/execution/origins/workflows/2026-06-06-001.toml")
+        );
+    }
+
+    #[test]
+    fn workflow_origin_snapshot_paths_normalize_workflow_targets() {
+        let root = tempfile::tempdir().unwrap();
+        let storage =
+            StorageRoot::from_git_common_dir_and_repo_root(root.path().join(".git"), root.path());
+        let expected = root
+            .path()
+            .join(".wt/execution/origins/workflows/2026-06-06-001.toml");
+
+        assert_eq!(
+            storage.origin_workflow_snapshot_path(
+                root.path()
+                    .join(".wt/execution/workflows/2026-06-06-001.toml")
+                    .to_string_lossy()
+            ),
+            expected
+        );
+        assert_eq!(
+            storage.origin_workflow_snapshot_path("../workflows/2026-06-06-001.toml"),
+            expected
         );
     }
 

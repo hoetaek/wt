@@ -214,7 +214,9 @@ pub fn read_workflow_snapshot(
     if snapshot.kind != OriginSnapshotKind::Workflow {
         return Ok(None);
     }
-    if !snapshot.matches_owner(owner) {
+    if crate::storage::origin_workflow_snapshot_owner_id(&snapshot.owner)
+        != crate::storage::origin_workflow_snapshot_owner_id(owner)
+    {
         return Ok(None);
     }
     Ok(Some(snapshot))
@@ -349,5 +351,39 @@ mod tests {
 
         let loaded = read_task_snapshot(&storage, "new-owner").unwrap();
         assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn workflow_snapshot_reader_matches_equivalent_workflow_id_spellings() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage =
+            StorageRoot::from_git_common_dir_and_repo_root(dir.path().join(".git"), dir.path());
+        let snapshot = OriginSnapshot::workflow(
+            "2026-06-06-001",
+            OriginRef::new("linear", "WT-142"),
+            FieldSnapshot::new("Workflow", "local"),
+            FieldSnapshot::new("Workflow remote", "remote"),
+        );
+
+        write_snapshot(&storage, &snapshot).unwrap();
+
+        let loaded = read_workflow_snapshot(&storage, "2026-06-06-001.toml")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.owner, "2026-06-06-001");
+
+        let snapshot = OriginSnapshot::workflow(
+            "2026-06-06-002.toml",
+            OriginRef::new("linear", "WT-143"),
+            FieldSnapshot::new("Workflow", "local"),
+            FieldSnapshot::new("Workflow remote", "remote"),
+        );
+
+        write_snapshot(&storage, &snapshot).unwrap();
+
+        let loaded = read_workflow_snapshot(&storage, "2026-06-06-002")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.owner, "2026-06-06-002.toml");
     }
 }
