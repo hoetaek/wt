@@ -1,5 +1,18 @@
 use crate::origin_snapshot::origin_label;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OriginAction {
+    Diff,
+    Fetch,
+    Pull,
+    Push,
+    Publish,
+    Attach,
+    KeepLocal,
+    OpenInBrowser,
+    CopyReference,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OriginActionMenu {
     title: String,
@@ -13,14 +26,40 @@ impl OriginActionMenu {
         Self {
             title: title.into(),
             items: vec![
-                OriginActionItem::enabled("Publish as issue", "pub").external_write(),
-                OriginActionItem::enabled("Attach existing issue", "A"),
-                OriginActionItem::enabled("Keep local-only for this task", "L"),
-                OriginActionItem::enabled("Copy task key", "y"),
-                OriginActionItem::disabled("Diff with issue", "d", no_origin_reason),
-                OriginActionItem::disabled("Fetch origin", "f", no_origin_reason),
-                OriginActionItem::disabled("Pull from issue", "p", no_origin_reason),
-                OriginActionItem::disabled("Push to issue", "P", no_origin_reason).external_write(),
+                OriginActionItem::enabled(OriginAction::Publish, "Publish as issue", "pub")
+                    .external_write(),
+                OriginActionItem::enabled(OriginAction::Attach, "Attach existing issue", "A"),
+                OriginActionItem::enabled(
+                    OriginAction::KeepLocal,
+                    "Keep local-only for this task",
+                    "L",
+                ),
+                OriginActionItem::enabled(OriginAction::CopyReference, "Copy task key", "y"),
+                OriginActionItem::disabled(
+                    OriginAction::Diff,
+                    "Diff with issue",
+                    "d",
+                    no_origin_reason,
+                ),
+                OriginActionItem::disabled(
+                    OriginAction::Fetch,
+                    "Fetch origin",
+                    "f",
+                    no_origin_reason,
+                ),
+                OriginActionItem::disabled(
+                    OriginAction::Pull,
+                    "Pull from issue",
+                    "p",
+                    no_origin_reason,
+                ),
+                OriginActionItem::disabled(
+                    OriginAction::Push,
+                    "Push to issue",
+                    "P",
+                    no_origin_reason,
+                )
+                .external_write(),
             ],
             child_origins: Vec::new(),
         }
@@ -35,18 +74,29 @@ impl OriginActionMenu {
         Self {
             title: title.into(),
             items: vec![
-                OriginActionItem::enabled("Diff with issue", "d"),
-                OriginActionItem::enabled("Fetch origin", "f"),
-                OriginActionItem::enabled("Pull from issue", "p"),
-                OriginActionItem::enabled("Push to issue", "P").external_write(),
-                OriginActionItem::enabled("Open issue in browser", "o"),
-                OriginActionItem::enabled("Copy origin reference", "y"),
+                OriginActionItem::enabled(OriginAction::Diff, "Diff with issue", "d"),
+                OriginActionItem::enabled(OriginAction::Fetch, "Fetch origin", "f"),
+                OriginActionItem::enabled(OriginAction::Pull, "Pull from issue", "p"),
+                OriginActionItem::enabled(OriginAction::Push, "Push to issue", "P")
+                    .external_write(),
+                OriginActionItem::enabled(
+                    OriginAction::OpenInBrowser,
+                    "Open issue in browser",
+                    "o",
+                ),
+                OriginActionItem::enabled(
+                    OriginAction::CopyReference,
+                    "Copy origin reference",
+                    "y",
+                ),
                 OriginActionItem::disabled(
+                    OriginAction::Attach,
                     "Attach different origin",
                     "A",
                     "origin replacement not supported",
                 ),
                 OriginActionItem::disabled(
+                    OriginAction::Publish,
                     "Publish as issue",
                     "pub",
                     format!("already has origin {origin}"),
@@ -65,25 +115,72 @@ impl OriginActionMenu {
     ) -> Self {
         let items = if let Some(_origin) = origin {
             vec![
-                OriginActionItem::enabled("Diff workflow with issue", "d"),
-                OriginActionItem::enabled("Fetch workflow origin", "f"),
-                OriginActionItem::enabled("Pull selected workflow fields", "p"),
-                OriginActionItem::enabled("Push selected workflow fields", "P").external_write(),
-                OriginActionItem::enabled("Open workflow issue in browser", "o"),
-                OriginActionItem::enabled("Copy workflow origin reference", "y"),
-                OriginActionItem::enabled("Attach different workflow origin", "A"),
+                OriginActionItem::enabled(OriginAction::Diff, "Diff workflow with issue", "d"),
+                OriginActionItem::enabled(OriginAction::Fetch, "Fetch workflow origin", "f"),
+                OriginActionItem::enabled(OriginAction::Pull, "Pull selected workflow fields", "p"),
+                OriginActionItem::enabled(OriginAction::Push, "Push selected workflow fields", "P")
+                    .external_write(),
+                OriginActionItem::enabled(
+                    OriginAction::OpenInBrowser,
+                    "Open workflow issue in browser",
+                    "o",
+                ),
+                OriginActionItem::enabled(
+                    OriginAction::CopyReference,
+                    "Copy workflow origin reference",
+                    "y",
+                ),
+                OriginActionItem::enabled(
+                    OriginAction::Attach,
+                    "Attach different workflow origin",
+                    "A",
+                ),
             ]
         } else {
             let no_origin_reason = "no workflow origin attached";
             vec![
-                OriginActionItem::enabled("Attach existing workflow issue", "A"),
-                OriginActionItem::disabled("Diff workflow with issue", "d", no_origin_reason),
-                OriginActionItem::disabled("Fetch workflow origin", "f", no_origin_reason),
-                OriginActionItem::disabled("Pull selected workflow fields", "p", no_origin_reason),
-                OriginActionItem::disabled("Push selected workflow fields", "P", no_origin_reason)
-                    .external_write(),
-                OriginActionItem::disabled("Open workflow issue in browser", "o", no_origin_reason),
-                OriginActionItem::disabled("Copy workflow origin reference", "y", no_origin_reason),
+                OriginActionItem::enabled(
+                    OriginAction::Attach,
+                    "Attach existing workflow issue",
+                    "A",
+                ),
+                OriginActionItem::disabled(
+                    OriginAction::Diff,
+                    "Diff workflow with issue",
+                    "d",
+                    no_origin_reason,
+                ),
+                OriginActionItem::disabled(
+                    OriginAction::Fetch,
+                    "Fetch workflow origin",
+                    "f",
+                    no_origin_reason,
+                ),
+                OriginActionItem::disabled(
+                    OriginAction::Pull,
+                    "Pull selected workflow fields",
+                    "p",
+                    no_origin_reason,
+                ),
+                OriginActionItem::disabled(
+                    OriginAction::Push,
+                    "Push selected workflow fields",
+                    "P",
+                    no_origin_reason,
+                )
+                .external_write(),
+                OriginActionItem::disabled(
+                    OriginAction::OpenInBrowser,
+                    "Open workflow issue in browser",
+                    "o",
+                    no_origin_reason,
+                ),
+                OriginActionItem::disabled(
+                    OriginAction::CopyReference,
+                    "Copy workflow origin reference",
+                    "y",
+                    no_origin_reason,
+                ),
             ]
         };
 
@@ -106,6 +203,26 @@ impl OriginActionMenu {
             .iter()
             .find(|item| item.label == label)
             .and_then(|item| item.disabled_reason.as_deref())
+    }
+
+    pub fn action_for(&self, label: &str) -> Option<OriginAction> {
+        self.items
+            .iter()
+            .find(|item| item.label == label)
+            .map(|item| item.action)
+    }
+
+    pub fn enabled_action(&self, action: OriginAction) -> Option<&OriginActionItem> {
+        self.items
+            .iter()
+            .find(|item| item.enabled && item.action == action)
+    }
+
+    pub fn action_for_shortcut(&self, shortcut: &str) -> Option<OriginAction> {
+        self.items
+            .iter()
+            .find(|item| item.enabled && item.shortcut == shortcut)
+            .map(|item| item.action)
     }
 
     pub fn render_plain(&self) -> String {
@@ -154,6 +271,7 @@ impl OriginActionMenu {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OriginActionItem {
+    action: OriginAction,
     label: String,
     shortcut: String,
     enabled: bool,
@@ -162,8 +280,13 @@ pub struct OriginActionItem {
 }
 
 impl OriginActionItem {
-    pub fn enabled(label: impl Into<String>, shortcut: impl Into<String>) -> Self {
+    pub fn enabled(
+        action: OriginAction,
+        label: impl Into<String>,
+        shortcut: impl Into<String>,
+    ) -> Self {
         Self {
+            action,
             label: label.into(),
             shortcut: shortcut.into(),
             enabled: true,
@@ -173,11 +296,13 @@ impl OriginActionItem {
     }
 
     pub fn disabled(
+        action: OriginAction,
         label: impl Into<String>,
         shortcut: impl Into<String>,
         reason: impl Into<String>,
     ) -> Self {
         Self {
+            action,
             label: label.into(),
             shortcut: shortcut.into(),
             enabled: false,
@@ -189,6 +314,10 @@ impl OriginActionItem {
     pub fn external_write(mut self) -> Self {
         self.external_write = true;
         self
+    }
+
+    pub fn shortcut(&self) -> &str {
+        &self.shortcut
     }
 
     fn render_plain(&self) -> String {
@@ -452,6 +581,72 @@ impl PreviewOperation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_menu_item_carries_a_typed_action() {
+        let local = OriginActionMenu::for_local_task("scratch-clean", "Scratch cleanup");
+        assert_eq!(
+            local.action_for("Publish as issue"),
+            Some(OriginAction::Publish)
+        );
+        assert_eq!(
+            local.action_for("Attach existing issue"),
+            Some(OriginAction::Attach)
+        );
+        assert_eq!(
+            local.action_for("Keep local-only for this task"),
+            Some(OriginAction::KeepLocal)
+        );
+        assert_eq!(
+            local.action_for("Copy task key"),
+            Some(OriginAction::CopyReference)
+        );
+        assert_eq!(
+            local.action_for("Diff with issue"),
+            Some(OriginAction::Diff)
+        );
+
+        let origin = OriginActionMenu::for_origin_task(
+            "origin-sync-tui",
+            "Origin sync TUI",
+            OriginLabel::new("linear", "WT-142"),
+        );
+        assert_eq!(origin.action_for("Fetch origin"), Some(OriginAction::Fetch));
+        assert_eq!(
+            origin.action_for("Pull from issue"),
+            Some(OriginAction::Pull)
+        );
+        assert_eq!(origin.action_for("Push to issue"), Some(OriginAction::Push));
+        assert_eq!(
+            origin.action_for("Open issue in browser"),
+            Some(OriginAction::OpenInBrowser)
+        );
+    }
+
+    #[test]
+    fn enabled_action_lookup_skips_disabled_items() {
+        let origin = OriginActionMenu::for_origin_task(
+            "origin-sync-tui",
+            "Origin sync TUI",
+            OriginLabel::new("linear", "WT-142"),
+        );
+        assert_eq!(origin.enabled_action(OriginAction::Publish), None);
+
+        let item = origin.enabled_action(OriginAction::Diff).unwrap();
+        assert_eq!(item.shortcut(), "d");
+    }
+
+    #[test]
+    fn shortcut_resolves_to_enabled_action() {
+        let origin = OriginActionMenu::for_origin_task(
+            "origin-sync-tui",
+            "Origin sync TUI",
+            OriginLabel::new("linear", "WT-142"),
+        );
+        assert_eq!(origin.action_for_shortcut("P"), Some(OriginAction::Push));
+        let local = OriginActionMenu::for_local_task("scratch-clean", "Scratch cleanup");
+        assert_eq!(local.action_for_shortcut("P"), None);
+    }
 
     #[test]
     fn task_menu_disables_diff_without_origin() {
