@@ -181,9 +181,9 @@ Prepare local TaskDocuments without starting work:
 ```bash
 wt task list
 wt task list --all
-wt task import PROJ-123
-wt task import
-wt task publish add-profile-docs
+wt task origin import PROJ-123
+wt task origin import
+wt task origin publish add-profile-docs
 ```
 
 Prepare saved workflows when local tasks or issues need coordination:
@@ -255,21 +255,28 @@ merge.
   the full TaskDocument inventory. Both modes report invalid task TOML files
   and do not start worktrees, branches, TaskRuns, Workflows, provider issues, or
   pull requests.
-- `wt task import [<issue>...]` imports provider issues as TaskDocuments,
+- `wt task origin import [<issue>...]` imports provider issues as TaskDocuments,
   records title, branch, body, and `[origin]`, and may materialize the provider
   issue branch first; it does not start worktrees, local branches, TaskRuns,
   Workflows, or pull requests.
 - `wt run task [<task>...]` starts one worktree per selected TaskDocument.
-- `wt task publish [<task>...]` creates provider issues from TaskDocuments,
+- `wt task origin publish [<task>...]` creates provider issues from TaskDocuments,
   rewrites `branch` to the created issue key plus the existing branch slug, and
   records `[origin]`; it does not start worktrees, local branches, or TaskRuns.
+- `wt task origin fetch|diff|pull|push <task>` manages an existing
+  TaskDocument `[origin]`: fetch writes provider evidence, diff is read-only,
+  pull applies selected provider title/body locally, and push writes selected
+  provider comments or fields after preview.
 - `Workflow` files in `<repo-root>/.wt/execution/workflows/<id>.toml` save coordinated execution.
   Optional top-level `title`, `body`, and `[origin]` record the larger human
   context for the saved plan. Workflow `[origin]` belongs to the large
   issue-like unit represented by the Workflow; TaskDocument `[origin]` belongs
   only to a runnable slice that is itself a provider issue.
-  `single` shares one workspace, `batch` runs independent branches from one
-  base, and `stack` runs ordered branches as a parent chain.
+- `wt workflow origin attach|fetch|diff|pull|push <workflow>` manages only the
+  saved Workflow title, body, and `[origin]`; it does not propagate origin state
+  into child TaskDocuments.
+- Workflow mode `single` shares one workspace, `batch` runs independent branches
+  from one base, and `stack` runs ordered branches as a parent chain.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid
   Workflow files whether or not they are runnable and reports invalid workflow
   TOML files instead of hiding parse failures.
@@ -610,9 +617,9 @@ there for one named profile.
 | `wt run pr` | Start worktrees from pull requests |
 | `wt run branch` | Start work from branch-name text |
 | `wt task list` | List actionable local TaskDocuments |
-| `wt task import` | Import provider issues as local TaskDocuments |
+| `wt task origin import` | Import provider issues as local TaskDocuments |
 | `wt run task` | Start work from local TaskDocuments |
-| `wt task publish` | Publish local TaskDocuments as provider issues |
+| `wt task origin publish` | Publish local TaskDocuments as provider issues |
 | `wt workflow` | Prepare, inspect, repair, archive, and pass saved workflow tasks |
 | `wt run workflow` | Start runnable tasks from saved workflows |
 | `wt ui` | Start the read-only personal state web UI |

@@ -1359,9 +1359,14 @@ TaskDocument TOML parse/validation failure는 조용히 숨기지 않고 text wa
 provider issue, pull request, agent setup을 만들거나 수정하지 않는다. Workflow inventory는
 계속 `wt workflow list`, worktree/branch/site state는 계속 `wt list`가 맡는다.
 
+TaskDocument origin은 runnable slice 하나가 provider issue 하나와 연결되는 durable link다.
+Workflow origin은 saved Workflow의 title/body/context가 provider issue 하나와 연결되는
+workflow-level link다. 두 `[origin]`은 scope가 다르며, Workflow `[origin]`은 child
+TaskDocument `[origin]`, TaskRun status, PR closing keyword로 자동 전파되지 않는다.
+
 TaskDocument import는 configured issue provider의 기존 issue를 local task 정의로
-가져오는 side effect다. Canonical command shape는 `wt task import` 또는
-`wt task import <issue>...`다. Bare `wt task import`는 provider issue를
+가져오는 side effect다. Canonical command shape는 `wt task origin import` 또는
+`wt task origin import <issue>...`다. Bare `wt task origin import`는 provider issue를
 multi-select로 고르게 하고, 명시 issue id는 scriptable path로 남긴다. `import`는
 `<repo-root>/.wt/execution/tasks/<safe-issue-id>.toml`에 title, branch, body, `[origin]`을 기록한다.
 이때 branch는 `wt run issue <issue>`가 사용할 provider issue branch와 같은 값이어야 하며,
@@ -1369,8 +1374,8 @@ multi-select로 고르게 하고, 명시 issue id는 scriptable path로 남긴�
 `gh issue develop`을 호출할 수 있다. Import는 provider branch materialization 외에는
 worktree, local branch, TaskRun, Workflow, pull request, agent setup을 만들지 않는다.
 Provider가 branch를 공급하거나 materialize할 수 없으면 branch가 빈 TaskDocument를 쓰지
-말고 실패해야 한다. `[origin]`은 provider issue와의 durable link이지, 자동 동기화 계약이
-아니다.
+말고 실패해야 한다. `[origin]`은 provider issue와의 durable link이지, 자동 양방향 업데이트
+계약이 아니다.
 
 Import ambiguity는 local TaskDocument write 전에 실패해야 한다. Configured issue
 provider가 없으면 실패한다. 같은 invocation 안의 duplicate issue id는 실패한다. Provider
@@ -1380,8 +1385,8 @@ provider가 없으면 실패한다. 같은 invocation 안의 duplicate issue id�
 help/test/documentation이 먼저 필요하다.
 
 TaskDocument publish는 local task 정의를 configured issue provider의 issue로 만드는
-side effect다. Canonical command shape는 `wt task publish` 또는
-`wt task publish <task>...`다. Bare `wt task publish`는 아직 `[origin]`이 없는 local
+side effect다. Canonical command shape는 `wt task origin publish` 또는
+`wt task origin publish <task>...`다. Bare `wt task origin publish`는 아직 `[origin]`이 없는 local
 TaskDocument를 multi-select로 고르게 하고, 명시 task key는 scriptable path로 남긴다.
 `publish`는 각 task의 provider issue 생성, provider-keyed `branch` rewrite, 그리고
 `<repo-root>/.wt/execution/tasks/<task>.toml`의 `origin` 업데이트가 모두 끝났을 때만 해당 task를
@@ -1389,12 +1394,49 @@ TaskDocument를 multi-select로 고르게 하고, 명시 task key는 scriptable 
 durable link이지, 아직 publish해야 한다는 pending request가 아니다. 성공 output은 생성된
 provider issue와 함께 old branch와 new branch를 보여줘야 한다.
 
+Legacy `wt task import`와 `wt task publish`는 old script migration을 위한 hidden alias일
+때만 남을 수 있다. Primary help, README examples, consistency docs의 canonical command는
+항상 `wt task origin import`와 `wt task origin publish`를 가리켜야 한다.
+
 `wt run issue`는 이미 존재하는 provider issue에서 worktree를 시작하는 명령으로 남긴다. Bare
 `wt run issue`는 provider issue를 multi-select로 고르게 하고, 명시 issue key 목록은
 scriptable path로 남긴다.
-Provider issue를 TaskDocument로 가져오는 흐름은 `wt task import`, Local TaskDocument를
-provider issue로 만드는 흐름은 `wt task publish`다. `wt run issue import`, `wt run issue create`,
-`sync`, `pull`, `push`, `export` 같은 이름을 같은 개념의 alias로 추가하지 않는다.
+Provider issue를 TaskDocument로 가져오는 흐름은 `wt task origin import`, Local TaskDocument를
+provider issue로 만드는 흐름은 `wt task origin publish`다. `wt run issue import`,
+`wt run issue create`, 양방향 자동 업데이트, `export` 같은 이름을 같은 개념의 alias로
+추가하지 않는다.
+
+TaskDocument origin management는 existing `[origin]` link와 fetched provider evidence를
+다루는 별도 command set이다. Canonical command shape는
+`wt task origin fetch|diff|pull|push <task>`다. `fetch`는 provider issue를 읽어
+`<repo-root>/.wt/execution/origins/tasks/<task>.toml` snapshot evidence만 쓰고 local
+TaskDocument title/body/branch를 바꾸지 않는다. `diff`는 local TaskDocument title/body와
+fetched provider evidence를 비교하는 read-only command이며 provider나 local 파일에 쓰지
+않는다. `pull`은 preview와 field selection 뒤 selected provider title/body만 local
+TaskDocument에 적용한다. `push`는 preview와 confirmation 뒤 provider issue comment append
+또는 selected title/body field overwrite를 수행한다. Comment-only push는 title/body baseline을
+전진시키지 않는다.
+
+Workflow origin management는 saved Workflow의 provider issue link와 fetched provider
+evidence만 다룬다. Canonical command shape는
+`wt workflow origin attach|fetch|diff|pull|push <workflow>`다. `attach`는 saved Workflow
+top-level `[origin]`만 기록한다. `fetch`는
+`<repo-root>/.wt/execution/origins/workflows/<workflow-id>.toml` snapshot evidence만 쓴다.
+`diff`는 Workflow title/body와 fetched provider evidence를 비교하는 read-only command다.
+`pull`은 preview와 field selection 뒤 selected provider title/body만 Workflow에 적용한다.
+`push`는 preview와 confirmation 뒤 provider issue comment append 또는 selected title/body
+field overwrite를 수행한다. Workflow origin action은 child TaskDocument origin을 만들거나
+수정하지 않고, TaskRun status나 PR closing keyword도 바꾸지 않는다.
+
+Origin snapshot은 source-of-truth file이 아니라 last provider read와 local comparison point를
+보존하는 evidence file이다. Task snapshot path는
+`<repo-root>/.wt/execution/origins/tasks/<task>.toml`이고, Workflow snapshot path는
+`<repo-root>/.wt/execution/origins/workflows/<workflow-id>.toml`이다. Snapshot TOML은
+top-level `kind`, `owner`, `origin`, `baseline`, `remote`, `provider_context`를 가진다.
+`baseline.fields`와 `baseline.local_hashes`는 비교 기준점의 local title/body와 hash를 기록하고,
+`remote.fields`, `remote.fetched_at`, `remote.remote_updated_at`은 마지막 provider evidence를
+기록한다. Snapshot owner와 current local `[origin]`이 맞지 않으면 active comparison에는 쓰지
+않고 새 fetch가 필요하다.
 
 여러 대상을 시작하는 `wt run issue`, `wt run pr`, `wt run task`는 기본 `--jobs 3`
 bounded parallel 실행을 사용하고, 순차 실행과 interactive conflict prompt가 필요하면
@@ -1433,13 +1475,13 @@ Dry-run은 첫 write-path의 필수 표면이 아니다. 추가한다면 실제 
 거친 뒤 생성될 provider, title, body, branch metadata, 업데이트될 `origin` 위치를 보여주는
 plan이어야 하고, TaskDocument에 pending state를 저장해서 dry-run 결과를 표현하지 않는다.
 
-`wt task publish --help`는 이 side effect를 그대로 설명해야 한다. 즉 provider issue를
+`wt task origin publish --help`는 이 side effect를 그대로 설명해야 한다. 즉 provider issue를
 생성하고 local TaskDocument branch rewrite와 origin 기록을 수행한다는 점, 이미 origin이
 있거나 provider가 불명확하거나 old branch state가 있으면 실패한다는 점, bare publish는 아직
 origin이 없는 TaskDocument를 고른다는 점을 보여줘야 한다. Worktree 시작, TaskRun 생성,
 workflow 실행, branch landing처럼 다른 lifecycle을 publish 도움말에 섞지 않는다.
 
-`wt task import --help`는 import가 provider issue에서 TaskDocument로 향하는
+`wt task origin import --help`는 import가 provider issue에서 TaskDocument로 향하는
 non-executing 흐름임을 그대로 설명해야 한다. 즉 explicit issue id와 bare provider issue
 selector를 모두 지원한다는 점, title/branch/body/`[origin]`을 기록한다는 점, provider
 branch materialization은 할 수 있지만 worktree/local branch/TaskRun/Workflow/PR/agent
@@ -1626,8 +1668,8 @@ eventual version bump.
 Workflow-level `title`/`body`/`[origin]` are saved to `<repo-root>/.wt/execution/workflows/<id>.toml` as
 top-level Workflow metadata. They appear in `wt workflow show` and workflow-started agent
 prompts as context, but do not change runnable selection, TaskRun lifecycle, landing
-policy, cleanup behavior, provider issue status transitions, provider sync, or PR
-issue-closing keywords. Prompt에서는 coordinator handoff가 먼저 전달되고, Workflow
+policy, cleanup behavior, provider issue status transitions, provider field/comment
+writes, or PR issue-closing keywords. Prompt에서는 coordinator handoff가 먼저 전달되고, Workflow
 metadata는 그 뒤 TaskDocument snapshot 근처에 배치된다. Existing `objective` values may
 be read only to diagnose or repair old local files, and any explicit repair should
 rewrite them into the canonical title/body/origin shape instead of preserving

@@ -1882,7 +1882,7 @@ mod tests {
     }
 
     #[test]
-    fn task_origin_help_marks_origin_sync_actions_as_enabled() {
+    fn task_origin_help_marks_origin_actions_as_enabled() {
         let mut command = Cli::command();
         let help = command
             .find_subcommand_mut("task")
@@ -1899,6 +1899,22 @@ mod tests {
         assert!(help.contains("push appends provider comments or selected title/body overwrites"));
         assert!(!help.contains("remain reserved"));
         assert!(!help.contains("attach/fetch/diff/pull/push are reserved"));
+    }
+
+    #[test]
+    fn workflow_origin_help_names_provider_issue_origin_scope() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("workflow")
+            .unwrap()
+            .find_subcommand_mut("origin")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("Manage provider issue origin links"));
+        assert!(help.contains("Workflow title, body, and [origin] only"));
+        assert!(help.contains("They do not update child TaskDocuments"));
     }
 
     #[test]
