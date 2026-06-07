@@ -259,6 +259,22 @@ git diff --check
 cargo test --locked --all-features
 ```
 
+Passing tests and a contract match are not proof of correctness — they only
+confirm the happy path the author chose to cover. For changes to a load-bearing
+path (a status filter, renderer, inventory scan, or any code several call sites
+depend on), do not stop at green tests: first enumerate the invariants that path
+must hold simultaneously, then adversarially try to break each one. Standing
+lenses to apply: malformed/corrupt input, ordering and precedence (newest vs
+older records), text-vs-TUI parity, O(N) re-scans, and selector/semantics
+agreement with the canonical command. Empirically (2026-06 task-triage), a
+review that checked only "tests green + matches the contract I wrote" approved
+fixes that an independent base-diff review then found broke an adjacent
+invariant five rounds running — and each narrow fix introduced the next defect.
+Enumerating invariants up front and grilling against them catches most of that
+before the gate. An independent review gate still has irreducible value: a
+coordinator who co-authored the task contract is blind to gaps in their own
+spec, so the gate is not redundant with a rigorous self-review.
+
 Accumulate findings across one inspection pass and send one consolidated
 message. Do not drip one message per finding.
 

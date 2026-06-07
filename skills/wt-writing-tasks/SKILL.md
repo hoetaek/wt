@@ -167,6 +167,20 @@ Run this checklist on the finished body; fix inline.
    groups, or any non-direct execution shape, verify that wt-ready will create
    any required `.wt/execution/workflows/*.toml` and report the launch target
    before `wt-work`.
+7. **Invariant coverage for load-bearing paths** — when the slice changes a
+   load-bearing path (a status filter, renderer, inventory scan, or any code
+   several call sites depend on), the body must enumerate the invariants that
+   path has to hold *simultaneously*, not just the happy-path change, with one
+   test per invariant. Happy-path tests pass while an adjacent invariant
+   silently breaks. Background: empirically (2026-06 task-triage, historical), a
+   body that specified only the intended change and green tests produced a fix
+   cascade — each narrow fix satisfied its finding but broke a different
+   invariant the contract never named, costing five review rounds. Standard
+   invariant axes to consider naming: malformed/corrupt input resilience,
+   record ordering/precedence (newest vs older), text-vs-TUI rendering parity,
+   single-scan performance (no per-row file reads), and agreement with the
+   canonical command's selector/semantics. Omit the check only when the slice
+   genuinely touches no shared path.
 
 ## Rationalizations
 
