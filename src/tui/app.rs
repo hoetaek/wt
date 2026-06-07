@@ -1,4 +1,5 @@
 use crate::origin_action_menu::{OriginAction, OriginActionMenu};
+use crate::tui::remote_ui::PrintKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserRow {
@@ -35,6 +36,86 @@ pub(crate) enum Outcome {
     Dispatch { key: String, action: OriginAction },
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PopupSpec {
+    Confirm {
+        prompt: String,
+        default: bool,
+    },
+    Select {
+        prompt: String,
+        items: Vec<String>,
+        multi: bool,
+    },
+    Input {
+        prompt: String,
+        default: Option<String>,
+    },
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PopupOutcome {
+    Bool(bool),
+    Index(usize),
+    Indices(Vec<usize>),
+    Text(String),
+    Cancelled,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+enum PopupState {
+    Confirm {
+        prompt: String,
+        selected: bool,
+    },
+    Select {
+        prompt: String,
+        items: Vec<String>,
+        multi: bool,
+        cursor: usize,
+        selected: Vec<bool>,
+    },
+    Input {
+        prompt: String,
+        buffer: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PopupView<'a> {
+    Confirm {
+        prompt: &'a str,
+        selected: bool,
+    },
+    Select {
+        prompt: &'a str,
+        items: &'a [String],
+        multi: bool,
+        cursor: usize,
+        selected: &'a [bool],
+    },
+    Input {
+        prompt: &'a str,
+        buffer: &'a str,
+    },
+}
+
+#[derive(Debug, Clone, Default)]
+struct OutputPanel {
+    lines: Vec<(PrintKind, String)>,
+    scroll: usize,
+}
+
+#[derive(Debug, Clone)]
+struct RunningAction {
+    key: String,
+    verb: String,
+    spinner_frame: usize,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct AppState {
     rows: Vec<BrowserRow>,
@@ -45,6 +126,9 @@ pub(crate) struct AppState {
     mode: Mode,
     status_line: String,
     copy: BrowserCopy,
+    popup: Option<PopupState>,
+    output: OutputPanel,
+    running: Option<RunningAction>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -107,6 +191,9 @@ impl AppState {
             mode: Mode::List,
             status_line: default_status_line(),
             copy,
+            popup: None,
+            output: OutputPanel::default(),
+            running: None,
         }
     }
 
@@ -124,6 +211,154 @@ impl AppState {
 
     pub(crate) fn status_line(&self) -> &str {
         &self.status_line
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn open_popup(&mut self, spec: PopupSpec) {
+        self.popup = Some(match spec {
+            PopupSpec::Confirm { prompt, default } => PopupState::Confirm {
+                prompt,
+                selected: default,
+            },
+            PopupSpec::Select {
+                prompt,
+                items,
+                multi,
+            } => {
+                let selected = vec![false; items.len()];
+                PopupState::Select {
+                    prompt,
+                    items,
+                    multi,
+                    cursor: 0,
+                    selected,
+                }
+            }
+            PopupSpec::Input { prompt, default } => PopupState::Input {
+                prompt,
+                buffer: default.unwrap_or_default(),
+            },
+        });
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn has_popup(&self) -> bool {
+        self.popup.is_some()
+    }
+
+    pub(crate) fn popup_view(&self) -> Option<PopupView<'_>> {
+        match self.popup.as_ref()? {
+            PopupState::Confirm { prompt, selected } => Some(PopupView::Confirm {
+                prompt,
+                selected: *selected,
+            }),
+            PopupState::Select {
+                prompt,
+                items,
+                multi,
+                cursor,
+                selected,
+            } => Some(PopupView::Select {
+                prompt,
+                items,
+                multi: *multi,
+                cursor: *cursor,
+                selected,
+            }),
+            PopupState::Input { prompt, buffer } => Some(PopupView::Input { prompt, buffer }),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn handle_popup_key(&mut self, key: KeyInput) -> Option<PopupOutcome> {
+        let outcome = match self.popup.as_mut()? {
+            PopupState::Confirm { selected, .. } => handle_confirm_popup_key(selected, key),
+            PopupState::Select {
+                items,
+                multi,
+                cursor,
+                selected,
+                ..
+            } => handle_select_popup_key(items, *multi, cursor, selected, key),
+            PopupState::Input { buffer, .. } => handle_input_popup_key(buffer, key),
+        };
+        if outcome.is_some() {
+            self.popup = None;
+        }
+        outcome
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn push_output(&mut self, kind: PrintKind, line: String) {
+        self.output.lines.push((kind, line));
+        self.output.scroll = self
+            .output
+            .scroll
+            .min(self.output.lines.len().saturating_sub(1));
+    }
+
+    pub(crate) fn output_lines(&self) -> &[(PrintKind, String)] {
+        &self.output.lines
+    }
+
+    pub(crate) fn output_scroll(&self) -> usize {
+        self.output.scroll
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn scroll_output_up(&mut self) {
+        self.output.scroll = self
+            .output
+            .scroll
+            .saturating_add(1)
+            .min(self.output.lines.len().saturating_sub(1));
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn scroll_output_down(&mut self) {
+        self.output.scroll = self.output.scroll.saturating_sub(1);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn begin_action(&mut self, key: &str, verb: &str) {
+        if self.running.is_some() {
+            return;
+        }
+        self.running = Some(RunningAction {
+            key: key.to_string(),
+            verb: verb.to_string(),
+            spinner_frame: 0,
+        });
+        self.status_line = format!("{verb}ing {key}...");
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn action_in_flight(&self) -> bool {
+        self.running.is_some()
+    }
+
+    pub(crate) fn spinner_frame(&self) -> Option<usize> {
+        self.running.as_ref().map(|running| running.spinner_frame)
+    }
+
+    pub(crate) fn running_status_line(&self) -> Option<String> {
+        self.running
+            .as_ref()
+            .map(|running| format!("{}ing {}...", running.verb, running.key))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn tick_spinner(&mut self) {
+        if let Some(running) = self.running.as_mut() {
+            running.spinner_frame = running.spinner_frame.saturating_add(1);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn finish_action(&mut self, status: String) {
+        self.running = None;
+        self.popup = None;
+        self.status_line = status;
     }
 
     pub(crate) fn filter(&self) -> &str {
@@ -400,6 +635,75 @@ impl AppState {
     }
 }
 
+fn handle_confirm_popup_key(selected: &mut bool, key: KeyInput) -> Option<PopupOutcome> {
+    match key {
+        KeyInput::Enter => Some(PopupOutcome::Bool(*selected)),
+        KeyInput::Esc => Some(PopupOutcome::Cancelled),
+        KeyInput::Char('y') | KeyInput::Char('Y') => {
+            *selected = true;
+            None
+        }
+        KeyInput::Char('n') | KeyInput::Char('N') => {
+            *selected = false;
+            None
+        }
+        KeyInput::Up | KeyInput::Down | KeyInput::Backspace | KeyInput::Char(_) => None,
+    }
+}
+
+fn handle_select_popup_key(
+    items: &[String],
+    multi: bool,
+    cursor: &mut usize,
+    selected: &mut [bool],
+    key: KeyInput,
+) -> Option<PopupOutcome> {
+    match key {
+        KeyInput::Enter if multi => Some(PopupOutcome::Indices(
+            selected
+                .iter()
+                .enumerate()
+                .filter_map(|(index, selected)| selected.then_some(index))
+                .collect(),
+        )),
+        KeyInput::Enter => Some(PopupOutcome::Index(*cursor)),
+        KeyInput::Esc => Some(PopupOutcome::Cancelled),
+        KeyInput::Down => {
+            if !items.is_empty() {
+                *cursor = (*cursor + 1).min(items.len() - 1);
+            }
+            None
+        }
+        KeyInput::Up => {
+            *cursor = cursor.saturating_sub(1);
+            None
+        }
+        KeyInput::Char(' ') if multi => {
+            if let Some(selected) = selected.get_mut(*cursor) {
+                *selected = !*selected;
+            }
+            None
+        }
+        KeyInput::Backspace | KeyInput::Char(_) => None,
+    }
+}
+
+fn handle_input_popup_key(buffer: &mut String, key: KeyInput) -> Option<PopupOutcome> {
+    match key {
+        KeyInput::Enter => Some(PopupOutcome::Text(buffer.clone())),
+        KeyInput::Esc => Some(PopupOutcome::Cancelled),
+        KeyInput::Backspace => {
+            buffer.pop();
+            None
+        }
+        KeyInput::Char(ch) => {
+            buffer.push(ch);
+            None
+        }
+        KeyInput::Up | KeyInput::Down => None,
+    }
+}
+
 fn default_status_line() -> String {
     "j/k move  / filter  Enter actions  q quit".into()
 }
@@ -443,6 +747,87 @@ mod tests {
             row("workflow-docs", "Workflow origin docs", "stale"),
             row("scratch-clean", "Scratch cleanup", "local"),
         ])
+    }
+
+    #[test]
+    fn popup_owns_keys_and_esc_cancels() {
+        let mut app = app();
+        app.open_popup(PopupSpec::Confirm {
+            prompt: "Push?".into(),
+            default: false,
+        });
+        assert!(app.has_popup());
+        let outcome = app.handle_popup_key(KeyInput::Esc);
+        assert_eq!(outcome, Some(PopupOutcome::Cancelled));
+        assert!(!app.has_popup());
+    }
+
+    #[test]
+    fn confirm_popup_enter_returns_selected_bool() {
+        let mut app = app();
+        app.open_popup(PopupSpec::Confirm {
+            prompt: "Push?".into(),
+            default: false,
+        });
+        app.handle_popup_key(KeyInput::Char('y'));
+        let outcome = app.handle_popup_key(KeyInput::Enter);
+        assert_eq!(outcome, Some(PopupOutcome::Bool(true)));
+    }
+
+    #[test]
+    fn multi_select_popup_space_toggles_and_enter_confirms() {
+        let mut app = app();
+        app.open_popup(PopupSpec::Select {
+            prompt: "Pull fields".into(),
+            items: vec!["title".into(), "body".into()],
+            multi: true,
+        });
+        app.handle_popup_key(KeyInput::Char(' '));
+        app.handle_popup_key(KeyInput::Down);
+        app.handle_popup_key(KeyInput::Char(' '));
+        let outcome = app.handle_popup_key(KeyInput::Enter);
+        assert_eq!(outcome, Some(PopupOutcome::Indices(vec![0, 1])));
+    }
+
+    #[test]
+    fn input_popup_collects_typed_text() {
+        let mut app = app();
+        app.open_popup(PopupSpec::Input {
+            prompt: "Issue id to attach".into(),
+            default: None,
+        });
+        for ch in "WT-7".chars() {
+            app.handle_popup_key(KeyInput::Char(ch));
+        }
+        app.handle_popup_key(KeyInput::Backspace);
+        let outcome = app.handle_popup_key(KeyInput::Enter);
+        assert_eq!(outcome, Some(PopupOutcome::Text("WT-".into())));
+    }
+
+    #[test]
+    fn output_panel_accumulates_and_scrolls() {
+        let mut app = app();
+        assert!(app.output_lines().is_empty());
+        for i in 0..50 {
+            app.push_output(PrintKind::Plain, format!("line {i}"));
+        }
+        assert_eq!(app.output_lines().len(), 50);
+        app.scroll_output_up();
+        app.scroll_output_down();
+    }
+
+    #[test]
+    fn running_action_sets_spinner_status_and_blocks_second_dispatch() {
+        let mut app = app();
+        app.begin_action("origin-sync-tui", "pull");
+        assert!(app.action_in_flight());
+        assert!(app.status_line().contains("pull"));
+        app.tick_spinner();
+        app.push_output(PrintKind::Plain, "Pull preview - WT-142".into());
+        app.finish_action("pulled origin-sync-tui".into());
+        assert!(!app.action_in_flight());
+        assert_eq!(app.status_line(), "pulled origin-sync-tui");
+        assert_eq!(app.output_lines().len(), 1);
     }
 
     #[test]

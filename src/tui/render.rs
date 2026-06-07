@@ -1,4 +1,5 @@
-use crate::tui::app::{AppState, BrowserRow, Mode};
+use crate::tui::app::{AppState, BrowserRow, Mode, PopupView};
+use crate::tui::remote_ui::PrintKind;
 use crate::tui::theme;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
@@ -7,38 +8,44 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 
 const PREVIEW_MIN_HEIGHT: u16 = 16;
+const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
 
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &AppState) {
     let area = frame.area();
-    let show_preview = area.height >= PREVIEW_MIN_HEIGHT;
-    let chunks = if show_preview {
-        Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Min(5),
-            Constraint::Length(7),
-            Constraint::Length(1),
-        ])
-        .split(area)
-    } else {
-        Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(area)
-    };
-
-    draw_header(frame, chunks[0], app);
-    draw_rows(frame, chunks[1], app);
-    if show_preview {
-        draw_preview(frame, chunks[2], app);
-        draw_status(frame, chunks[3], app);
-    } else {
-        draw_status(frame, chunks[2], app);
+    let show_output = !app.output_lines().is_empty();
+    let show_preview = area.height >= PREVIEW_MIN_HEIGHT
+        && (!show_output || area.height >= PREVIEW_MIN_HEIGHT + 6);
+    let row_min_height = if show_preview { 5 } else { 1 };
+    let mut constraints = vec![Constraint::Length(3), Constraint::Min(row_min_height)];
+    if show_output {
+        constraints.push(Constraint::Length(output_panel_height(area)));
     }
+    if show_preview {
+        constraints.push(Constraint::Length(7));
+    }
+    constraints.push(Constraint::Length(1));
+
+    let chunks = Layout::vertical(constraints).split(area);
+    let mut chunk_index = 0;
+    draw_header(frame, chunks[chunk_index], app);
+    chunk_index += 1;
+    draw_rows(frame, chunks[chunk_index], app);
+    chunk_index += 1;
+    if show_output {
+        draw_output_panel(frame, chunks[chunk_index], app);
+        chunk_index += 1;
+    }
+    if show_preview {
+        draw_preview(frame, chunks[chunk_index], app);
+        chunk_index += 1;
+    }
+    draw_status(frame, chunks[chunk_index], app);
 
     if app.mode() == Mode::Menu {
         draw_menu(frame, centered_rect(area), app);
+    }
+    if let Some(popup) = app.popup_view() {
+        draw_popup(frame, area, popup);
     }
 }
 
@@ -186,19 +193,60 @@ fn draw_preview(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     frame.render_widget(preview, area);
 }
 
+fn draw_output_panel(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
+    let visible_count = area.height.saturating_sub(2) as usize;
+    let lines = app.output_lines();
+    let start = output_viewport_start(lines.len(), visible_count, app.output_scroll());
+    let rendered_lines = lines
+        .iter()
+        .skip(start)
+        .take(visible_count)
+        .map(|(kind, line)| output_line(*kind, line))
+        .collect::<Vec<_>>();
+    let output = Paragraph::new(rendered_lines).block(
+        Block::default()
+            .title("Output")
+            .borders(Borders::ALL)
+            .border_style(theme::chrome_style())
+            .title_style(theme::chrome_style()),
+    );
+    frame.render_widget(output, area);
+}
+
 fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
-    let line = if app.mode() == Mode::FilterInput {
+    let base_status = app
+        .running_status_line()
+        .unwrap_or_else(|| app.status_line().to_string());
+    let mut line = if app.mode() == Mode::FilterInput {
         format!("filter: {}  Esc clear", app.filter())
     } else if !app.diagnostics().is_empty() {
-        format!("{}  {}", app.diagnostics().join("  "), app.status_line())
+        format!("{}  {}", app.diagnostics().join("  "), base_status)
     } else {
-        app.status_line().to_string()
+        base_status
     };
+    if let Some(frame_index) = app.spinner_frame() {
+        line = format!(
+            "{} {line}",
+            SPINNER_FRAMES[frame_index % SPINNER_FRAMES.len()]
+        );
+    }
     frame.render_widget(Paragraph::new(Line::styled(line, theme::dim_style())), area);
 }
 
 fn centered_rect(area: Rect) -> Rect {
     let [area] = Layout::vertical([Constraint::Length(14)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [area] = Layout::horizontal([Constraint::Percentage(70)])
+        .flex(Flex::Center)
+        .areas(area);
+    area
+}
+
+fn popup_rect(area: Rect, desired_height: u16) -> Rect {
+    let max_height = area.height.saturating_mul(60).saturating_div(100).max(3);
+    let height = desired_height.min(max_height).min(area.height.max(1));
+    let [area] = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
         .areas(area);
     let [area] = Layout::horizontal([Constraint::Percentage(70)])
@@ -249,11 +297,171 @@ fn draw_menu(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     frame.render_widget(menu, area);
 }
 
+fn draw_popup(frame: &mut Frame<'_>, area: Rect, popup: PopupView<'_>) {
+    let area = popup_rect(area, popup_desired_height(popup));
+    frame.render_widget(Clear, area);
+    match popup {
+        PopupView::Confirm { prompt, selected } => {
+            draw_confirm_popup(frame, area, prompt, selected)
+        }
+        PopupView::Select {
+            prompt,
+            items,
+            multi,
+            cursor,
+            selected,
+        } => draw_select_popup(frame, area, prompt, items, multi, cursor, selected),
+        PopupView::Input { prompt, buffer } => draw_input_popup(frame, area, prompt, buffer),
+    }
+}
+
+fn popup_desired_height(popup: PopupView<'_>) -> u16 {
+    match popup {
+        PopupView::Confirm { .. } | PopupView::Input { .. } => 5,
+        PopupView::Select { items, .. } => (items.len() as u16).saturating_add(3).max(5),
+    }
+}
+
+fn draw_confirm_popup(frame: &mut Frame<'_>, area: Rect, prompt: &str, selected: bool) {
+    let choice = if selected { "(Y/n)" } else { "(y/N)" };
+    let popup = Paragraph::new(vec![
+        Line::from(choice).alignment(Alignment::Center),
+        Line::styled("y/n choose  Enter confirm  Esc cancel", theme::dim_style())
+            .alignment(Alignment::Center),
+    ])
+    .block(popup_block(prompt));
+    frame.render_widget(popup, area);
+}
+
+fn draw_select_popup(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    prompt: &str,
+    items: &[String],
+    multi: bool,
+    cursor: usize,
+    selected: &[bool],
+) {
+    let item_capacity = area.height.saturating_sub(3) as usize;
+    let offset = selected_viewport_offset(cursor, item_capacity, items.len());
+    let mut lines = items
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(item_capacity)
+        .map(|(index, item)| select_item_line(index, item, multi, cursor, selected))
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        lines.push(Line::styled("No choices", theme::dim_style()).alignment(Alignment::Center));
+    }
+    lines.push(
+        Line::styled(select_popup_hint(multi), theme::dim_style()).alignment(Alignment::Center),
+    );
+    let popup = Paragraph::new(lines).block(popup_block(prompt));
+    frame.render_widget(popup, area);
+}
+
+fn draw_input_popup(frame: &mut Frame<'_>, area: Rect, prompt: &str, buffer: &str) {
+    let input = if buffer.is_empty() {
+        "_".to_string()
+    } else {
+        format!("{buffer}_")
+    };
+    let popup = Paragraph::new(vec![
+        Line::from(input),
+        Line::styled("Enter submit  Esc cancel", theme::dim_style()).alignment(Alignment::Center),
+    ])
+    .block(popup_block(prompt));
+    frame.render_widget(popup, area);
+}
+
+fn popup_block<'a>(title: &'a str) -> Block<'a> {
+    Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(theme::chrome_style())
+        .title_style(theme::chrome_style())
+}
+
 fn chrome_block<'a>() -> Block<'a> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(theme::chrome_style())
         .title_style(theme::chrome_style())
+}
+
+fn output_panel_height(area: Rect) -> u16 {
+    let available = area.height.saturating_sub(4).max(1);
+    area.height
+        .saturating_mul(30)
+        .saturating_div(100)
+        .clamp(3, 8)
+        .min(available)
+}
+
+fn output_viewport_start(line_count: usize, visible_count: usize, scroll: usize) -> usize {
+    if visible_count == 0 || line_count <= visible_count {
+        return 0;
+    }
+    let max_start = line_count - visible_count;
+    max_start.saturating_sub(scroll.min(max_start))
+}
+
+fn output_line(kind: PrintKind, text: &str) -> Line<'_> {
+    Line::styled(text, output_style(kind))
+}
+
+fn output_style(kind: PrintKind) -> Style {
+    match kind {
+        PrintKind::Step => theme::chrome_style(),
+        PrintKind::Plain => Style::default(),
+        PrintKind::Dim => theme::dim_style(),
+        PrintKind::Warning => status_style("stale"),
+        PrintKind::Error => status_style("error"),
+    }
+}
+
+fn selected_viewport_offset(cursor: usize, visible_count: usize, item_count: usize) -> usize {
+    if visible_count == 0 || item_count <= visible_count {
+        return 0;
+    }
+    let max_start = item_count - visible_count;
+    cursor
+        .saturating_sub(visible_count.saturating_sub(1))
+        .min(max_start)
+}
+
+fn select_item_line<'a>(
+    index: usize,
+    item: &'a str,
+    multi: bool,
+    cursor: usize,
+    selected: &[bool],
+) -> Line<'a> {
+    let marker = if index == cursor { ">" } else { " " };
+    let text = if multi {
+        let check = if selected.get(index).copied().unwrap_or(false) {
+            "x"
+        } else {
+            " "
+        };
+        format!("{marker} [{check}] {item}")
+    } else {
+        format!("{marker} {item}")
+    };
+    if index == cursor {
+        Line::styled(text, theme::selected_style())
+    } else {
+        Line::from(text)
+    }
+}
+
+fn select_popup_hint(multi: bool) -> &'static str {
+    if multi {
+        "Space toggle  Enter select  Esc cancel"
+    } else {
+        "Enter select  Esc cancel"
+    }
 }
 
 fn status_style(status: &str) -> Style {
@@ -297,7 +505,8 @@ fn styled_segment_line<'a>(text: String, segment: &str, style: Style) -> Line<'a
 mod tests {
     use super::*;
     use crate::origin_action_menu::{OriginActionMenu, OriginLabel};
-    use crate::tui::app::{AppState, BrowserRow, KeyInput};
+    use crate::tui::app::{AppState, BrowserRow, KeyInput, PopupSpec};
+    use crate::tui::remote_ui::PrintKind;
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
     use ratatui::{Terminal, backend::TestBackend};
@@ -410,6 +619,36 @@ mod tests {
         assert!(text.contains("Origin sync TUI"));
         assert!(text.contains("Linear WT-142"));
         assert!(text.contains("q quit"));
+    }
+
+    #[test]
+    fn popup_renders_over_list_with_prompt() {
+        let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
+        app.open_popup(PopupSpec::Confirm {
+            prompt: "Push to provider?".into(),
+            default: false,
+        });
+        let text = buffer_text(80, 24, &app);
+        assert!(text.contains("Push to provider?"));
+        assert!(text.contains("y/N"));
+    }
+
+    #[test]
+    fn output_panel_hidden_when_empty_and_shown_when_filled() {
+        let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
+        let before = buffer_text(80, 24, &app);
+        assert!(!before.contains("Pull preview"));
+        app.push_output(PrintKind::Plain, "Pull preview - WT-142".into());
+        let after = buffer_text(80, 24, &app);
+        assert!(after.contains("Pull preview - WT-142"));
+    }
+
+    #[test]
+    fn running_action_paints_spinner_in_status_line() {
+        let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
+        app.begin_action("origin-sync-tui", "pull");
+        let text = buffer_text(80, 24, &app);
+        assert!(text.contains("pulling origin-sync-tui"));
     }
 
     #[test]
