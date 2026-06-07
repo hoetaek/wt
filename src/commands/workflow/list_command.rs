@@ -230,7 +230,7 @@ fn workflow_origin_health(ctx: &Ctx, id: &str, metadata: &WorkflowMetadata) -> O
         metadata.title.clone().unwrap_or_default(),
         metadata.body.clone().unwrap_or_default(),
     );
-    match read_workflow_snapshot(&ctx.storage_root, id) {
+    let mut health = match read_workflow_snapshot(&ctx.storage_root, id) {
         Ok(snapshot) => OriginHealthSummary::from_snapshot(
             &origin.provider,
             &origin.id,
@@ -239,7 +239,9 @@ fn workflow_origin_health(ctx: &Ctx, id: &str, metadata: &WorkflowMetadata) -> O
             "run",
         ),
         Err(err) => OriginHealthSummary::from_snapshot_error(&origin.provider, &origin.id, &err),
-    }
+    };
+    health.next_action = "none".into();
+    health
 }
 
 fn child_origin_summaries(ctx: &Ctx, metadata: &WorkflowMetadata) -> Vec<ChildOriginSummary> {
@@ -757,7 +759,7 @@ run = "run-2026-05-18-001-schema"
         assert_eq!(row.origin.as_ref().unwrap().provider, "linear");
         assert_eq!(row.origin.as_ref().unwrap().id, "WT-123");
         assert_eq!(row.origin_health.status, "stale");
-        assert_eq!(row.origin_health.next_action, "fetch");
+        assert_eq!(row.origin_health.next_action, "none");
         assert_eq!(row.origin_health.origin_label, "Linear WT-123");
         assert_eq!(row.child_origins[0].origin_label, "not published");
         assert_eq!(row.task_count, 1);
@@ -805,9 +807,76 @@ id = "WT-142"
         let row = &report.workflows[0];
 
         assert_eq!(row.origin_health.origin_label, "Linear WT-100");
+        assert_eq!(row.origin_health.next_action, "none");
         assert_eq!(row.child_origins.len(), 1);
         assert_eq!(row.child_origins[0].task, "origin-sync-tui");
         assert_eq!(row.child_origins[0].origin_label, "Linear WT-142");
+    }
+
+    #[test]
+    fn workflow_origin_health_does_not_advertise_reserved_origin_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        write_task(dir.path(), "local-child", "feature/local-child");
+        write_task_run(
+            dir.path(),
+            "run-2026-06-06-001-local-child",
+            "local-child",
+            "feature/local-child",
+            "prepared",
+            "2026-06-06-001",
+        );
+        write_workflow(
+            dir.path(),
+            "2026-06-06-001",
+            "batch",
+            r#"title = "Local workflow"
+"#,
+            r#"[[tasks]]
+task = "local-child"
+run = "run-2026-06-06-001-local-child"
+"#,
+        );
+        write_task(dir.path(), "origin-child", "feature/origin-child");
+        write_task_run(
+            dir.path(),
+            "run-2026-06-06-002-origin-child",
+            "origin-child",
+            "feature/origin-child",
+            "prepared",
+            "2026-06-06-002",
+        );
+        write_workflow(
+            dir.path(),
+            "2026-06-06-002",
+            "batch",
+            r#"title = "Origin workflow"
+origin = { provider = "linear", id = "WT-100" }
+"#,
+            r#"[[tasks]]
+task = "origin-child"
+run = "run-2026-06-06-002-origin-child"
+"#,
+        );
+
+        let report = collect(&ctx).unwrap();
+        let local = report
+            .workflows
+            .iter()
+            .find(|row| row.id == "2026-06-06-001")
+            .unwrap();
+        let origin = report
+            .workflows
+            .iter()
+            .find(|row| row.id == "2026-06-06-002")
+            .unwrap();
+
+        assert_eq!(local.origin_health.status, "local");
+        assert_eq!(local.origin_health.origin_label, "none");
+        assert_eq!(local.origin_health.next_action, "none");
+        assert_eq!(origin.origin_health.status, "stale");
+        assert_eq!(origin.origin_health.origin_label, "Linear WT-100");
+        assert_eq!(origin.origin_health.next_action, "none");
     }
 
     #[test]

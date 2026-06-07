@@ -200,7 +200,7 @@ impl OriginHealthSummary {
             origin_label: "none".into(),
             last_fetched: None,
             divergence: None,
-            next_action: "attach".into(),
+            next_action: "none".into(),
         }
     }
 
