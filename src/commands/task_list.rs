@@ -1,4 +1,5 @@
 use crate::context::Ctx;
+use crate::origin_action_menu::{OriginActionMenu, OriginLabel};
 use crate::origin_snapshot::{FieldSnapshot, OriginHealthSummary, read_task_snapshot};
 use crate::task::{self, TaskDocument};
 use crate::task_run;
@@ -53,6 +54,22 @@ struct TaskListRow {
     body_summary: Option<String>,
     #[serde(skip_serializing)]
     display: task::TaskDocumentDisplay,
+}
+
+impl TaskListRow {
+    #[allow(dead_code)]
+    pub(crate) fn origin_action_menu(&self) -> OriginActionMenu {
+        let title = self.display.label();
+        if let Some(origin) = &self.origin {
+            OriginActionMenu::for_origin_task(
+                &self.key,
+                title,
+                OriginLabel::new(&origin.provider, &origin.id),
+            )
+        } else {
+            OriginActionMenu::for_local_task(&self.key, title)
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -487,6 +504,30 @@ id = "WT-142"
         assert_eq!(report.tasks[0].origin_health.status, "conflict");
         assert_eq!(report.tasks[0].origin_health.next_action, "diff");
         assert_eq!(report.tasks[0].origin_health.origin_label, "Linear WT-142");
+    }
+
+    #[test]
+    fn task_row_builds_origin_action_menu() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let row = task_row(
+            &ctx,
+            "scratch-clean".into(),
+            "<repo-root>/.wt/execution/tasks/scratch-clean.toml".into(),
+            TaskDocument {
+                title: "Scratch cleanup".into(),
+                branch: "scratch-clean".into(),
+                body: String::new(),
+                origin: None,
+            },
+        );
+
+        let menu = row.origin_action_menu();
+        assert!(menu.enabled("Publish as issue"));
+        assert_eq!(
+            menu.disabled_reason("Pull from issue").unwrap(),
+            "no origin attached"
+        );
     }
 
     #[test]

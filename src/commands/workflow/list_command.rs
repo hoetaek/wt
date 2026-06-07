@@ -1,4 +1,5 @@
 use crate::context::Ctx;
+use crate::origin_action_menu::{ChildOriginLabel, OriginActionMenu, OriginLabel};
 use crate::origin_snapshot::{
     FieldSnapshot, OriginHealthSummary, origin_label, read_workflow_snapshot,
 };
@@ -63,6 +64,28 @@ struct WorkflowListRow {
     policy: WorkflowPolicySummary,
     updated_at: String,
     state_error: Option<String>,
+}
+
+impl WorkflowListRow {
+    #[allow(dead_code)]
+    pub(crate) fn origin_action_menu(&self) -> OriginActionMenu {
+        let origin = self
+            .origin
+            .as_ref()
+            .map(|origin| OriginLabel::new(&origin.provider, &origin.id));
+        let child_origins = self
+            .child_origins
+            .iter()
+            .map(|child| match (&child.provider, &child.id) {
+                (Some(provider), Some(id)) => {
+                    ChildOriginLabel::new(&child.task, Some(OriginLabel::new(provider, id)))
+                }
+                _ => ChildOriginLabel::with_label(&child.task, &child.origin_label),
+            })
+            .collect();
+
+        OriginActionMenu::for_workflow(&self.id, &self.title, origin, child_origins)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -811,6 +834,44 @@ id = "WT-142"
         assert_eq!(row.child_origins.len(), 1);
         assert_eq!(row.child_origins[0].task, "origin-sync-tui");
         assert_eq!(row.child_origins[0].origin_label, "Linear WT-142");
+    }
+
+    #[test]
+    fn workflow_row_builds_workflow_origin_action_menu() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Origin sync TUI"
+branch = "origin-sync-tui"
+body = "task body"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            workflows_dir.join("2026-06-06-001.toml"),
+            workflow_toml_with_one_task_origin(
+                "Ship provider-origin UX",
+                "WT-100",
+                "origin-sync-tui",
+            ),
+        )
+        .unwrap();
+
+        let report = collect(&ctx).unwrap();
+        let row = &report.workflows[0];
+        let menu = row.origin_action_menu();
+
+        assert!(menu.enabled("Diff workflow with issue"));
+        assert!(menu.render_plain().contains("child task actions"));
     }
 
     #[test]
