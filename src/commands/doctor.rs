@@ -20,7 +20,6 @@ const CODEX_HOOK_INSTALL_HINT: &str =
     "Run cmux hooks codex install --yes to enable reliable Codex status events.";
 const CODEX_WT_HOOK_INSTALL_HINT: &str =
     "Run wt setup to enable wt inbox delivery through detected agent hook dispatchers.";
-const WT_SETUP_HINT: &str = "Run wt setup to install per-machine wt integration.";
 const WT_INIT_HINT: &str = "Run wt init to create repo-local wt setup.";
 
 /// Typed, translatable catalog of doctor's human-facing prose. English is the
@@ -648,19 +647,27 @@ fn collect_shell_integration_check(config: &Config, checks: &mut Vec<DoctorCheck
                 Some(path.display().to_string()),
             ));
         }
-        Ok(_) => checks.push(DoctorCheck::warning(
+        Ok(_) => checks.push(DoctorCheck::warning_msg(
             "shell_integration",
-            format!("missing `{line}` in {}. {WT_SETUP_HINT}", path.display()),
+            DoctorMsg::ShellMissingLineIn {
+                line: line.to_string(),
+                path: path.display().to_string(),
+            },
         )),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            checks.push(DoctorCheck::warning(
+            checks.push(DoctorCheck::warning_msg(
                 "shell_integration",
-                format!("missing {}. {WT_SETUP_HINT}", path.display()),
+                DoctorMsg::ShellMissingPath {
+                    path: path.display().to_string(),
+                },
             ));
         }
-        Err(err) => checks.push(DoctorCheck::warning(
+        Err(err) => checks.push(DoctorCheck::warning_msg(
             "shell_integration",
-            format!("cannot read {}: {err}. {WT_SETUP_HINT}", path.display()),
+            DoctorMsg::ShellCannotRead {
+                path: path.display().to_string(),
+                err: err.to_string(),
+            },
         )),
     }
 }
@@ -698,9 +705,11 @@ fn collect_claude_hook_readiness_checks(ctx: &Ctx, config: &Config, checks: &mut
             "claude_wt_inbox_hook",
             DoctorMsg::WtSetupHint,
         )),
-        Err(err) => checks.push(DoctorCheck::warning(
+        Err(err) => checks.push(DoctorCheck::warning_msg(
             "claude_wt_inbox_hook",
-            format!("{err:#}. {WT_SETUP_HINT}"),
+            DoctorMsg::InboxHookErr {
+                err: format!("{err:#}"),
+            },
         )),
     }
 }
@@ -743,9 +752,11 @@ fn collect_repo_setup_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     if missing.is_empty() {
         checks.push(DoctorCheck::ok("core_dirs", Some("present".into())));
     } else {
-        checks.push(DoctorCheck::warning(
+        checks.push(DoctorCheck::warning_msg(
             "core_dirs",
-            format!("missing {}. {WT_INIT_HINT}", missing.join(", ")),
+            DoctorMsg::CoreDirsMissing {
+                paths: missing.join(", "),
+            },
         ));
     }
 
