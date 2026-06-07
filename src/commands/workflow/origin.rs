@@ -33,6 +33,7 @@ pub(crate) fn fetch(ctx: &Ctx, workflows: &[String]) -> Result<()> {
         return Ok(());
     }
     validate_fetchable_origin_workflows(&records)?;
+    validate_origin_providers_match_config(ctx, &records)?;
     let reader = build_issue_reader(ctx)?;
     fetch_resolved_with_reader(ctx, records, reader.as_ref())
 }
@@ -52,7 +53,7 @@ pub(crate) fn diff(ctx: &Ctx, workflows: &[String]) -> Result<()> {
 
     let reports = records
         .iter()
-        .map(|record| diff_workflow(ctx, &record.id))
+        .map(|record| diff_workflow(ctx, record))
         .collect::<Result<Vec<_>>>()?;
     if ctx.is_json() {
         write_json(&reports)?;
@@ -84,7 +85,7 @@ pub(crate) fn pull(ctx: &Ctx, workflows: &[String]) -> Result<()> {
     }
 
     for record in &records {
-        let report = diff_workflow_record(ctx, record)?;
+        let report = diff_workflow(ctx, record)?;
         print_diff_report(ctx, &report);
         let selection = prompt_pull_selection(ctx, &report)?;
         if !selection.any() {
@@ -92,7 +93,7 @@ pub(crate) fn pull(ctx: &Ctx, workflows: &[String]) -> Result<()> {
                 .print_warning(&format!("No workflow fields selected for {}", record.id));
             continue;
         }
-        pull_workflow_fields(ctx, &record.id, selection)?;
+        pull_workflow_record(ctx, record.clone(), selection)?;
         ctx.ui
             .print_plain(&format!("Pulled workflow origin fields for {}", record.id));
     }
@@ -116,6 +117,7 @@ pub(crate) fn push(ctx: &Ctx, workflows: &[String]) -> Result<()> {
         bail!("wt workflow origin push requires confirmation before writing to provider issues");
     }
 
+    validate_origin_providers_match_config(ctx, &records)?;
     let writer = build_issue_writer(ctx)?;
     for record in &records {
         let origin = require_origin(&record.id, &record.workflow, "push")?;
@@ -141,7 +143,7 @@ pub(crate) fn push(ctx: &Ctx, workflows: &[String]) -> Result<()> {
                 .print_warning(&format!("Skipped workflow origin push for {}", record.id));
             continue;
         }
-        push_workflow_with_writer(ctx, &record.id, selection, writer.as_ref())?;
+        push_workflow_record_with_writer(ctx, record.clone(), selection, writer.as_ref())?;
         ctx.ui
             .print_plain(&format!("Pushed workflow origin comment for {}", record.id));
     }
@@ -278,12 +280,7 @@ fn fetch_resolved_with_reader(
     Ok(())
 }
 
-fn diff_workflow(ctx: &Ctx, workflow: &str) -> Result<WorkflowOriginDiffReport> {
-    let record = read_workflow_record(ctx, workflow)?;
-    diff_workflow_record(ctx, &record)
-}
-
-fn diff_workflow_record(ctx: &Ctx, record: &WorkflowRecord) -> Result<WorkflowOriginDiffReport> {
+fn diff_workflow(ctx: &Ctx, record: &WorkflowRecord) -> Result<WorkflowOriginDiffReport> {
     let origin = require_origin(&record.id, &record.workflow, "diff")?;
     let snapshot = read_workflow_snapshot(&ctx.storage_root, &record.id)?.ok_or_else(|| {
         anyhow::anyhow!(
@@ -339,12 +336,21 @@ fn diff_workflow_record(ctx: &Ctx, record: &WorkflowRecord) -> Result<WorkflowOr
     })
 }
 
+#[cfg(test)]
 fn pull_workflow_fields(ctx: &Ctx, workflow: &str, selection: PullSelection) -> Result<()> {
+    let record = read_workflow_record(ctx, workflow)?;
+    pull_workflow_record(ctx, record, selection)
+}
+
+fn pull_workflow_record(
+    ctx: &Ctx,
+    mut record: WorkflowRecord,
+    selection: PullSelection,
+) -> Result<()> {
     if !selection.any() {
         return Ok(());
     }
 
-    let mut record = read_workflow_record(ctx, workflow)?;
     let origin = require_origin(&record.id, &record.workflow, "pull")?;
     let mut snapshot = read_workflow_snapshot(&ctx.storage_root, &record.id)?.ok_or_else(|| {
         anyhow::anyhow!(
@@ -389,9 +395,20 @@ fn push_workflow(
     push_workflow_with_writer(ctx, workflow, selection, &writer)
 }
 
+#[cfg(test)]
 fn push_workflow_with_writer(
     ctx: &Ctx,
     workflow: &str,
+    selection: PushSelection,
+    writer: &dyn WorkflowIssueWriter,
+) -> Result<()> {
+    let record = read_workflow_record(ctx, workflow)?;
+    push_workflow_record_with_writer(ctx, record, selection, writer)
+}
+
+fn push_workflow_record_with_writer(
+    ctx: &Ctx,
+    record: WorkflowRecord,
     selection: PushSelection,
     writer: &dyn WorkflowIssueWriter,
 ) -> Result<()> {
@@ -399,7 +416,6 @@ fn push_workflow_with_writer(
         return Ok(());
     }
 
-    let record = read_workflow_record(ctx, workflow)?;
     let origin = require_origin(&record.id, &record.workflow, "push")?;
     let mut updated_detail = None;
     if selection.title || selection.body {
@@ -680,6 +696,27 @@ fn validate_fetchable_origin_workflows(records: &[WorkflowRecord]) -> Result<()>
     Ok(())
 }
 
+fn validate_origin_providers_match_config(ctx: &Ctx, records: &[WorkflowRecord]) -> Result<()> {
+    let configured_provider = configured_issue_provider_name(ctx)?;
+    for record in records {
+        let origin = record
+            .workflow
+            .origin
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Workflow {} is missing [origin]", record.id))?;
+        let origin_provider = origin.provider.trim();
+        if origin_provider != configured_provider {
+            bail!(
+                "Workflow {} origin provider is {}, but configured issue provider is {}; refusing to route provider calls to the wrong backend",
+                record.id,
+                origin_provider,
+                configured_provider
+            );
+        }
+    }
+    Ok(())
+}
+
 fn require_origin<'a>(
     workflow_id: &str,
     workflow: &'a WorkflowMetadata,
@@ -846,7 +883,7 @@ fn write_json<T: Serialize>(value: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions};
     use crate::services::issues::{IssueComment, IssueCommenter, IssueDetail, IssueReader};
@@ -856,6 +893,25 @@ mod tests {
             root.to_path_buf(),
             root.to_path_buf(),
             Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+            CtxOptions::default(),
+        )
+    }
+
+    fn ctx_with_issue_provider(root: &std::path::Path, provider: IssueProviderType) -> Ctx {
+        let config = Config {
+            issues: Some(IssuesConfig {
+                provider,
+                gh_user: None,
+                origin_policy: Default::default(),
+            }),
+            ..Config::default()
+        };
+        Ctx::new_with_options(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            config,
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
             CtxOptions::default(),
@@ -997,6 +1053,46 @@ body = "task body"
     }
 
     #[test]
+    fn workflow_fetch_rejects_origin_provider_mismatch_before_provider_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_issue_provider(dir.path(), IssueProviderType::Github);
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            workflows_dir.join("2026-06-06-001.toml"),
+            workflow_toml_with_origin("Local workflow title", "local workflow body", "WT-100"),
+        )
+        .unwrap();
+
+        let err = fetch(&ctx, &["2026-06-06-001".to_string()])
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Workflow 2026-06-06-001 origin provider is linear"));
+        assert!(err.contains("configured issue provider is github"));
+    }
+
+    #[test]
+    fn workflow_push_rejects_origin_provider_mismatch_before_confirmation() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_issue_provider(dir.path(), IssueProviderType::Github);
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            workflows_dir.join("2026-06-06-001.toml"),
+            workflow_toml_with_origin("Local workflow title", "local workflow body", "WT-100"),
+        )
+        .unwrap();
+
+        let err = push(&ctx, &["2026-06-06-001".to_string()])
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Workflow 2026-06-06-001 origin provider is linear"));
+        assert!(err.contains("configured issue provider is github"));
+    }
+
+    #[test]
     fn workflow_pull_updates_workflow_title_only() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
@@ -1036,6 +1132,51 @@ body = "task body"
         assert_eq!(workflow.title.as_deref(), Some("Remote workflow title"));
         assert_eq!(workflow.body.as_deref(), Some("local workflow body"));
         assert_eq!(workflow.origin.unwrap().id, "WT-100");
+    }
+
+    #[test]
+    fn workflow_pull_preserves_explicit_resolved_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+        let ctx = Ctx::new_with_options(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+            CtxOptions::default(),
+        );
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        let external_dir = dir.path().join("external-workflows");
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(&external_dir).unwrap();
+        std::fs::write(
+            workflows_dir.join("2026-06-06-001.toml"),
+            workflow_toml_with_origin("Active workflow title", "active body", "WT-100"),
+        )
+        .unwrap();
+        let external_path = external_dir.join("2026-06-06-001.toml");
+        std::fs::write(
+            &external_path,
+            workflow_toml_with_origin("External workflow title", "external body", "WT-100"),
+        )
+        .unwrap();
+        let snapshot = crate::origin_snapshot::OriginSnapshot::workflow(
+            "2026-06-06-001",
+            crate::origin_snapshot::OriginRef::new("linear", "WT-100"),
+            crate::origin_snapshot::FieldSnapshot::new("External workflow title", "external body"),
+            crate::origin_snapshot::FieldSnapshot::new("Remote workflow title", "remote body"),
+        );
+        crate::origin_snapshot::write_snapshot(&ctx.storage_root, &snapshot).unwrap();
+        let external_target = external_path.to_string_lossy().to_string();
+
+        pull(&ctx, &[external_target]).unwrap();
+
+        let active = crate::workflow::read(&workflows_dir.join("2026-06-06-001.toml")).unwrap();
+        let external = crate::workflow::read(&external_path).unwrap();
+        assert_eq!(active.title.as_deref(), Some("Active workflow title"));
+        assert_eq!(external.title.as_deref(), Some("Remote workflow title"));
     }
 
     #[test]
