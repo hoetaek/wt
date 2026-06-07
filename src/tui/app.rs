@@ -36,7 +36,6 @@ pub(crate) enum Outcome {
     Dispatch { key: String, action: OriginAction },
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PopupSpec {
     Confirm {
@@ -54,7 +53,6 @@ pub(crate) enum PopupSpec {
     },
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PopupOutcome {
     Bool(bool),
@@ -64,7 +62,6 @@ pub(crate) enum PopupOutcome {
     Cancelled,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 enum PopupState {
     Confirm {
@@ -213,7 +210,6 @@ impl AppState {
         &self.status_line
     }
 
-    #[allow(dead_code)]
     pub(crate) fn open_popup(&mut self, spec: PopupSpec) {
         self.popup = Some(match spec {
             PopupSpec::Confirm { prompt, default } => PopupState::Confirm {
@@ -241,7 +237,6 @@ impl AppState {
         });
     }
 
-    #[allow(dead_code)]
     pub(crate) fn has_popup(&self) -> bool {
         self.popup.is_some()
     }
@@ -269,7 +264,6 @@ impl AppState {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn handle_popup_key(&mut self, key: KeyInput) -> Option<PopupOutcome> {
         let outcome = match self.popup.as_mut()? {
             PopupState::Confirm { selected, .. } => handle_confirm_popup_key(selected, key),
@@ -288,7 +282,6 @@ impl AppState {
         outcome
     }
 
-    #[allow(dead_code)]
     pub(crate) fn push_output(&mut self, kind: PrintKind, line: String) {
         self.output.lines.push((kind, line));
         self.output.scroll = self
@@ -305,21 +298,6 @@ impl AppState {
         self.output.scroll
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn scroll_output_up(&mut self) {
-        self.output.scroll = self
-            .output
-            .scroll
-            .saturating_add(1)
-            .min(self.output.lines.len().saturating_sub(1));
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn scroll_output_down(&mut self) {
-        self.output.scroll = self.output.scroll.saturating_sub(1);
-    }
-
-    #[allow(dead_code)]
     pub(crate) fn begin_action(&mut self, key: &str, verb: &str) {
         if self.running.is_some() {
             return;
@@ -332,7 +310,6 @@ impl AppState {
         self.status_line = format!("{verb}ing {key}...");
     }
 
-    #[allow(dead_code)]
     pub(crate) fn action_in_flight(&self) -> bool {
         self.running.is_some()
     }
@@ -347,14 +324,12 @@ impl AppState {
             .map(|running| format!("{}ing {}...", running.verb, running.key))
     }
 
-    #[allow(dead_code)]
     pub(crate) fn tick_spinner(&mut self) {
         if let Some(running) = self.running.as_mut() {
             running.spinner_frame = running.spinner_frame.saturating_add(1);
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn finish_action(&mut self, status: String) {
         self.running = None;
         self.popup = None;
@@ -805,15 +780,13 @@ mod tests {
     }
 
     #[test]
-    fn output_panel_accumulates_and_scrolls() {
+    fn output_panel_accumulates() {
         let mut app = app();
         assert!(app.output_lines().is_empty());
         for i in 0..50 {
             app.push_output(PrintKind::Plain, format!("line {i}"));
         }
         assert_eq!(app.output_lines().len(), 50);
-        app.scroll_output_up();
-        app.scroll_output_down();
     }
 
     #[test]

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::context::UserInterface;
 use crate::error::WtError;
 use anyhow::{Result, bail};
@@ -142,6 +140,10 @@ impl UserInterface for TuiUi {
         self.send_print(PrintKind::Step, msg);
     }
 
+    fn print_plain(&self, msg: &str) {
+        self.send_print(PrintKind::Plain, msg);
+    }
+
     fn print_dim(&self, msg: &str) {
         self.send_print(PrintKind::Dim, msg);
     }
@@ -239,6 +241,18 @@ mod tests {
         };
         assert_eq!(kind, PrintKind::Warning);
         assert_eq!(line, "conflicts present");
+    }
+
+    #[test]
+    fn plain_print_keeps_plain_kind() {
+        let (tx, rx) = mpsc::channel();
+        let ui = TuiUi::new(tx);
+        ui.print_plain("Pull preview");
+        let UiRequest::Print { kind, line } = rx.try_recv().unwrap() else {
+            panic!("expected Print request");
+        };
+        assert_eq!(kind, PrintKind::Plain);
+        assert_eq!(line, "Pull preview");
     }
 
     #[test]
