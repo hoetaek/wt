@@ -244,12 +244,10 @@ impl OriginHealthSummary {
             &local_fields.body,
             &snapshot.remote.fields.body,
         );
-        let status = if [title.status, body.status]
-            .iter()
-            .any(|status| *status == FieldDivergenceStatus::Conflict)
-        {
+        let statuses = [title.status, body.status];
+        let status = if statuses.contains(&FieldDivergenceStatus::Conflict) {
             "conflict"
-        } else if [title.status, body.status]
+        } else if statuses
             .iter()
             .any(|status| *status != FieldDivergenceStatus::Unchanged)
         {
