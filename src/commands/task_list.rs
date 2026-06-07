@@ -7,6 +7,7 @@ use crate::task_run;
 use anyhow::{Context, Result};
 use console::measure_text_width;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -116,6 +117,15 @@ struct InvalidTaskRow {
 }
 
 fn collect(ctx: &Ctx, all: bool) -> Result<TaskListReport> {
+    let run_statuses = TaskRunStatusIndex::load(ctx)?;
+    collect_with_task_run_statuses(ctx, all, &run_statuses)
+}
+
+fn collect_with_task_run_statuses(
+    ctx: &Ctx,
+    all: bool,
+    run_statuses: &TaskRunStatusIndex,
+) -> Result<TaskListReport> {
     let mut tasks = Vec::new();
     let mut invalid_tasks = Vec::new();
     let mut hidden_task_count = 0;
@@ -123,9 +133,9 @@ fn collect(ctx: &Ctx, all: bool) -> Result<TaskListReport> {
     for path in task::task_document_paths(ctx)? {
         let key = task_key_from_path(&path).unwrap_or_default();
         let relative_path = task_relative_path(ctx, &path);
-        match read_task_row(ctx, &path) {
+        match read_task_row(ctx, &path, run_statuses) {
             Ok(row) => {
-                if all || task_run::task_is_selectable(ctx, &row.key)? {
+                if all || run_statuses.is_selectable(&row.key) {
                     tasks.push(row);
                 } else {
                     hidden_task_count += 1;
@@ -147,24 +157,91 @@ fn collect(ctx: &Ctx, all: bool) -> Result<TaskListReport> {
     })
 }
 
-fn read_task_row(ctx: &Ctx, path: &Path) -> Result<TaskListRow> {
+#[derive(Debug, Clone, Default)]
+struct TaskRunStatusIndex {
+    latest_status_by_task: HashMap<String, task_run::TaskRunStatus>,
+    invalid_tasks: HashSet<String>,
+}
+
+impl TaskRunStatusIndex {
+    fn load(ctx: &Ctx) -> Result<Self> {
+        Ok(Self::from_inventory(task_run::list_lossy(ctx)?))
+    }
+
+    fn from_inventory(inventory: task_run::TaskRunInventory) -> Self {
+        let mut records = inventory.records;
+        records.sort_by(task_run::compare_task_run_records);
+
+        let mut latest_status_by_task = HashMap::new();
+        for record in records {
+            latest_status_by_task.insert(record.run.task, record.run.status);
+        }
+
+        let invalid_tasks = inventory
+            .invalid
+            .iter()
+            .filter_map(|record| invalid_task_run_task(&record.path))
+            .collect();
+
+        Self {
+            latest_status_by_task,
+            invalid_tasks,
+        }
+    }
+
+    fn status_for(&self, key: &str) -> String {
+        let task = task::safe_task_key(key);
+        self.latest_status_by_task
+            .get(&task)
+            .map(|status| status.as_str().to_string())
+            .unwrap_or_else(|| {
+                if self.invalid_tasks.contains(&task) {
+                    "unknown".into()
+                } else {
+                    "new".into()
+                }
+            })
+    }
+
+    fn is_selectable(&self, key: &str) -> bool {
+        let task = task::safe_task_key(key);
+        self.latest_status_by_task
+            .get(&task)
+            .is_none_or(|status| status.is_task_selectable())
+    }
+}
+
+fn read_task_row(ctx: &Ctx, path: &Path, run_statuses: &TaskRunStatusIndex) -> Result<TaskListRow> {
     let key = task_key_from_path(path)?;
     let relative_path = task_relative_path(ctx, path);
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read task: {relative_path}"))?;
     let document: TaskDocument = toml::from_str(&content)
         .with_context(|| format!("Failed to parse task: {relative_path}"))?;
-    task_row(ctx, key, relative_path, document)
+    let run_status = run_statuses.status_for(&key);
+    task_row_with_run_status(ctx, key, relative_path, document, run_status)
 }
 
+#[cfg(test)]
 fn task_row(ctx: &Ctx, key: String, path: String, document: TaskDocument) -> Result<TaskListRow> {
+    let run_statuses = TaskRunStatusIndex::load(ctx)?;
+    let run_status = run_statuses.status_for(&key);
+    task_row_with_run_status(ctx, key, path, document, run_status)
+}
+
+fn task_row_with_run_status(
+    ctx: &Ctx,
+    key: String,
+    path: String,
+    document: TaskDocument,
+    run_status: String,
+) -> Result<TaskListRow> {
     let display = task::TaskDocumentDisplay::for_document(&key, &document);
     let origin = document.origin.as_ref().map(|origin| TaskOriginSummary {
         provider: origin.provider.clone(),
         id: origin.id.clone(),
     });
     let origin_health = task_origin_health(ctx, &key, &document);
-    let run_status = latest_task_run_status_lossy(ctx, &key)?;
     let duration = parse_planning_field(&document.body, "예상 소요", "expected duration");
     let size = parse_planning_field(&document.body, "크기", "size class");
     let body_summary = body_summary(&document.body);
@@ -214,44 +291,13 @@ fn task_origin_health(ctx: &Ctx, key: &str, document: &TaskDocument) -> OriginHe
     }
 }
 
-fn latest_task_run_status_lossy(ctx: &Ctx, key: &str) -> Result<String> {
-    let inventory = task_run::list_lossy(ctx)?;
-    let task = task::safe_task_key(key);
-    let mut runs = inventory
-        .records
-        .into_iter()
-        .filter(|record| record.run.task == task)
-        .collect::<Vec<_>>();
-    runs.sort_by(task_run::compare_task_run_records);
-    Ok(runs
-        .pop()
-        .map(|record| record.run.status.as_str().to_string())
-        .unwrap_or_else(|| {
-            if inventory
-                .invalid
-                .iter()
-                .any(|record| invalid_task_run_mentions_task(&record.path, &task))
-            {
-                "unknown".into()
-            } else {
-                "new".into()
-            }
-        }))
-}
-
-fn invalid_task_run_mentions_task(path: &Path, task: &str) -> bool {
-    let Ok(content) = fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(value) = toml::from_str::<toml::Value>(&content) else {
-        return false;
-    };
+fn invalid_task_run_task(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let value = toml::from_str::<toml::Value>(&content).ok()?;
     value
         .get("task")
         .and_then(toml::Value::as_str)
         .map(task::safe_task_key)
-        .as_deref()
-        == Some(task)
 }
 
 fn should_open_browser(ctx: &Ctx) -> bool {
@@ -640,7 +686,13 @@ fn task_inventory_label(row: &TaskListRow, columns: &[Column], widths: &[usize])
         .iter()
         .filter(|column| !column.hidden)
         .zip(widths.iter().copied())
-        .map(|(column, width)| pad_column(&task_inventory_column(row, column.kind), width))
+        .map(|(column, width)| {
+            if column.kind == TaskListColumnKind::Task {
+                pad_task_column(row, width)
+            } else {
+                pad_column(&task_inventory_column(row, column.kind), width)
+            }
+        })
         .collect::<Vec<_>>()
         .join("  ")
 }
@@ -683,6 +735,24 @@ fn pad_column(value: &str, width: usize) -> String {
     let value = truncate_display_width(value, width);
     let padding = width.saturating_sub(measure_text_width(&value));
     format!("{value}{}", " ".repeat(padding))
+}
+
+fn pad_task_column(row: &TaskListRow, width: usize) -> String {
+    let key = format!("task {}", row.key);
+    let key_width = measure_text_width(&key);
+    if width <= key_width {
+        return pad_column(&key, width);
+    }
+
+    let separator = "  ";
+    let separator_width = measure_text_width(separator);
+    let title_width = width.saturating_sub(key_width + separator_width);
+    if title_width == 0 {
+        return pad_column(&key, width);
+    }
+
+    let title = truncate_display_width(row.display.label(), title_width);
+    pad_column(&format!("{title}{separator}{key}"), width)
 }
 
 fn truncate_display_width(value: &str, max_width: usize) -> String {
@@ -982,6 +1052,89 @@ updated_at = "2026-05-18T00:00:00Z"
         assert_eq!(report.tasks[0].key, "demo");
         assert_eq!(report.tasks[0].run_status, "new");
         assert!(report.invalid_tasks.is_empty());
+    }
+
+    #[test]
+    fn collect_rows_reuse_injected_task_run_status_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        let task_runs_dir = dir.path().join(".wt/execution/task-runs");
+        fs::create_dir_all(&tasks_dir).unwrap();
+
+        for idx in 1..=6 {
+            fs::write(
+                tasks_dir.join(format!("task-{idx}.toml")),
+                format!(
+                    r#"title = "Task {idx}"
+branch = "task-{idx}"
+body = "Task body"
+"#
+                ),
+            )
+            .unwrap();
+            task_run::create(
+                &ctx,
+                &format!("task-{idx}"),
+                &format!("task-{idx}"),
+                None,
+                task_run::STATUS_PREPARED,
+            )
+            .unwrap();
+        }
+        task_run::create(&ctx, "task-3", "task-3", None, task_run::STATUS_RUNNING).unwrap();
+
+        let run_statuses = TaskRunStatusIndex::from_inventory(task_run::list_lossy(&ctx).unwrap());
+        fs::rename(
+            &task_runs_dir,
+            dir.path().join(".wt/execution/task-runs.removed"),
+        )
+        .unwrap();
+
+        let report = collect_with_task_run_statuses(&ctx, true, &run_statuses).unwrap();
+
+        assert_eq!(report.tasks.len(), 6);
+        assert_eq!(
+            report
+                .tasks
+                .iter()
+                .find(|row| row.key == "task-3")
+                .unwrap()
+                .run_status,
+            "running"
+        );
+    }
+
+    #[test]
+    fn task_column_preserves_key_when_title_is_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let row = task_row(
+            &ctx,
+            "stable-key".into(),
+            "<repo-root>/.wt/execution/tasks/stable-key.toml".into(),
+            TaskDocument {
+                title: "This title is intentionally much longer than the configured task width"
+                    .into(),
+                branch: "stable-key".into(),
+                body: String::new(),
+                origin: None,
+            },
+        )
+        .unwrap();
+        let columns = vec![Column {
+            title: "task".into(),
+            hidden: false,
+            width: Some(24),
+            grow: true,
+            kind: TaskListColumnKind::Task,
+        }];
+        let label = task_inventory_label(&row, &columns, &[24]);
+
+        assert!(
+            label.contains("task stable-key"),
+            "task key should remain visible in `{label}`"
+        );
     }
 
     #[test]
