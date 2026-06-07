@@ -255,6 +255,10 @@ merge.
   the full TaskDocument inventory. Both modes report invalid task TOML files
   and do not start worktrees, branches, TaskRuns, Workflows, provider issues, or
   pull requests.
+  In a TTY, bare `wt task list` opens the full-screen interactive browser.
+  Pipes, `--json`, and `--quiet` keep the existing text and JSON contracts.
+  Origin actions such as diff, fetch, pull, and push are available through the
+  Enter action menu and matching shortcuts.
 - `wt task origin import [<issue>...]` imports provider issues as TaskDocuments,
   records title, branch, body, and `[origin]`, and may materialize the provider
   issue branch first; it does not start worktrees, local branches, TaskRuns,
@@ -282,6 +286,8 @@ merge.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid
   Workflow files whether or not they are runnable and reports invalid workflow
   TOML files instead of hiding parse failures.
+  In a TTY, bare `wt workflow list` opens the full-screen interactive browser.
+  Pipes, `--json`, and `--quiet` keep the existing text and JSON contracts.
 - `wt workflow archive <workflow>` moves a passed Workflow plus linked
   passed/skipped TaskRuns and uniquely-owned TaskDocuments into
   `<repo-root>/.wt/execution/archive/workflows/<workflow-id>/`. Archive is

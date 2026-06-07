@@ -1738,6 +1738,23 @@ text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계
 command를 추가하지 않는다. `wt task list`는 symmetry command가 아니라 별도 TaskDocument
 inventory surface이며 Workflow, TaskRun, branch, worktree 목록 의미를 갖지 않는다.
 
+Inventory interactive mode는 `wt task list`와 `wt workflow list`의 TTY human 표면에만 붙는
+추가 surface다. stdout이 TTY이고 `--json`/`--quiet`가 아니면 bare `wt task list`와 bare
+`wt workflow list`는 full-screen 인터랙티브 브라우저로 진입한다. 비-TTY, 파이프,
+`--json`, `--quiet`는 현행 text/JSON contract를 그대로 유지하며 interactive prompt를
+시도하지 않는 가드 컨벤션을 따른다.
+
+인터랙티브 브라우저의 초기 렌더는 read-only다. Provider 호출 없이 TaskDocument,
+Workflow, origin snapshot 같은 디스크 상태만 읽는다. 액션 메뉴는 `OriginActionMenu`
+모델이 단일 소스이며, 단축키는 액셀러레이터일 뿐이다. 모든 액션은 Enter 메뉴에서
+발견 가능해야 한다.
+
+액션 실행은 suspend-resume 디스패치다. TUI는 alternate screen을 해제하고 기존 백엔드
+명령 플로우를 실행한 뒤 복귀해 상태를 갱신한다. 외부 쓰기 preview/confirmation 같은
+안전 게이트는 백엔드 플로우가 소유하며, TUI는 게이트를 추가하지도 우회하지도 않는다.
+Workflow 브라우저의 child origin은 inspection 전용이고 workflow 액션으로 child
+TaskDocument origin을 수정하지 않는다.
+
 `wt workflow show <id>`는 한 Workflow file을 읽는 canonical one-shot observation surface다.
 기본 human 출력은 Workflow meta(path, mode, base, title/body/origin, policy, task count)와
 번호 매긴 task row, task file path, branch, parent를 보여준다. `--json`은 같은 대상에 대해

@@ -84,6 +84,13 @@ The recurring decision test is:
 The seventh principle is the meta-principle. The model is allowed to evolve, but
 only toward greater clarity.
 
+A full-screen terminal UI session stays within the stateless CLI model when it
+lives inside one command invocation: it runs, records durable state, and exits.
+It is not a daemon and must not poll providers in the background. The persona's
+rejection of a heavy GUI means web or desktop GUI surfaces, not terminal UI.
+Interactive terminal surfaces are additive; non-TTY, `--json`, and `--quiet`
+paths keep their text contracts.
+
 ## Direction-Driven Design
 
 `wt` should choose clarity over compatibility while it remains a personal
