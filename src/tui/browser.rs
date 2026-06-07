@@ -59,7 +59,8 @@ fn run_browser_with_backend(
                         Outcome::Continue => {}
                         Outcome::Quit => break,
                         Outcome::Dispatch { key, action } => {
-                            let mut lifecycle = TerminalDispatchLifecycle::new(&mut session);
+                            let mut lifecycle =
+                                TerminalDispatchLifecycle::new(&mut session, &mut terminal);
                             dispatch::dispatch(action, &key, &dispatch_backend, &mut lifecycle)?;
                             let (rows, diagnostics) = refresh()?;
                             app.replace_rows_preserving_selection(rows, diagnostics, &key);
@@ -84,6 +85,7 @@ fn key_input(key: KeyEvent) -> Option<KeyInput> {
         KeyCode::Down => Some(KeyInput::Down),
         KeyCode::Enter => Some(KeyInput::Enter),
         KeyCode::Esc => Some(KeyInput::Esc),
+        KeyCode::Backspace => Some(KeyInput::Backspace),
         KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
             Some(KeyInput::Char(ch))
         }

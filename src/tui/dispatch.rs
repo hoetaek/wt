@@ -3,9 +3,11 @@ use crate::context::Ctx;
 use crate::origin_action_menu::OriginAction;
 use crate::origin_snapshot::{read_task_snapshot, read_workflow_snapshot};
 use crate::task;
-use crate::tui::terminal::TerminalSession;
+use crate::tui::terminal::{TerminalEffects, TerminalSession};
 use crate::workflow;
 use anyhow::{Context, Result, bail};
+use ratatui::Terminal;
+use ratatui::backend::Backend;
 use ratatui::crossterm::event;
 
 pub(crate) trait DispatchBackend {
@@ -87,17 +89,18 @@ pub(crate) trait DispatchLifecycle {
     fn resume(&mut self) -> Result<()>;
 }
 
-pub(crate) struct TerminalDispatchLifecycle<'a> {
-    session: &'a mut TerminalSession,
+pub(crate) struct TerminalDispatchLifecycle<'a, E: TerminalEffects, B: Backend> {
+    session: &'a mut TerminalSession<E>,
+    terminal: &'a mut Terminal<B>,
 }
 
-impl<'a> TerminalDispatchLifecycle<'a> {
-    pub(crate) fn new(session: &'a mut TerminalSession) -> Self {
-        Self { session }
+impl<'a, E: TerminalEffects, B: Backend> TerminalDispatchLifecycle<'a, E, B> {
+    pub(crate) fn new(session: &'a mut TerminalSession<E>, terminal: &'a mut Terminal<B>) -> Self {
+        Self { session, terminal }
     }
 }
 
-impl DispatchLifecycle for TerminalDispatchLifecycle<'_> {
+impl<E: TerminalEffects, B: Backend> DispatchLifecycle for TerminalDispatchLifecycle<'_, E, B> {
     fn suspend(&mut self) -> Result<()> {
         self.session.suspend()
     }
@@ -109,7 +112,13 @@ impl DispatchLifecycle for TerminalDispatchLifecycle<'_> {
     }
 
     fn resume(&mut self) -> Result<()> {
-        self.session.resume()
+        self.session.resume()?;
+        // The alternate screen is fresh after resume while ratatui's back
+        // buffer still holds the pre-suspend frame; clear resets it so the
+        // next draw repaints the full browser instead of a stale diff.
+        self.terminal
+            .clear()
+            .context("clear TUI browser for full redraw after resume")
     }
 }
 
@@ -394,6 +403,42 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    struct NoopEffects;
+
+    impl crate::tui::terminal::TerminalEffects for NoopEffects {
+        fn enter(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn leave(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn resume_clears_terminal_to_force_full_redraw() {
+        use crate::tui::terminal::TerminalSession;
+        use ratatui::backend::TestBackend;
+        use ratatui::widgets::Paragraph;
+
+        let mut session = TerminalSession::with_effects(NoopEffects).unwrap();
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(10, 3)).unwrap();
+        terminal
+            .draw(|frame| frame.render_widget(Paragraph::new("browser"), frame.area()))
+            .unwrap();
+        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "b");
+
+        let mut lifecycle = TerminalDispatchLifecycle::new(&mut session, &mut terminal);
+        lifecycle.suspend().unwrap();
+        lifecycle.resume().unwrap();
+
+        assert_eq!(
+            terminal.backend().buffer()[(0, 0)].symbol(),
+            " ",
+            "resume은 back buffer를 리셋해 다음 draw가 full redraw가 되게 한다"
+        );
     }
 
     #[test]

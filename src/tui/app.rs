@@ -17,6 +17,7 @@ pub(crate) enum KeyInput {
     Down,
     Enter,
     Esc,
+    Backspace,
     Char(char),
 }
 
@@ -258,7 +259,7 @@ impl AppState {
                     return Outcome::Dispatch { key, action };
                 }
             }
-            KeyInput::Esc => {}
+            KeyInput::Esc | KeyInput::Backspace => {}
         }
         Outcome::Continue
     }
@@ -277,6 +278,10 @@ impl AppState {
             }
             KeyInput::Down => self.move_down(),
             KeyInput::Up => self.move_up(),
+            KeyInput::Backspace => {
+                self.filter.pop();
+                self.clamp_selection();
+            }
             KeyInput::Char(ch) => {
                 self.filter.push(ch);
                 self.clamp_selection();
@@ -295,7 +300,7 @@ impl AppState {
             KeyInput::Up | KeyInput::Char('k') => self.move_menu_up(),
             KeyInput::Enter => return self.menu_enter(),
             KeyInput::Char('q') => return Outcome::Quit,
-            KeyInput::Char(_) => {}
+            KeyInput::Char(_) | KeyInput::Backspace => {}
         }
         Outcome::Continue
     }
@@ -456,6 +461,27 @@ mod tests {
         app.handle(KeyInput::Esc);
         assert_eq!(app.mode(), Mode::List);
         assert_eq!(app.visible_keys().len(), 3);
+    }
+
+    #[test]
+    fn filter_backspace_deletes_last_char_and_rewidens_rows() {
+        let mut app = app();
+        app.handle(KeyInput::Char('/'));
+        app.handle(KeyInput::Char('w'));
+        app.handle(KeyInput::Char('o'));
+        assert_eq!(app.visible_keys(), vec!["workflow-docs"]);
+        app.handle(KeyInput::Backspace);
+        assert_eq!(app.filter(), "w");
+        assert_eq!(
+            app.visible_keys().len(),
+            3,
+            "w는 origin_label(WT-142)로 모든 행을 다시 보여준다"
+        );
+        app.handle(KeyInput::Backspace);
+        assert_eq!(app.filter(), "");
+        assert_eq!(app.visible_keys().len(), 3);
+        app.handle(KeyInput::Backspace);
+        assert_eq!(app.filter(), "", "빈 filter에서 backspace는 no-op");
     }
 
     #[test]
