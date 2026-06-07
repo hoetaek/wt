@@ -6054,6 +6054,26 @@ fn doctor_missing_core_dirs_names_wt_init() {
 }
 
 #[cfg(unix)]
+#[test]
+fn doctor_missing_core_dirs_names_wt_init_in_korean_locale() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::write(temp.path().join(".wt.toml"), "").unwrap();
+
+    let mut command = wt_command();
+    pin_korean_locale(&mut command)
+        .env("HOME", temp.path().join("home"))
+        .env("SHELL", "/bin/fish")
+        .args(["-C", temp.path().to_str().unwrap(), "doctor"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Core dirs: `"))
+        .stderr(predicate::str::contains(
+            "repo-local wt 설정을 만들려면 `wt init` 을 실행하세요.",
+        ));
+}
+
+#[cfg(unix)]
 fn write_repo_agent_config(root: &Path, cli: &str) {
     std::fs::write(root.join(".wt.toml"), format!("[agent]\ncli = \"{cli}\"\n")).unwrap();
 }
