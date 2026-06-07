@@ -1037,7 +1037,18 @@ setup deps, tests, workspace tabs, editor, agent runtime, agent prompt, issue pr
 
 Wizard step label은 구현 단계명이 아니라 사용자가 지금 결정하는 의미를 말해야 한다.
 `wt init`의 사람이 읽는 설명과 prompt는 한국어를 기본으로 쓰되, command, option, config key,
-TOML value 같은 protocol literal은 영어 원문을 유지한다. Canonical flow는 `설정 파일 위치`,
+TOML value 같은 protocol literal은 영어 원문을 유지한다.
+
+`language` config는 `.wt.toml` 또는 `<repo-root>/.wt/config/local.toml`에 둘 수 있고,
+값은 `auto`/`en`/`ko`이며 기본값은 `auto`다. `auto`는 OS locale (`LANG`/`LC_*`)에서
+`ko*`를 한국어로 보고 그 외에는 영어로 본다. 이 설정은 사람-facing 출력에만 적용하고,
+command, option, config key, path, agent id 같은 protocol literal과 모든 `--json` 출력은
+언어 설정과 무관하게 영어를 유지한다. `wt doctor`는 이 모델이 처음 연결된 명령으로,
+remediation hint와 scan-failed prose 일부만 language-aware하게 렌더링한다. 다른 명령과
+`wt init`/`wt scaffold`의 현재 한국어 기본 출력은 아직 `language`와 독립적으로 동작하는
+수렴 예정 gap이다.
+
+Canonical flow는 `설정 파일 위치`,
 `외부 도구 연결`, `개발 환경 설정`, `미리보기`, `쓰기 확인` 순서다.
 각 step 시작 전에는 빈 줄을 두고, step 설명은 prompt header와 구분되도록 들여써서 보여주며,
 작은 대비쌍은 bullet로 나눈다. 설명과 step 안의 질문 사이에도 빈 줄을 둔다. Step 안의 질문은
