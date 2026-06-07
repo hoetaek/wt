@@ -13,7 +13,7 @@ pub(crate) fn status_color(status: &str) -> Option<Color> {
     }
 
     match status {
-        "conflict" => Some(Color::Red),
+        "conflict" | "error" => Some(Color::Red),
         "stale" => Some(Color::Yellow),
         "fresh" => Some(Color::Green),
         "local" => Some(Color::Indexed(245)),
@@ -90,6 +90,7 @@ mod tests {
     fn status_color_maps_traffic_light_semantics() {
         with_colors(true, || {
             assert_eq!(status_color("conflict"), Some(Color::Red));
+            assert_eq!(status_color("error"), Some(Color::Red));
             assert_eq!(status_color("stale"), Some(Color::Yellow));
             assert_eq!(status_color("fresh"), Some(Color::Green));
             assert_eq!(status_color("local"), Some(Color::Indexed(245)));
