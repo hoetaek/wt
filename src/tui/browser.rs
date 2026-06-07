@@ -1,6 +1,8 @@
 use crate::context::Ctx;
 use crate::tui::app::{AppState, BrowserRow, KeyInput, Outcome};
-use crate::tui::dispatch::{self, CtxBackend, TerminalDispatchLifecycle};
+use crate::tui::dispatch::{
+    self, CtxBackend, DispatchBackend, TerminalDispatchLifecycle, WorkflowCtxBackend,
+};
 use crate::tui::render::draw;
 use crate::tui::terminal::TerminalSession;
 use anyhow::{Context, Result};
@@ -20,19 +22,34 @@ pub(crate) fn terminal_size_allows_browser() -> bool {
 
 pub(crate) fn run_browser(
     ctx: &Ctx,
+    app: AppState,
+    refresh: impl FnMut() -> Result<(Vec<BrowserRow>, Vec<String>)>,
+) -> Result<()> {
+    run_browser_with_backend(app, refresh, CtxBackend::new(ctx))
+}
+
+pub(crate) fn run_workflow_browser(
+    ctx: &Ctx,
+    app: AppState,
+    refresh: impl FnMut() -> Result<(Vec<BrowserRow>, Vec<String>)>,
+) -> Result<()> {
+    run_browser_with_backend(app, refresh, WorkflowCtxBackend::new(ctx))
+}
+
+fn run_browser_with_backend(
     mut app: AppState,
     mut refresh: impl FnMut() -> Result<(Vec<BrowserRow>, Vec<String>)>,
+    dispatch_backend: impl DispatchBackend,
 ) -> Result<()> {
     let mut session = TerminalSession::new()?;
     let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::new(backend).context("open task browser terminal")?;
-    let dispatch_backend = CtxBackend::new(ctx);
+    let mut terminal = Terminal::new(backend).context("open TUI browser terminal")?;
 
     loop {
         terminal
             .draw(|frame| draw(frame, &app))
-            .context("draw task browser")?;
-        match event::read().context("read task browser event")? {
+            .context("draw TUI browser")?;
+        match event::read().context("read TUI browser event")? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 if is_ctrl_c(key) {
                     break;
@@ -57,7 +74,7 @@ pub(crate) fn run_browser(
 
     terminal
         .show_cursor()
-        .context("restore task browser cursor")?;
+        .context("restore TUI browser cursor")?;
     Ok(())
 }
 

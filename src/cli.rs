@@ -951,7 +951,7 @@ pub enum TaskOriginCommand {
 pub enum WorkflowCommand {
     /// List saved workflow files
     #[command(
-        long_about = "List all saved <repo-root>/.wt/execution/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and passed, with indented rows and secondary detail lines."
+        long_about = "List all saved <repo-root>/.wt/execution/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and passed, with indented rows and secondary detail lines.\n\nIn a TTY without --json or --quiet, opens the full-screen interactive browser. The initial browser render is read-only; choosing items from its interactive action menu can run workflow origin diff, fetch, pull, push, and attach flows against the selected Workflow only. The child task origins are inspection-only; pipes and --json keep the text/JSON output."
     )]
     List,
     /// Move passed workflow state into the frozen archive
@@ -1949,6 +1949,23 @@ mod tests {
         assert!(help.contains("full-screen interactive browser"));
         assert!(help.contains("pipes and --json keep the text/JSON output"));
         assert!(help.contains("interactive action menu"));
+    }
+
+    #[test]
+    fn workflow_list_help_describes_interactive_tty_browser() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("workflow")
+            .unwrap()
+            .find_subcommand_mut("list")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("In a TTY without --json or --quiet"));
+        assert!(help.contains("full-screen interactive browser"));
+        assert!(help.contains("pipes and --json keep the text/JSON output"));
+        assert!(help.contains("child task origins are inspection-only"));
     }
 
     #[test]

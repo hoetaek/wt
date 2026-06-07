@@ -46,7 +46,7 @@ mod archive;
 mod codex_base_review;
 mod display;
 mod list_command;
-mod origin;
+pub(crate) mod origin;
 mod repair;
 mod selection;
 mod show_command;

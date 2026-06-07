@@ -19,7 +19,7 @@ use crate::workflow::run::{
 use crate::workflow::{WorkflowMetadata, WorkflowMode};
 use anyhow::Result;
 use serde::Serialize;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 const LIST_START: &str = "◆";
@@ -29,6 +29,20 @@ const BULLET: &str = "•";
 
 pub(super) fn run(ctx: &Ctx) -> Result<()> {
     let report = collect(ctx)?;
+    if should_open_browser(ctx) {
+        if crate::tui::terminal_size_allows_workflow_browser() {
+            return crate::tui::run_workflow_browser(ctx, workflow_browser_app(&report), || {
+                let report = collect(ctx)?;
+                Ok((
+                    workflow_browser_rows(&report),
+                    workflow_browser_diagnostics(&report),
+                ))
+            });
+        }
+        ctx.ui.print_warning(
+            "Terminal is too small for the workflow browser; falling back to text output",
+        );
+    }
     if ctx.is_json() {
         write_json(&report)?;
     } else {
@@ -38,7 +52,7 @@ pub(super) fn run(ctx: &Ctx) -> Result<()> {
 }
 
 #[derive(Debug, Serialize)]
-struct WorkflowListReport {
+pub(crate) struct WorkflowListReport {
     workflows: Vec<WorkflowListRow>,
     invalid_workflows: Vec<InvalidWorkflowRow>,
 }
@@ -67,7 +81,6 @@ struct WorkflowListRow {
 }
 
 impl WorkflowListRow {
-    #[allow(dead_code)]
     pub(crate) fn origin_action_menu(&self) -> OriginActionMenu {
         let origin = self
             .origin
@@ -189,6 +202,74 @@ fn collect(ctx: &Ctx) -> Result<WorkflowListReport> {
         workflows,
         invalid_workflows,
     })
+}
+
+pub(crate) fn workflow_browser_rows(
+    report: &WorkflowListReport,
+) -> Vec<crate::tui::app::BrowserRow> {
+    report.workflows.iter().map(workflow_browser_row).collect()
+}
+
+fn workflow_browser_app(report: &WorkflowListReport) -> crate::tui::app::AppState {
+    crate::tui::app::AppState::with_diagnostics(
+        workflow_browser_rows(report),
+        workflow_browser_diagnostics(report),
+    )
+}
+
+fn workflow_browser_row(row: &WorkflowListRow) -> crate::tui::app::BrowserRow {
+    crate::tui::app::BrowserRow {
+        key: row.id.clone(),
+        title: row.title.clone(),
+        status: row.origin_health.status.clone(),
+        origin_label: row.origin_health.origin_label.clone(),
+        next_action: row.origin_health.next_action.clone(),
+        preview_lines: workflow_browser_preview_lines(row),
+        menu: row.origin_action_menu(),
+    }
+}
+
+fn workflow_browser_preview_lines(row: &WorkflowListRow) -> Vec<String> {
+    let mut lines = vec![
+        format!("Workflow   {}", row.path),
+        format!("Mode       {}", row.mode),
+        format!("Runs       {}", task_run_row_summary(&row.task_runs)),
+        format!("Origin     {}", row.origin_health.origin_label),
+        format!(
+            "Fetched    {}",
+            row.origin_health.last_fetched.as_deref().unwrap_or("never")
+        ),
+        format!(
+            "Divergence {}",
+            row.origin_health.divergence.as_deref().unwrap_or("none")
+        ),
+        format!("Next       {}", row.origin_health.next_action),
+        format!(
+            "Policy     {}/{} review:{}",
+            row.policy.pull_request, row.policy.landing, row.policy.review_codex_base
+        ),
+    ];
+    for child in &row.child_origins {
+        lines.push(format!("child {}  {}", child.task, child.origin_label));
+    }
+    lines
+}
+
+fn workflow_browser_diagnostics(report: &WorkflowListReport) -> Vec<String> {
+    let invalid_count = report.invalid_workflows.len();
+    if invalid_count == 0 {
+        return Vec::new();
+    }
+    let noun = if invalid_count == 1 {
+        "workflow file"
+    } else {
+        "workflow files"
+    };
+    vec![format!("{invalid_count} invalid {noun}")]
+}
+
+fn should_open_browser(ctx: &Ctx) -> bool {
+    !ctx.is_json() && !ctx.quiet && ctx.ui.can_prompt() && std::io::stdout().is_terminal()
 }
 
 fn workflow_row(ctx: &Ctx, path: &Path, id: String, metadata: WorkflowMetadata) -> WorkflowListRow {
@@ -834,6 +915,56 @@ id = "WT-142"
         assert_eq!(row.child_origins.len(), 1);
         assert_eq!(row.child_origins[0].task, "origin-sync-tui");
         assert_eq!(row.child_origins[0].origin_label, "Linear WT-142");
+    }
+
+    #[test]
+    fn workflow_browser_rows_show_child_origins_as_inspection_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Origin sync TUI"
+branch = "origin-sync-tui"
+body = "task body"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            workflows_dir.join("2026-06-06-001.toml"),
+            workflow_toml_with_one_task_origin(
+                "Ship provider-origin UX",
+                "WT-100",
+                "origin-sync-tui",
+            ),
+        )
+        .unwrap();
+
+        let report = collect(&ctx).unwrap();
+        let rows = workflow_browser_rows(&report);
+
+        assert_eq!(rows[0].key, "2026-06-06-001");
+        assert_eq!(rows[0].origin_label, "Linear WT-100");
+        assert!(
+            rows[0]
+                .preview_lines
+                .iter()
+                .any(|line| { line.contains("origin-sync-tui") && line.contains("Linear WT-142") }),
+            "child origin should be visible as an inspection-only preview line"
+        );
+        assert!(
+            !rows[0]
+                .menu
+                .render_plain()
+                .contains("Publish workflow as issue")
+        );
     }
 
     #[test]

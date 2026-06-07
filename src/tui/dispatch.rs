@@ -1,9 +1,10 @@
 use crate::commands;
 use crate::context::Ctx;
 use crate::origin_action_menu::OriginAction;
-use crate::origin_snapshot::read_task_snapshot;
+use crate::origin_snapshot::{read_task_snapshot, read_workflow_snapshot};
 use crate::task;
 use crate::tui::terminal::TerminalSession;
+use crate::workflow;
 use anyhow::{Context, Result, bail};
 use ratatui::crossterm::event;
 
@@ -43,6 +44,43 @@ impl DispatchBackend for CtxBackend<'_> {
     }
 }
 
+pub(crate) struct WorkflowCtxBackend<'a> {
+    ctx: &'a Ctx,
+}
+
+impl<'a> WorkflowCtxBackend<'a> {
+    pub(crate) fn new(ctx: &'a Ctx) -> Self {
+        Self { ctx }
+    }
+}
+
+impl DispatchBackend for WorkflowCtxBackend<'_> {
+    fn run(&self, action: OriginAction, key: &str) -> Result<()> {
+        let workflows = [key.to_string()];
+        match action {
+            OriginAction::Diff => commands::workflow::origin::diff(self.ctx, &workflows),
+            OriginAction::Fetch => commands::workflow::origin::fetch(self.ctx, &workflows),
+            OriginAction::Pull => commands::workflow::origin::pull(self.ctx, &workflows),
+            OriginAction::Push => commands::workflow::origin::push(self.ctx, &workflows),
+            OriginAction::Attach => attach_workflow_origin(self.ctx, key),
+            OriginAction::OpenInBrowser => open_workflow_origin_url(self.ctx, key),
+            OriginAction::CopyReference => copy_workflow_reference(self.ctx, key),
+            OriginAction::Publish => {
+                self.ctx.ui.print_warning(&format!(
+                    "Publish is not available for workflow {key}; attach an existing workflow origin instead"
+                ));
+                Ok(())
+            }
+            OriginAction::KeepLocal => {
+                self.ctx.ui.print_warning(&format!(
+                    "Keep local-only is not available for workflow {key}; workflow origins are optional by omission"
+                ));
+                Ok(())
+            }
+        }
+    }
+}
+
 pub(crate) trait DispatchLifecycle {
     fn suspend(&mut self) -> Result<()>;
     fn wait_for_ack(&mut self);
@@ -66,7 +104,7 @@ impl DispatchLifecycle for TerminalDispatchLifecycle<'_> {
 
     fn wait_for_ack(&mut self) {
         println!();
-        println!("Press any key to return to the task browser...");
+        println!("Press any key to return to the browser...");
         let _ = event::read();
     }
 
@@ -100,6 +138,18 @@ fn attach_origin(ctx: &Ctx, key: &str) -> Result<()> {
     commands::task_origin::attach(ctx, key, issue)
 }
 
+fn attach_workflow_origin(ctx: &Ctx, key: &str) -> Result<()> {
+    let issue = ctx.ui.input("Issue id to attach", None)?;
+    let issue = issue.trim();
+    if issue.is_empty() {
+        ctx.ui.print_warning(&format!(
+            "Skipped workflow attach for {key}: no issue id entered"
+        ));
+        return Ok(());
+    }
+    commands::workflow::origin::attach(ctx, key, issue)
+}
+
 fn open_origin_url(ctx: &Ctx, key: &str) -> Result<()> {
     let Some(snapshot) = read_task_snapshot(&ctx.storage_root, key)? else {
         ctx.ui
@@ -127,6 +177,36 @@ fn open_origin_url(ctx: &Ctx, key: &str) -> Result<()> {
     Ok(())
 }
 
+fn open_workflow_origin_url(ctx: &Ctx, key: &str) -> Result<()> {
+    let Some(snapshot) = read_workflow_snapshot(&ctx.storage_root, key)? else {
+        ctx.ui
+            .print_warning(&format!("No fetched workflow origin snapshot for {key}"));
+        return Ok(());
+    };
+    let metadata = read_workflow_metadata(ctx, key)?;
+    let Some(origin) = metadata.origin.as_ref() else {
+        ctx.ui
+            .print_warning(&format!("No workflow origin recorded for {key}"));
+        return Ok(());
+    };
+    if !snapshot.matches_origin(&origin.provider, &origin.id) {
+        ctx.ui.print_warning(&format!(
+            "workflow origin changed since last fetch — run wt workflow origin fetch {key}"
+        ));
+        return Ok(());
+    }
+    let Some(url) = snapshot.origin.url.as_deref() else {
+        ctx.ui
+            .print_warning(&format!("No workflow origin URL recorded for {key}"));
+        return Ok(());
+    };
+    opener::open_browser(url)
+        .with_context(|| format!("Failed to open workflow origin URL for {key}"))?;
+    ctx.ui
+        .print_plain(&format!("Opened workflow origin URL for {key}"));
+    Ok(())
+}
+
 fn copy_reference(ctx: &Ctx, key: &str) -> Result<()> {
     let document = task::read_task_document(ctx, key)?;
     let reference = document
@@ -134,7 +214,26 @@ fn copy_reference(ctx: &Ctx, key: &str) -> Result<()> {
         .as_ref()
         .map(|origin| format!("{}:{}", origin.provider, origin.id))
         .unwrap_or_else(|| key.to_string());
-    let quoted = shell_words::quote(&reference);
+    copy_reference_text(ctx, &reference)
+}
+
+fn copy_workflow_reference(ctx: &Ctx, key: &str) -> Result<()> {
+    let metadata = read_workflow_metadata(ctx, key)?;
+    let reference = metadata
+        .origin
+        .as_ref()
+        .map(|origin| format!("{}:{}", origin.provider, origin.id))
+        .unwrap_or_else(|| key.to_string());
+    copy_reference_text(ctx, &reference)
+}
+
+fn read_workflow_metadata(ctx: &Ctx, key: &str) -> Result<workflow::WorkflowMetadata> {
+    let path = workflow::resolve(ctx, key)?;
+    workflow::read(&path)
+}
+
+fn copy_reference_text(ctx: &Ctx, reference: &str) -> Result<()> {
+    let quoted = shell_words::quote(reference);
     let script = format!("printf %s {quoted} | pbcopy");
     let out = ctx
         .runner
@@ -256,6 +355,45 @@ mod tests {
             "디스패치는 백엔드 에러를 표시 후 삼키고 세션을 유지한다"
         );
         assert_eq!(*log.lock().unwrap(), vec!["suspend", "ack", "resume"]);
+    }
+
+    #[test]
+    fn workflow_backend_maps_actions_to_workflow_origin_fns() {
+        let calls = Arc::new(Mutex::new(vec![]));
+        let log = Arc::new(Mutex::new(vec![]));
+        let backend = WorkflowRecordingBackend {
+            calls: Arc::clone(&calls),
+            fail: false,
+        };
+        let mut lifecycle = RecordingLifecycle {
+            log: Arc::clone(&log),
+        };
+
+        dispatch(
+            OriginAction::Fetch,
+            "2026-06-06-001",
+            &backend,
+            &mut lifecycle,
+        )
+        .unwrap();
+
+        assert_eq!(*calls.lock().unwrap(), vec!["Fetch:2026-06-06-001"]);
+        assert_eq!(*log.lock().unwrap(), vec!["suspend", "ack", "resume"]);
+    }
+
+    struct WorkflowRecordingBackend {
+        calls: Arc<Mutex<Vec<String>>>,
+        fail: bool,
+    }
+
+    impl DispatchBackend for WorkflowRecordingBackend {
+        fn run(&self, action: OriginAction, key: &str) -> anyhow::Result<()> {
+            self.calls.lock().unwrap().push(format!("{action:?}:{key}"));
+            if self.fail {
+                anyhow::bail!("workflow provider unreachable")
+            }
+            Ok(())
+        }
     }
 
     #[test]
