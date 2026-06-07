@@ -924,18 +924,13 @@ pub struct IssuesConfig {
     pub origin_policy: OriginPolicy,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum OriginPolicy {
+    #[default]
     ProviderPreferred,
     ProviderRequired,
     LocalOnly,
-}
-
-impl Default for OriginPolicy {
-    fn default() -> Self {
-        Self::ProviderPreferred
-    }
 }
 
 impl OriginPolicy {
