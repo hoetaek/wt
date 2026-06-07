@@ -1688,7 +1688,7 @@ fn read_known_source_text(ctx: &Ctx, path: &Path) -> Option<String> {
 fn is_known_state_or_config_path(relative: &str) -> bool {
     relative == ".wt.toml"
         || relative == "<repo-root>/.wt/config/local.toml"
-        || (relative.starts_with("<repo-root>/.wt/planning/retrospectives/")
+        || (relative.starts_with("<repo-root>/.wt/execution/retrospectives/")
             && matches!(
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
@@ -1831,11 +1831,6 @@ mod tests {
             dir.path(),
             "retro",
             "title = \"Retro\"\ndate = \"2026-05-18\"\noutcome = \"landed\"\ntarget = \"demo\"\ntags = [\"ui\"]\n\n[context]\ngoal = \"Retro goal\"\n\n[keep]\nitems = [\"Keep this\"]\n",
-        );
-        write_spec_retrospect(
-            dir.path(),
-            "demo-spec",
-            "# Demo spec retro\n\n## 결과\n- result: landed\n\n## 유지할 점\n- Keep spec context\n",
         );
         write_retrospec(dir.path(), "bad", "title = [\n");
         fs::write(
@@ -2106,7 +2101,7 @@ mod tests {
     #[test]
     fn retrospecs_ignore_spec_local_files() {
         let dir = tempfile::tempdir().unwrap();
-        write_spec_retrospect(dir.path(), "foo", "# Old\n");
+        write_legacy_spec_local_retrospect(dir.path(), "foo", "# Old\n");
         write_retrospec(dir.path(), "alpha", "title = \"Alpha\"\n");
         let state = SnapshotState::new(
             dir.path().to_path_buf(),
@@ -2294,12 +2289,12 @@ mod tests {
     }
 
     fn write_retrospec(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".wt/planning/retrospectives");
+        let dir = root.join(".wt/execution/retrospectives");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
-    fn write_spec_retrospect(root: &Path, spec: &str, content: &str) {
+    fn write_legacy_spec_local_retrospect(root: &Path, spec: &str, content: &str) {
         let dir = root
             .join(".wt/planning/specs")
             .join(spec)

@@ -545,15 +545,12 @@ fn collect_repo_setup_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     let required_dirs = [
         ctx.storage_root.config_dir(),
         ctx.storage_root.profiles_dir(),
-        ctx.storage_root.planning_dir(),
-        ctx.storage_root.ideas_dir(),
-        ctx.storage_root.specs_dir(),
-        ctx.storage_root.retrospectives_dir(),
         ctx.storage_root.execution_dir(),
         ctx.storage_root.tasks_dir(),
         ctx.storage_root.workflows_dir(),
         ctx.storage_root.task_runs_dir(),
         ctx.storage_root.archive_dir(),
+        ctx.storage_root.retrospectives_dir(),
         ctx.storage_root.runtime_dir(),
         ctx.storage_root.runtime_agents_dir(),
     ];
@@ -624,6 +621,15 @@ fn collect_active_workflow_inventory_checks(ctx: &Ctx, checks: &mut Vec<DoctorCh
 }
 
 fn collect_legacy_runtime_actor_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
+    if let Some(legacy) = ctx
+        .storage_root
+        .detect_legacy_retrospectives(&ctx.repo_root)
+    {
+        checks.push(DoctorCheck::warning(
+            "legacy_retrospectives",
+            legacy.error_message_for("retrospective storage"),
+        ));
+    }
     if let Some(legacy) = ctx.storage_root.detect_legacy_agent_state() {
         checks.push(DoctorCheck::warning(
             "legacy_runtime_observations",
@@ -1479,6 +1485,7 @@ fn doctor_label(name: &str) -> &str {
         "repo_config" => "Repo config",
         "core_dirs" => "Core dirs",
         "active_workflow_inventory" => "Active workflow inventory",
+        "legacy_retrospectives" => "Legacy retrospectives",
         "legacy_runtime_observations" => "Legacy runtime observations",
         "legacy_session_anchors" => "Legacy session anchors",
         _ => name,
@@ -2194,6 +2201,30 @@ parent = "develop"
                 .unwrap()
                 .contains(".wt/runtime/agents")
         );
+    }
+
+    #[test]
+    fn doctor_warns_about_legacy_planning_retrospectives() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        fs::create_dir_all(
+            ctx.storage_root
+                .personal_root()
+                .join("planning/retrospectives"),
+        )
+        .unwrap();
+
+        let mut checks = Vec::new();
+        collect_repo_setup_checks(&ctx, &mut checks);
+
+        let warning = checks
+            .iter()
+            .find(|check| check.name == "legacy_retrospectives")
+            .expect("legacy_retrospectives warning must be present");
+        let message = warning.message.as_deref().unwrap();
+        assert!(message.contains(".wt/planning/retrospectives"));
+        assert!(message.contains(".wt/execution/retrospectives"));
+        assert!(message.contains("import or repair legacy state explicitly"));
     }
 
     #[test]

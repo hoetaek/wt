@@ -4535,32 +4535,18 @@ run = "run-archive-unique"
 }
 
 #[test]
-fn scaffold_supports_json_global_flag() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
+fn scaffold_rejects_removed_planning_flags_at_cli_boundary() {
+    for flag in ["--idea", "--spec", "--retrospect"] {
+        let temp = TempDir::new().unwrap();
+        git_init(temp.path());
 
-    let output = wt_command()
-        .current_dir(temp.path())
-        .args(["--json", "scaffold", "demo", "--retrospect"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("JSON output is supported").not())
-        .get_output()
-        .stdout
-        .clone();
-
-    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(value["feature"], "demo");
-    assert_eq!(
-        value["created"][0],
-        "<repo-root>/.wt/planning/specs/demo/04-Feedback/10-retrospect.md"
-    );
-    assert!(value["skipped"].as_array().unwrap().is_empty());
-    assert!(
-        temp.path()
-            .join(".wt/planning/specs/demo/04-Feedback/10-retrospect.md")
-            .is_file()
-    );
+        wt_command()
+            .current_dir(temp.path())
+            .args(["scaffold", "demo", flag])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unexpected argument"));
+    }
 }
 
 #[test]
@@ -5992,13 +5978,11 @@ fn write_repo_agent_config(root: &Path, cli: &str) {
 fn write_wt_core_dirs(root: &Path) {
     for path in [
         root.join(".wt/config/profiles"),
-        root.join(".wt/planning/ideas"),
-        root.join(".wt/planning/specs"),
-        root.join(".wt/planning/retrospectives"),
         root.join(".wt/execution/tasks"),
         root.join(".wt/execution/workflows"),
         root.join(".wt/execution/task-runs"),
         root.join(".wt/execution/archive"),
+        root.join(".wt/execution/retrospectives"),
         root.join(".wt/runtime/agents"),
     ] {
         std::fs::create_dir_all(path).unwrap();
@@ -6609,7 +6593,6 @@ fn init_yes_bootstraps_only_core_state_dirs() {
         vec![
             "config".to_string(),
             "execution".to_string(),
-            "planning".to_string(),
             "runtime".to_string(),
         ]
     );
@@ -6628,18 +6611,46 @@ fn init_yes_bootstraps_only_core_state_dirs() {
     for canonical in [
         "config/local.toml",
         "config/profiles",
-        "planning/ideas",
-        "planning/specs",
-        "planning/retrospectives",
         "execution/tasks",
         "execution/workflows",
         "execution/task-runs",
         "execution/archive",
+        "execution/retrospectives",
         "runtime/agents",
     ] {
         assert!(temp.path().join(".wt").join(canonical).exists());
     }
     assert!(!temp.path().join(".claude/settings.local.json").exists());
+}
+
+#[test]
+fn init_skips_planning_and_tolerates_leftover_planning_dirs() {
+    let leftover = TempDir::new().unwrap();
+    git_init(leftover.path());
+    std::fs::create_dir_all(leftover.path().join(".wt/planning/ideas/old-idea")).unwrap();
+    std::fs::create_dir_all(leftover.path().join(".wt/planning/specs/old-spec")).unwrap();
+
+    wt_command()
+        .args(["-C", leftover.path().to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success();
+
+    assert!(
+        leftover
+            .path()
+            .join(".wt/execution/retrospectives")
+            .is_dir()
+    );
+
+    let fresh = TempDir::new().unwrap();
+    git_init(fresh.path());
+
+    wt_command()
+        .args(["-C", fresh.path().to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success();
+
+    assert!(!fresh.path().join(".wt/planning").exists());
 }
 
 #[test]

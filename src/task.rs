@@ -722,6 +722,20 @@ mod tests {
     }
 
     #[test]
+    fn task_body_keeps_planning_spec_paths_opaque() {
+        let body = "## 맥락\n\
+근거: planning/specs/old-spec/03-Architect/05-design.md 참조\n";
+        let task = TaskDocument {
+            title: "demo".into(),
+            branch: "demo".into(),
+            body: body.into(),
+            origin: None,
+        };
+
+        assert!(task.body.contains("planning/specs/old-spec"));
+    }
+
+    #[test]
     fn task_selection_rows_group_provider_tasks_before_local_tasks() {
         let tasks = vec![
             selected_task("local-a", "Local A", "local-a", None),
