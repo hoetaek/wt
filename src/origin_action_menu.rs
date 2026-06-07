@@ -41,7 +41,11 @@ impl OriginActionMenu {
                 OriginActionItem::enabled("Push to issue", "P").external_write(),
                 OriginActionItem::enabled("Open issue in browser", "o"),
                 OriginActionItem::enabled("Copy origin reference", "y"),
-                OriginActionItem::enabled("Attach different origin", "A"),
+                OriginActionItem::disabled(
+                    "Attach different origin",
+                    "A",
+                    "origin replacement not supported",
+                ),
                 OriginActionItem::disabled(
                     "Publish as issue",
                     "pub",
@@ -59,8 +63,7 @@ impl OriginActionMenu {
         origin: Option<OriginLabel>,
         child_origins: Vec<ChildOriginLabel>,
     ) -> Self {
-        let items = if let Some(origin) = origin {
-            let origin = origin.render_plain();
+        let items = if let Some(_origin) = origin {
             vec![
                 OriginActionItem::enabled("Diff workflow with issue", "d"),
                 OriginActionItem::enabled("Fetch workflow origin", "f"),
@@ -69,12 +72,6 @@ impl OriginActionMenu {
                 OriginActionItem::enabled("Open workflow issue in browser", "o"),
                 OriginActionItem::enabled("Copy workflow origin reference", "y"),
                 OriginActionItem::enabled("Attach different workflow origin", "A"),
-                OriginActionItem::disabled(
-                    "Publish workflow as issue",
-                    "pub",
-                    format!("already has origin {origin}"),
-                )
-                .external_write(),
             ]
         } else {
             let no_origin_reason = "no workflow origin attached";
@@ -488,6 +485,34 @@ mod tests {
         assert!(menu.render_plain().contains("child task actions"));
         assert!(menu.render_plain().contains("origin-sync-tui"));
         assert!(menu.render_plain().contains("Linear WT-142"));
+    }
+
+    #[test]
+    fn task_menu_disables_reattach_for_existing_origin() {
+        let menu = OriginActionMenu::for_origin_task(
+            "origin-sync-tui",
+            "Origin sync TUI",
+            OriginLabel::new("Linear", "WT-142"),
+        );
+
+        assert!(!menu.enabled("Attach different origin"));
+        assert_eq!(
+            menu.disabled_reason("Attach different origin").unwrap(),
+            "origin replacement not supported"
+        );
+    }
+
+    #[test]
+    fn workflow_menu_omits_unsupported_publish_action() {
+        let menu = OriginActionMenu::for_workflow(
+            "2026-06-06-001",
+            "Ship provider-origin UX",
+            Some(OriginLabel::new("Linear", "WT-100")),
+            vec![],
+        );
+
+        assert!(menu.disabled_reason("Publish workflow as issue").is_none());
+        assert!(!menu.render_plain().contains("Publish workflow as issue"));
     }
 
     #[test]
