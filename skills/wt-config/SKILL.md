@@ -1,6 +1,6 @@
 ---
 name: wt-config
-description: "Use to inspect the current project and recommend an ideal wt config: ownership, active sections, omitted sections, commands, providers, workspace, workflow policy, profiles, and validation."
+description: "Use to inspect the current project and recommend an ideal wt config: ownership, active sections, omitted sections, commands, env templates, providers, workspace, workflow policy, profiles, and validation."
 ---
 
 # WT Config
@@ -28,6 +28,7 @@ The recommendation must answer:
 - what should stay out and why;
 - what is already configured effectively;
 - which local tools are missing for recommended commands;
+- which env template substitutions, if any, should be active;
 - what commands validate the result.
 
 Ask questions only for choices that cannot be inferred from repo facts and
@@ -86,6 +87,10 @@ Default recommendation rules:
 
 - Keep `[workspace]` when the user benefits from repeatable cmux tabs.
 - Add `[setup]` only when the repo has a real per-worktree install/sync step.
+- Add `[setup.env]` or `[setup.env_files]` only for non-secret,
+  worktree-specific values rendered into env files that already exist after
+  `[worktree]` copy/link/copy_as. Env substitution runs after copy/link and
+  before deps, so deps cannot create the target file for the same setup run.
 - Add `[issues]` only when provider issue workflows are used.
 - Add `[site]`, `[workspace.browser]`, and `workspace.post_deps_tabs` only for
   app/web repos with a local server or URL.
@@ -117,6 +122,9 @@ Default recommendation rules:
 - Prefer per-worktree `.env` copy only in personal config when `.env` exists and
   the repo needs local env state. If docs mention a secret bootstrap tool but
   the tool is missing, recommend `.env` copy over a failing bootstrap command.
+- Do not use env templates as secret bootstrap or file creation. Missing env
+  targets are skipped; pair `[setup.env]` with `.env` copy/link when needed, or
+  omit it and explain the no-op risk.
 - For `[editor]`, recommend exactly one active command. Useful concrete choices
   include `vim {{path}}`, `code {{path}}`, `phpstorm {{path}}`, or
   `pstorm {{path}}`, depending on what the user chose and what is installed.
@@ -136,6 +144,45 @@ port = 9222
 user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
 ```
 
+## Env Template Shape
+
+The implementation module is `env_template`, but the active config surface is
+`[setup.env]` and `[setup.env_files."relative/path"]`. Never recommend an
+`env_template` TOML field or section.
+
+Use root `[setup.env]` only for `<worktree>/.env`. Use
+`[setup.env_files."path"]` for nested or suffix env files such as
+`frontend/.env.development` or `backend/.env`; root `[setup.env]` does not
+discover or update those files.
+
+Values are templates rendered from setup vars, commonly `{{site_url}}`,
+`{{api_url}}`, `{{vite_port}}`, `{{api_port}}`, `{{branch_slug}}`,
+`{{worktree_path}}`, `{{worktree_name}}`, `{{issue_title}}`, and
+`{{wt_agent_id}}`. `{{site_name}}` exists only when a site is configured;
+Chrome debug vars exist only when Chrome DevTools browser setup is active.
+Leave unknown variables visible in the recommendation instead of inventing
+values.
+
+Use shared `.wt.toml` for non-secret repo conventions the whole team should
+share, such as local callback URLs. Use personal
+`<repo-root>/.wt/config/local.toml` for `.env` copying, local-only env file
+paths, machine-specific values, or anything that would reveal private runtime
+details. Never include actual secret values in active TOML examples or
+responses.
+
+Project-shaped example:
+
+```toml
+[worktree]
+copy = [".env"]
+
+[setup.env]
+APP_URL = "{{site_url}}"
+
+[setup.env_files."frontend/.env.development"]
+VITE_API_TARGET = "{{api_url}}"
+```
+
 ## Explain Omissions
 
 For every relevant section that could plausibly be expected, say whether to
@@ -145,6 +192,8 @@ Cover these when relevant:
 
 - `[workspace]`
 - `[setup]`
+- `[setup.env]`
+- `[setup.env_files]`
 - `[issues]`
 - `[site]`
 - `[workspace.browser]`
@@ -214,6 +263,13 @@ explicitly:
   override"), the warning is informational and no fix is needed — that pattern
   is supported. `prompts/<mode>.append.md` is not a conflict; it layers on top
   of either source.
+- **Env template no-op or wrong target.** `wt config` shows `[setup.env]`, but
+  the worktree will not have `.env` after copy/link/copy_as, or the intended
+  file is nested/suffixed such as `frontend/.env.development`. Cause:
+  `[setup.env]` only updates root `.env` and skips missing targets. Fix: add
+  personal `[worktree] copy = [".env"]` or a suitable `copy_as`/`link`, move
+  nested keys under `[setup.env_files."path"]`, or remove the env template if
+  no target file should exist.
 - **Effective ≠ files in another way.** Any setting the user clearly intended
   (a prompt, a tab, a command) is absent from `wt config`. Trace which file
   owns it and why the merge dropped it (wrong section, wrong owner file,
