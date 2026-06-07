@@ -149,6 +149,12 @@ pub(crate) fn push(ctx: &Ctx, tasks: &[String]) -> Result<()> {
     }
 
     let provider = build_issue_push_provider(ctx)?;
+    for key in &keys {
+        let task_key = task::safe_task_key(key);
+        let document = task::read_task_document(ctx, &task_key)?;
+        ensure_push_provider_matches_origin(&task_key, &document, &provider)?;
+    }
+
     for key in keys {
         let task_key = task::safe_task_key(&key);
         let document = task::read_task_document(ctx, &task_key)?;
@@ -161,7 +167,7 @@ pub(crate) fn push(ctx: &Ctx, tasks: &[String]) -> Result<()> {
             ));
             continue;
         }
-        print_push_preview(ctx, &report, selection);
+        print_push_preview(ctx, &document, &report, selection);
         if !ctx
             .ui
             .confirm("Push selected fields to provider issue?", false)?
@@ -213,6 +219,10 @@ impl PushSelection {
 }
 
 trait TaskOriginPushProvider {
+    fn provider_name(&self) -> Option<&'static str> {
+        None
+    }
+
     fn supports_comment(&self) -> bool {
         false
     }
@@ -251,6 +261,13 @@ enum ConfiguredIssuePushProvider<'a> {
 }
 
 impl TaskOriginPushProvider for ConfiguredIssuePushProvider<'_> {
+    fn provider_name(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::Linear(_) => "linear",
+            Self::Github(_) => "github",
+        })
+    }
+
     fn supports_comment(&self) -> bool {
         true
     }
@@ -578,13 +595,22 @@ where
     items
 }
 
-fn print_push_preview(ctx: &Ctx, report: &TaskOriginDiffReport, selection: PushSelection) {
+fn print_push_preview(
+    ctx: &Ctx,
+    document: &task::TaskDocument,
+    report: &TaskOriginDiffReport,
+    selection: PushSelection,
+) {
     ctx.ui.print_plain(&format!(
         "Push preview for {}: {}:{}",
         report.task_key, report.origin.provider, report.origin.id
     ));
     if selection.append_comment {
         ctx.ui.print_plain("  append provider comment");
+        ctx.ui.print_plain("  Comment body:");
+        for line in push_comment_body(&report.task_key, document).lines() {
+            ctx.ui.print_plain(&format!("    {line}"));
+        }
     }
     if selection.title {
         print_selected_provider_overwrite(ctx, "title", &report.fields["title"]);
@@ -652,6 +678,7 @@ where
             "wt task origin push requires a task with [origin]; use `wt task origin publish {task_key}` or `wt task origin attach {task_key} <issue>`"
         )
     })?;
+    ensure_push_provider_matches_origin(&task_key, &document, provider)?;
     let mut snapshot = read_matching_task_snapshot(ctx, &task_key, &document, "push")?;
 
     if selection.append_comment {
@@ -675,6 +702,32 @@ where
         write_snapshot(&ctx.storage_root, &snapshot)?;
     }
 
+    Ok(())
+}
+
+fn ensure_push_provider_matches_origin<P>(
+    task_key: &str,
+    document: &task::TaskDocument,
+    provider: &P,
+) -> Result<()>
+where
+    P: TaskOriginPushProvider + ?Sized,
+{
+    let Some(configured_provider) = provider.provider_name() else {
+        return Ok(());
+    };
+    let origin = document.origin.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "wt task origin push requires a task with [origin]; use `wt task origin publish {task_key}` or `wt task origin attach {task_key} <issue>`"
+        )
+    })?;
+    if origin.provider != configured_provider {
+        bail!(
+            "Cannot push task {task_key}: origin provider {} does not match configured provider {}",
+            origin.provider,
+            configured_provider
+        );
+    }
     Ok(())
 }
 
@@ -1510,6 +1563,91 @@ id = "WT-142"
                 .unwrap()
                 .unwrap();
         assert_eq!(snapshot.baseline.fields.title, "Local title");
+    }
+
+    #[test]
+    fn push_rejects_task_origin_provider_mismatch_before_provider_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r##"title = "Local title"
+branch = "origin-sync-tui"
+body = "local body"
+
+[origin]
+provider = "github"
+id = "#42"
+"##,
+        )
+        .unwrap();
+        let ctx_for_snapshot = ctx(dir.path());
+        let snapshot = crate::origin_snapshot::OriginSnapshot::task(
+            "origin-sync-tui",
+            crate::origin_snapshot::OriginRef::new("github", "#42"),
+            crate::origin_snapshot::FieldSnapshot::new("Local title", "local body"),
+            crate::origin_snapshot::FieldSnapshot::new("Local title", "local body"),
+        );
+        crate::origin_snapshot::write_snapshot(&ctx_for_snapshot.storage_root, &snapshot).unwrap();
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+        ui.add_confirm(true);
+        let ui = Arc::new(ui);
+        let ctx = ctx_with_runner_and_ui(dir.path(), MockRunner::new(), Arc::clone(&ui));
+
+        let err = push(&ctx, &["origin-sync-tui".to_string()])
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("origin provider github"));
+        assert!(err.contains("configured provider linear"));
+    }
+
+    #[test]
+    fn push_comment_preview_includes_exact_comment_body_before_confirmation() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Local title"
+branch = "origin-sync-tui"
+body = "local body with private note"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+        let ctx_for_snapshot = ctx(dir.path());
+        let snapshot = crate::origin_snapshot::OriginSnapshot::task(
+            "origin-sync-tui",
+            crate::origin_snapshot::OriginRef::new("linear", "WT-142"),
+            crate::origin_snapshot::FieldSnapshot::new(
+                "Local title",
+                "local body with private note",
+            ),
+            crate::origin_snapshot::FieldSnapshot::new(
+                "Local title",
+                "local body with private note",
+            ),
+        );
+        crate::origin_snapshot::write_snapshot(&ctx_for_snapshot.storage_root, &snapshot).unwrap();
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+        ui.add_confirm(false);
+        let ui = Arc::new(ui);
+        let ctx = ctx_with_runner_and_ui(dir.path(), MockRunner::new(), Arc::clone(&ui));
+
+        push(&ctx, &["origin-sync-tui".to_string()]).unwrap();
+
+        let rendered = ui.steps.lock().unwrap().join("\n");
+        assert!(rendered.contains("Comment body:"));
+        assert!(rendered.contains("Title: Local title"));
+        assert!(rendered.contains("Branch: origin-sync-tui"));
+        assert!(rendered.contains("local body with private note"));
     }
 
     #[test]
