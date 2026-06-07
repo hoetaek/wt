@@ -1158,7 +1158,7 @@ pub enum WorkflowOriginCommand {
         #[arg(value_name = "WORKFLOW")]
         workflows: Vec<String>,
     },
-    /// Push local Workflow fields or status notes to provider issues
+    /// Append Workflow origin comments to provider issues
     Push {
         /// Workflow TOML paths or shorthand ids with provider issue origins
         #[arg(value_name = "WORKFLOW")]
@@ -1915,6 +1915,9 @@ mod tests {
         assert!(help.contains("Manage provider issue origin links"));
         assert!(help.contains("Workflow title, body, and [origin] only"));
         assert!(help.contains("They do not update child TaskDocuments"));
+        assert!(help.contains("Append Workflow origin comments to provider issues"));
+        let old_push_help = ["fields", "or status notes"].join(" ");
+        assert!(!help.contains(&old_push_help));
     }
 
     #[test]
@@ -2052,6 +2055,29 @@ mod tests {
         assert!(help.contains("no issue provider"));
         assert!(help.contains("already has origin"));
         assert!(help.contains("checked-out worktree"));
+    }
+
+    #[test]
+    fn workflow_origin_attach_accepts_workflow_and_issue_id() {
+        let cli = parse(&[
+            "wt",
+            "workflow",
+            "origin",
+            "attach",
+            "2026-06-06-001",
+            "WT-100",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Origin {
+                    command: WorkflowOriginCommand::Attach {
+                        ref workflow,
+                        ref issue
+                    }
+                }
+            }) if workflow == "2026-06-06-001" && issue == "WT-100"
+        ));
     }
 
     #[test]

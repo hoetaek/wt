@@ -272,9 +272,11 @@ merge.
   context for the saved plan. Workflow `[origin]` belongs to the large
   issue-like unit represented by the Workflow; TaskDocument `[origin]` belongs
   only to a runnable slice that is itself a provider issue.
-- `wt workflow origin attach|fetch|diff|pull|push <workflow>` manages only the
-  saved Workflow title, body, and `[origin]`; it does not propagate origin state
-  into child TaskDocuments.
+- `wt workflow origin attach <workflow> <issue>` records a saved Workflow
+  `[origin]`; `wt workflow origin fetch|diff|pull|push <workflow>` manages only
+  the saved Workflow title, body, and `[origin]`. Workflow push appends a
+  provider comment; it does not overwrite provider title/body or propagate
+  origin state into child TaskDocuments.
 - Workflow mode `single` shares one workspace, `batch` runs independent branches
   from one base, and `stack` runs ordered branches as a parent chain.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid

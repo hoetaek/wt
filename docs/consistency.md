@@ -1418,15 +1418,16 @@ TaskDocument에 적용한다. `push`는 preview와 confirmation 뒤 provider iss
 전진시키지 않는다.
 
 Workflow origin management는 saved Workflow의 provider issue link와 fetched provider
-evidence만 다룬다. Canonical command shape는
-`wt workflow origin attach|fetch|diff|pull|push <workflow>`다. `attach`는 saved Workflow
-top-level `[origin]`만 기록한다. `fetch`는
+evidence만 다룬다. Canonical command shape는 `wt workflow origin attach <workflow> <issue>`와
+`wt workflow origin fetch|diff|pull|push <workflow>`다. `attach`는 saved Workflow
+top-level `[origin]`만 기록하고 provider issue id를 필수 인자로 받는다. `fetch`는
 `<repo-root>/.wt/execution/origins/workflows/<workflow-id>.toml` snapshot evidence만 쓴다.
 `diff`는 Workflow title/body와 fetched provider evidence를 비교하는 read-only command다.
 `pull`은 preview와 field selection 뒤 selected provider title/body만 Workflow에 적용한다.
-`push`는 preview와 confirmation 뒤 provider issue comment append 또는 selected title/body
-field overwrite를 수행한다. Workflow origin action은 child TaskDocument origin을 만들거나
-수정하지 않고, TaskRun status나 PR closing keyword도 바꾸지 않는다.
+`push`는 preview와 confirmation 뒤 Workflow title/body를 담은 provider issue comment만
+append한다. Provider title/body overwrite는 current Workflow push surface에 노출되지 않는다.
+Workflow origin action은 child TaskDocument origin을 만들거나 수정하지 않고, TaskRun status나
+PR closing keyword도 바꾸지 않는다.
 
 Origin snapshot은 source-of-truth file이 아니라 last provider read와 local comparison point를
 보존하는 evidence file이다. Task snapshot path는
