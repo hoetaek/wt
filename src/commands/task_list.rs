@@ -205,9 +205,10 @@ impl TaskRunStatusIndex {
 
     fn is_selectable(&self, key: &str) -> bool {
         let task = task::safe_task_key(key);
-        self.latest_status_by_task
-            .get(&task)
-            .is_none_or(|status| status.is_task_selectable())
+        match self.latest_status_by_task.get(&task) {
+            Some(status) => status.is_task_selectable(),
+            None => !self.invalid_tasks.contains(&task),
+        }
     }
 }
 
@@ -991,6 +992,44 @@ updated_at = "2026-05-18T00:00:00Z"
         assert_eq!(report.tasks[0].key, "demo");
         assert_eq!(report.tasks[0].run_status, "unknown");
         assert!(report.invalid_tasks.is_empty());
+    }
+
+    #[test]
+    fn malformed_only_task_run_is_hidden_from_default_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        let task_runs_dir = dir.path().join(".wt/execution/task-runs");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::create_dir_all(&task_runs_dir).unwrap();
+        fs::write(
+            tasks_dir.join("demo.toml"),
+            r#"title = "Demo"
+branch = "demo"
+body = "Task body"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            task_runs_dir.join("run-broken.toml"),
+            r#"task = "demo"
+branch = "demo"
+status = "started"
+created_at = "2026-05-18T00:00:00Z"
+updated_at = "2026-05-18T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, false).unwrap();
+
+        assert!(report.tasks.is_empty());
+        assert_eq!(report.hidden_task_count, 1);
+
+        let all_report = collect(&ctx, true).unwrap();
+        assert_eq!(all_report.tasks.len(), 1);
+        assert_eq!(all_report.tasks[0].key, "demo");
+        assert_eq!(all_report.tasks[0].run_status, "unknown");
     }
 
     #[test]
