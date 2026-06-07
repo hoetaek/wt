@@ -236,6 +236,8 @@ fn key_input(key: KeyEvent) -> Option<KeyInput> {
     match key.code {
         KeyCode::Up => Some(KeyInput::Up),
         KeyCode::Down => Some(KeyInput::Down),
+        KeyCode::PageUp => Some(KeyInput::PageUp),
+        KeyCode::PageDown => Some(KeyInput::PageDown),
         KeyCode::Enter => Some(KeyInput::Enter),
         KeyCode::Esc => Some(KeyInput::Esc),
         KeyCode::Backspace => Some(KeyInput::Backspace),
@@ -267,5 +269,17 @@ mod tests {
             UiReply::Text("WT-7".into())
         );
         assert_eq!(reply_for(PopupOutcome::Cancelled), UiReply::Cancelled);
+    }
+
+    #[test]
+    fn page_keys_map_to_scroll_inputs() {
+        assert_eq!(
+            key_input(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
+            Some(KeyInput::PageUp)
+        );
+        assert_eq!(
+            key_input(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
+            Some(KeyInput::PageDown)
+        );
     }
 }

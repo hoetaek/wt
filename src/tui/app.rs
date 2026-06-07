@@ -1,4 +1,5 @@
 use crate::origin_action_menu::{OriginAction, OriginActionMenu};
+use crate::tui::body_markup::{self, LineKind};
 use crate::tui::remote_ui::PrintKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +70,8 @@ pub(crate) enum BrowserCell {
 pub(crate) enum KeyInput {
     Up,
     Down,
+    PageUp,
+    PageDown,
     Enter,
     Esc,
     Backspace,
@@ -180,6 +183,8 @@ pub(crate) struct AppState {
     output: OutputPanel,
     running: Option<RunningAction>,
     columns: Vec<BrowserColumn>,
+    body_view_open: bool,
+    body_scroll: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -257,10 +262,16 @@ impl AppState {
             output: OutputPanel::default(),
             running: None,
             columns,
+            body_view_open: false,
+            body_scroll: 0,
         }
     }
 
     pub(crate) fn handle(&mut self, key: KeyInput) -> Outcome {
+        if self.body_view_open {
+            return self.handle_body_view_key(key);
+        }
+
         match self.mode {
             Mode::List => self.handle_list_key(key),
             Mode::FilterInput => self.handle_filter_key(key),
@@ -362,6 +373,20 @@ impl AppState {
 
     pub(crate) fn output_scroll(&self) -> usize {
         self.output.scroll
+    }
+
+    pub(crate) fn body_view_open(&self) -> bool {
+        self.body_view_open
+    }
+
+    pub(crate) fn body_scroll(&self) -> usize {
+        self.body_scroll
+    }
+
+    pub(crate) fn body_lines(&self) -> Vec<(LineKind, String)> {
+        self.selected_row()
+            .map(|row| body_markup::markup_body(&row.body))
+            .unwrap_or_default()
     }
 
     pub(crate) fn begin_action(&mut self, key: &str, verb: &str) {
@@ -509,6 +534,7 @@ impl AppState {
             .unwrap_or(self.selected_index);
         self.clamp_selection();
         self.select_first_enabled_menu_item();
+        self.clamp_body_scroll();
     }
 
     pub(crate) fn origin_status_counts(&self) -> Vec<(&str, usize)> {
@@ -530,6 +556,7 @@ impl AppState {
         match key {
             KeyInput::Down | KeyInput::Char('j') => self.move_down(),
             KeyInput::Up | KeyInput::Char('k') => self.move_up(),
+            KeyInput::Char('v') => self.open_body_view(),
             KeyInput::Char('/') => {
                 self.mode = Mode::FilterInput;
                 self.status_line = "type to filter; Esc clears filter".into();
@@ -543,7 +570,7 @@ impl AppState {
                     return Outcome::Dispatch { key, action };
                 }
             }
-            KeyInput::Esc | KeyInput::Backspace => {}
+            KeyInput::PageUp | KeyInput::PageDown | KeyInput::Esc | KeyInput::Backspace => {}
         }
         Outcome::Continue
     }
@@ -570,6 +597,7 @@ impl AppState {
                 self.filter.push(ch);
                 self.clamp_selection();
             }
+            KeyInput::PageUp | KeyInput::PageDown => {}
         }
         Outcome::Continue
     }
@@ -584,9 +612,46 @@ impl AppState {
             KeyInput::Up | KeyInput::Char('k') => self.move_menu_up(),
             KeyInput::Enter => return self.menu_enter(),
             KeyInput::Char('q') => return Outcome::Quit,
-            KeyInput::Char(_) | KeyInput::Backspace => {}
+            KeyInput::PageUp | KeyInput::PageDown | KeyInput::Char(_) | KeyInput::Backspace => {}
         }
         Outcome::Continue
+    }
+
+    fn handle_body_view_key(&mut self, key: KeyInput) -> Outcome {
+        match key {
+            KeyInput::Esc | KeyInput::Char('v') => self.close_body_view(),
+            KeyInput::Down | KeyInput::Char('j') => self.scroll_body_down(1),
+            KeyInput::Up | KeyInput::Char('k') => self.scroll_body_up(1),
+            KeyInput::PageDown => self.scroll_body_down(10),
+            KeyInput::PageUp => self.scroll_body_up(10),
+            KeyInput::Enter | KeyInput::Backspace | KeyInput::Char(_) => {}
+        }
+        Outcome::Continue
+    }
+
+    fn open_body_view(&mut self) {
+        self.body_view_open = true;
+        self.body_scroll = 0;
+        self.status_line = "j/k scroll  PgUp/PgDn page  v/Esc close".into();
+    }
+
+    fn close_body_view(&mut self) {
+        self.body_view_open = false;
+        self.status_line = default_status_line();
+    }
+
+    fn scroll_body_down(&mut self, amount: usize) {
+        let max_scroll = self.body_lines().len().saturating_sub(1);
+        self.body_scroll = self.body_scroll.saturating_add(amount).min(max_scroll);
+    }
+
+    fn scroll_body_up(&mut self, amount: usize) {
+        self.body_scroll = self.body_scroll.saturating_sub(amount);
+    }
+
+    fn clamp_body_scroll(&mut self) {
+        let max_scroll = self.body_lines().len().saturating_sub(1);
+        self.body_scroll = self.body_scroll.min(max_scroll);
     }
 
     fn move_down(&mut self) {
@@ -688,7 +753,12 @@ fn handle_confirm_popup_key(selected: &mut bool, key: KeyInput) -> Option<PopupO
             *selected = false;
             None
         }
-        KeyInput::Up | KeyInput::Down | KeyInput::Backspace | KeyInput::Char(_) => None,
+        KeyInput::Up
+        | KeyInput::Down
+        | KeyInput::PageUp
+        | KeyInput::PageDown
+        | KeyInput::Backspace
+        | KeyInput::Char(_) => None,
     }
 }
 
@@ -725,7 +795,7 @@ fn handle_select_popup_key(
             }
             None
         }
-        KeyInput::Backspace | KeyInput::Char(_) => None,
+        KeyInput::PageUp | KeyInput::PageDown | KeyInput::Backspace | KeyInput::Char(_) => None,
     }
 }
 
@@ -741,12 +811,12 @@ fn handle_input_popup_key(buffer: &mut String, key: KeyInput) -> Option<PopupOut
             buffer.push(ch);
             None
         }
-        KeyInput::Up | KeyInput::Down => None,
+        KeyInput::Up | KeyInput::Down | KeyInput::PageUp | KeyInput::PageDown => None,
     }
 }
 
 fn default_status_line() -> String {
-    "j/k move  / filter  Enter actions  q quit".into()
+    "j/k move  / filter  v body  Enter actions  q quit".into()
 }
 
 fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
@@ -829,6 +899,12 @@ mod tests {
             row("workflow-docs", "Workflow origin docs", "stale"),
             row("scratch-clean", "Scratch cleanup", "local"),
         ])
+    }
+
+    fn app_with_body(body: &str) -> AppState {
+        let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
+        browser_row.body = body.into();
+        AppState::new(vec![browser_row])
     }
 
     #[test]
@@ -925,6 +1001,43 @@ mod tests {
         assert!(!app.action_in_flight());
         assert_eq!(app.status_line(), "pulled origin-sync-tui");
         assert_eq!(app.output_lines().len(), 1);
+    }
+
+    #[test]
+    fn v_key_toggles_body_view_and_esc_closes() {
+        let mut app = app();
+        assert!(!app.body_view_open());
+        app.handle(KeyInput::Char('v'));
+        assert!(app.body_view_open());
+        app.handle(KeyInput::Esc);
+        assert!(!app.body_view_open());
+    }
+
+    #[test]
+    fn body_view_scrolls_and_blocks_dispatch() {
+        let mut app = app_with_body("one\ntwo\nthree\nfour");
+        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Char('j'));
+        assert_eq!(app.body_scroll(), 1);
+
+        let outcome = app.handle(KeyInput::Enter);
+        assert_eq!(outcome, Outcome::Continue);
+        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.handle(KeyInput::Char('d')), Outcome::Continue);
+    }
+
+    #[test]
+    fn body_view_page_keys_scroll_by_larger_steps() {
+        let body = (0..20)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = app_with_body(&body);
+        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::PageDown);
+        assert_eq!(app.body_scroll(), 10);
+        app.handle(KeyInput::PageUp);
+        assert_eq!(app.body_scroll(), 0);
     }
 
     #[test]

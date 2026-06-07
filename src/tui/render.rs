@@ -1,24 +1,27 @@
 use crate::tui::app::{
     AppState, BrowserCell, BrowserColumn, BrowserColumnWidth, BrowserRow, Mode, PopupView,
 };
+use crate::tui::body_markup::LineKind;
 use crate::tui::remote_ui::PrintKind;
 use crate::tui::theme;
 use console::measure_text_width;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
 
 const PREVIEW_MIN_HEIGHT: u16 = 16;
 const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
 
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &AppState) {
     let area = frame.area();
+    let show_body = app.body_view_open();
     let show_output = !app.output_lines().is_empty();
-    let show_preview = area.height >= PREVIEW_MIN_HEIGHT
+    let show_preview = !show_body
+        && area.height >= PREVIEW_MIN_HEIGHT
         && (!show_output || area.height >= PREVIEW_MIN_HEIGHT + 6);
-    let row_min_height = if show_preview { 5 } else { 1 };
+    let row_min_height = if show_body || show_preview { 5 } else { 1 };
     let mut constraints = vec![Constraint::Length(3), Constraint::Min(row_min_height)];
     if show_output {
         constraints.push(Constraint::Length(output_panel_height(area)));
@@ -32,7 +35,11 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &AppState) {
     let mut chunk_index = 0;
     draw_header(frame, chunks[chunk_index], app);
     chunk_index += 1;
-    draw_rows(frame, chunks[chunk_index], app);
+    if show_body {
+        draw_body_view(frame, chunks[chunk_index], app);
+    } else {
+        draw_rows(frame, chunks[chunk_index], app);
+    }
     chunk_index += 1;
     if show_output {
         draw_output_panel(frame, chunks[chunk_index], app);
@@ -280,6 +287,68 @@ fn draw_output_panel(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
             .title_style(theme::chrome_style()),
     );
     frame.render_widget(output, area);
+}
+
+fn draw_body_view(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
+    let visible_count = area.height.saturating_sub(2) as usize;
+    let body_lines = app.body_lines();
+    let start = body_viewport_start(body_lines.len(), visible_count, app.body_scroll());
+    let mut rendered_lines = body_lines
+        .iter()
+        .skip(start)
+        .take(visible_count)
+        .map(|(kind, text)| body_line(kind, text))
+        .collect::<Vec<_>>();
+    if rendered_lines.is_empty() {
+        rendered_lines.push(Line::styled("no body", theme::dim_style()));
+    }
+
+    let percent = body_scroll_percent(body_lines.len(), visible_count, start);
+    let title = app
+        .selected_row()
+        .map(|row| format!("Body {} {percent}%", row.title))
+        .unwrap_or_else(|| format!("Body {percent}%"));
+    let body = Paragraph::new(rendered_lines)
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(theme::chrome_style())
+                .title_style(theme::chrome_style()),
+        );
+    frame.render_widget(body, area);
+}
+
+fn body_viewport_start(line_count: usize, visible_count: usize, scroll: usize) -> usize {
+    if visible_count == 0 || line_count <= visible_count {
+        return 0;
+    }
+    scroll.min(line_count - visible_count)
+}
+
+fn body_scroll_percent(line_count: usize, visible_count: usize, start: usize) -> usize {
+    if line_count == 0 {
+        return 0;
+    }
+    let visible_end = start.saturating_add(visible_count).min(line_count);
+    visible_end.saturating_mul(100) / line_count
+}
+
+fn body_line(kind: &LineKind, text: &str) -> Line<'static> {
+    match kind {
+        LineKind::Heading => Line::styled(text.to_string(), body_heading_style()),
+        LineKind::Code => Line::styled(text.to_string(), theme::dim_style()),
+        LineKind::Checkbox(checked) => {
+            let marker = if *checked { "☑ " } else { "☐ " };
+            Line::from(vec![Span::raw(marker), Span::raw(text.to_string())])
+        }
+        LineKind::Plain => Line::from(text.to_string()),
+    }
+}
+
+fn body_heading_style() -> Style {
+    Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
 }
 
 fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
@@ -826,6 +895,50 @@ mod tests {
         let text = buffer_text(80, 10, &app);
         assert!(!text.contains("PREVIEW-MARKER"));
         assert!(text.contains("Origin sync TUI"));
+    }
+
+    #[test]
+    fn body_view_renders_markup_body_instead_of_preview() {
+        let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
+        browser_row.body =
+            "## 계획 (Planning)\n- [ ] Step 1\n```rust\nlet x = 1;\n```\nplain".into();
+        browser_row.preview_lines = vec!["PREVIEW-MARKER".into()];
+        let mut app = AppState::new(vec![browser_row]);
+        app.handle(KeyInput::Char('v'));
+
+        let text = buffer_text(80, 24, &app);
+
+        assert!(text.contains("Body Origin sync TUI"));
+        assert!(text.contains("(Planning)"));
+        assert!(text.contains("☐ Step 1"));
+        assert!(text.contains("let x = 1;"));
+        assert!(!text.contains("PREVIEW-MARKER"));
+    }
+
+    #[test]
+    fn body_view_empty_body_renders_no_body_message() {
+        let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
+        app.handle(KeyInput::Char('v'));
+
+        let text = buffer_text(80, 24, &app);
+
+        assert!(text.contains("no body"));
+    }
+
+    #[test]
+    fn body_view_remains_colorless_when_colors_disabled() {
+        let _guard = ColorGuard::set(false);
+        let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
+        browser_row.body = "## Heading\n- [x] Done".into();
+        let mut app = AppState::new(vec![browser_row]);
+        app.handle(KeyInput::Char('v'));
+
+        let buffer = render_buffer(80, 24, &app);
+
+        assert!(
+            !has_colored_cell(&buffer, 80, 24),
+            "body view should not contain semantic or chrome colors when colors are disabled"
+        );
     }
 
     #[test]
