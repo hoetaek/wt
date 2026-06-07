@@ -813,7 +813,7 @@ pub enum InitSiteProvider {
 pub enum TaskCommand {
     /// List actionable local TaskDocument files
     #[command(
-        long_about = "List actionable <repo-root>/.wt/execution/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is passed or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nEach mode reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
+        long_about = "List actionable <repo-root>/.wt/execution/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is passed or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nIn a TTY without --json or --quiet, opens the full-screen interactive browser; pipes and --json keep the text/JSON output.\n\nEach mode reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
     )]
     List {
         /// Show the full TaskDocument inventory, including passed and running tasks
@@ -1932,6 +1932,22 @@ mod tests {
         assert!(help.contains("origin"));
         assert!(!help.contains("Import provider issues as local TaskDocuments"));
         assert!(!help.contains("Publish local TaskDocuments as provider issues"));
+    }
+
+    #[test]
+    fn task_list_help_describes_interactive_tty_browser() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("list")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("In a TTY without --json or --quiet"));
+        assert!(help.contains("full-screen interactive browser"));
+        assert!(help.contains("pipes and --json keep the text/JSON output"));
     }
 
     #[test]

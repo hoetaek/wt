@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use console::measure_text_width;
 use serde::Serialize;
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 const LIST_START: &str = "◆";
@@ -23,6 +23,14 @@ const BRANCH_COLUMN_MAX: usize = 48;
 
 pub(crate) fn run(ctx: &Ctx, all: bool) -> Result<()> {
     let report = collect(ctx, all)?;
+    if should_open_browser(ctx) {
+        if crate::tui::terminal_size_allows_task_browser() {
+            return crate::tui::run_task_browser_with(browser_rows(&report));
+        }
+        ctx.ui.print_warning(
+            "Terminal is too small for the task browser; falling back to text output",
+        );
+    }
     if ctx.is_json() {
         write_json(&report)?;
     } else {
@@ -32,13 +40,17 @@ pub(crate) fn run(ctx: &Ctx, all: bool) -> Result<()> {
 }
 
 #[derive(Debug, Serialize)]
-struct TaskListReport {
+pub(crate) struct TaskListReport {
     tasks: Vec<TaskListRow>,
     invalid_tasks: Vec<InvalidTaskRow>,
     #[serde(skip_serializing)]
     hidden_task_count: usize,
     #[serde(skip_serializing)]
     full_inventory: bool,
+}
+
+pub(crate) fn browser_rows(report: &TaskListReport) -> Vec<crate::tui::app::BrowserRow> {
+    report.tasks.iter().map(browser_row).collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -174,6 +186,41 @@ fn task_origin_health(ctx: &Ctx, key: &str, document: &TaskDocument) -> OriginHe
         ),
         Err(err) => OriginHealthSummary::from_snapshot_error(&origin.provider, &origin.id, &err),
     }
+}
+
+fn should_open_browser(ctx: &Ctx) -> bool {
+    !ctx.is_json() && !ctx.quiet && ctx.ui.can_prompt() && std::io::stdout().is_terminal()
+}
+
+fn browser_row(row: &TaskListRow) -> crate::tui::app::BrowserRow {
+    crate::tui::app::BrowserRow {
+        key: row.key.clone(),
+        title: row.display.label().to_string(),
+        status: row.origin_health.status.clone(),
+        origin_label: row.origin_health.origin_label.clone(),
+        next_action: row.origin_health.next_action.clone(),
+        preview_lines: browser_preview_lines(row),
+    }
+}
+
+fn browser_preview_lines(row: &TaskListRow) -> Vec<String> {
+    vec![
+        format!("Local path  {}", row.path),
+        format!(
+            "Branch      {}",
+            row.branch.as_deref().unwrap_or("not prepared")
+        ),
+        format!("Origin      {}", row.origin_health.origin_label),
+        format!(
+            "Fetched     {}",
+            row.origin_health.last_fetched.as_deref().unwrap_or("never")
+        ),
+        format!(
+            "Divergence  {}",
+            row.origin_health.divergence.as_deref().unwrap_or("none")
+        ),
+        format!("Next        {}", row.origin_health.next_action),
+    ]
 }
 
 fn task_key_from_path(path: &Path) -> Result<String> {
@@ -527,6 +574,38 @@ id = "WT-142"
         assert_eq!(
             menu.disabled_reason("Pull from issue").unwrap(),
             "no origin attached"
+        );
+    }
+
+    #[test]
+    fn browser_rows_project_origin_health_from_task_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Origin sync TUI"
+branch = "origin-sync-tui"
+body = "local body"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+        let rows = browser_rows(&report);
+
+        assert_eq!(rows[0].key, "origin-sync-tui");
+        assert_eq!(rows[0].origin_label, "Linear WT-142");
+        assert!(
+            rows[0]
+                .preview_lines
+                .iter()
+                .any(|line| line.contains("Linear WT-142"))
         );
     }
 
