@@ -208,6 +208,14 @@ impl AppState {
             .is_some_and(|item| !item.is_enabled())
     }
 
+    /// Show a status-line dispatch result: close the action menu and put the
+    /// one-line message in the status line. No row refresh — status-line
+    /// actions do not change on-disk state.
+    pub(crate) fn show_dispatch_message(&mut self, message: String) {
+        self.mode = Mode::List;
+        self.status_line = message;
+    }
+
     pub(crate) fn replace_rows_preserving_selection(
         &mut self,
         rows: Vec<BrowserRow>,
@@ -482,6 +490,18 @@ mod tests {
         assert_eq!(app.visible_keys().len(), 3);
         app.handle(KeyInput::Backspace);
         assert_eq!(app.filter(), "", "빈 filter에서 backspace는 no-op");
+    }
+
+    #[test]
+    fn show_dispatch_message_closes_menu_and_fills_status_line() {
+        let mut app = app();
+        app.handle(KeyInput::Enter);
+        assert_eq!(app.mode(), Mode::Menu);
+
+        app.show_dispatch_message("Copied reference linear:WT-142".into());
+
+        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.status_line(), "Copied reference linear:WT-142");
     }
 
     #[test]

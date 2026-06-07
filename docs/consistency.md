@@ -1554,11 +1554,18 @@ Workflow, origin snapshot 같은 디스크 상태만 읽는다. 액션 메뉴는
 모델이 단일 소스이며, 단축키는 액셀러레이터일 뿐이다. 모든 액션은 Enter 메뉴에서
 발견 가능해야 한다.
 
-액션 실행은 suspend-resume 디스패치다. TUI는 alternate screen을 해제하고 기존 백엔드
-명령 플로우를 실행한 뒤 복귀해 상태를 갱신한다. 외부 쓰기 preview/confirmation 같은
-안전 게이트는 백엔드 플로우가 소유하며, TUI는 게이트를 추가하지도 우회하지도 않는다.
-Workflow 브라우저의 child origin은 inspection 전용이고 workflow 액션으로 child
-TaskDocument origin을 수정하지 않는다.
+액션 실행은 액션별 output sink를 따른다. 진짜 터미널이 필요한 액션 — 네트워크를
+타거나, 백엔드 게이트(confirm/select/input)가 있거나, 출력이 긴 diff·fetch·pull·
+push·publish·attach — 는 terminal sink다: TUI가 alternate screen을 해제하고 동등한
+CLI 명령을 `+ <명령>` 헤더로 보여준 뒤 기존 백엔드 명령 플로우를 실행하고, ack 키
+(에러로 끝나도 항상 표시)를 받아 복귀하며 full redraw와 행 갱신을 수행한다. 로컬에서
+즉시 끝나고 결과가 한 줄인 액션 — keep local-only, copy reference, open in browser,
+workflow의 비지원 안내 — 는 status-line sink다: browser를 떠나지 않고 결과 한 줄을
+status line에 표시하며 suspend도 ack도 행 갱신도 없다. 분류는 backend별 exhaustive
+match가 단일 소스라 새 액션은 분류 없이 컴파일되지 않는다. 외부 쓰기
+preview/confirmation 같은 안전 게이트는 백엔드 플로우가 소유하며, TUI는 게이트를
+추가하지도 우회하지도 않는다. Workflow 브라우저의 child origin은 inspection 전용이고
+workflow 액션으로 child TaskDocument origin을 수정하지 않는다.
 
 `wt workflow show <id>`는 한 Workflow file을 읽는 canonical one-shot observation surface다.
 기본 human 출력은 Workflow meta(path, mode, base, title/body/origin, policy, task count)와

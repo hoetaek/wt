@@ -61,9 +61,18 @@ fn run_browser_with_backend(
                         Outcome::Dispatch { key, action } => {
                             let mut lifecycle =
                                 TerminalDispatchLifecycle::new(&mut session, &mut terminal);
-                            dispatch::dispatch(action, &key, &dispatch_backend, &mut lifecycle)?;
-                            let (rows, diagnostics) = refresh()?;
-                            app.replace_rows_preserving_selection(rows, diagnostics, &key);
+                            match dispatch::dispatch(
+                                action,
+                                &key,
+                                &dispatch_backend,
+                                &mut lifecycle,
+                            )? {
+                                None => {
+                                    let (rows, diagnostics) = refresh()?;
+                                    app.replace_rows_preserving_selection(rows, diagnostics, &key);
+                                }
+                                Some(message) => app.show_dispatch_message(message),
+                            }
                         }
                     }
                 }
