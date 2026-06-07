@@ -1,4 +1,6 @@
-use crate::tui::app::{AppState, BrowserRow, Mode, PopupView};
+use crate::tui::app::{
+    AppState, BrowserCell, BrowserColumn, BrowserColumnWidth, BrowserRow, Mode, PopupView,
+};
 use crate::tui::remote_ui::PrintKind;
 use crate::tui::theme;
 use ratatui::Frame;
@@ -93,40 +95,38 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let selected_index = app.selected_visible_index().unwrap_or(0);
     let row_capacity = table_row_capacity(area);
     let offset = row_viewport_offset(selected_index, row_capacity);
+    let columns = app.columns();
     let rows = visible_rows
         .into_iter()
         .enumerate()
         .skip(offset)
         .take(row_capacity)
-        .map(|(index, row)| browser_row(row).style(row_style(app, index)));
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(10),
-            Constraint::Length(18),
-            Constraint::Min(18),
-            Constraint::Length(24),
-            Constraint::Length(8),
-        ],
-    )
-    .header(
-        Row::new(vec![
-            "status",
-            "origin",
-            "title",
-            app.key_column_title(),
-            "next",
-        ])
-        .style(theme::chrome_style()),
-    )
-    .column_spacing(1)
-    .block(
-        Block::default()
-            .title(app.inventory_title())
-            .borders(Borders::ALL)
-            .border_style(theme::chrome_style())
-            .title_style(theme::chrome_style()),
-    );
+        .map(|(index, row)| browser_row(row, columns).style(row_style(app, index)));
+    let constraints = columns
+        .iter()
+        .map(|column| match column.width {
+            BrowserColumnWidth::Length(width) => Constraint::Length(width),
+            BrowserColumnWidth::Min(width) => Constraint::Min(width),
+        })
+        .collect::<Vec<_>>();
+    let table = Table::new(rows, constraints)
+        .header(
+            Row::new(
+                columns
+                    .iter()
+                    .map(|column| column.title.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .style(theme::chrome_style()),
+        )
+        .column_spacing(1)
+        .block(
+            Block::default()
+                .title(app.inventory_title())
+                .borders(Borders::ALL)
+                .border_style(theme::chrome_style())
+                .title_style(theme::chrome_style()),
+        );
     frame.render_widget(table, area);
 }
 
@@ -142,14 +142,39 @@ fn row_viewport_offset(selected_index: usize, row_capacity: usize) -> usize {
     }
 }
 
-fn browser_row(row: &BrowserRow) -> Row<'_> {
-    Row::new(vec![
-        Cell::from(row.status.as_str()).style(status_style(&row.status)),
-        Cell::from(row.origin_label.as_str()),
-        Cell::from(row.title.as_str()),
-        Cell::from(row.key.as_str()),
-        Cell::from(row.next_action.as_str()),
-    ])
+fn browser_row<'a>(row: &'a BrowserRow, columns: &'a [BrowserColumn]) -> Row<'a> {
+    Row::new(
+        columns
+            .iter()
+            .map(|column| browser_cell(row, column))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn browser_cell<'a>(row: &'a BrowserRow, column: &BrowserColumn) -> Cell<'a> {
+    let text = browser_cell_text(row, column.cell);
+    let cell = Cell::from(text);
+    match column.cell {
+        BrowserCell::Status | BrowserCell::OriginStatus => cell.style(status_style(&row.status)),
+        BrowserCell::RunStatus => cell.style(run_status_style(&row.run_status)),
+        _ => cell,
+    }
+}
+
+fn browser_cell_text(row: &BrowserRow, cell: BrowserCell) -> String {
+    match cell {
+        BrowserCell::Status | BrowserCell::OriginStatus => row.status.clone(),
+        BrowserCell::RunStatus => row.run_status.clone(),
+        BrowserCell::OriginLabel => row.origin_label.clone(),
+        BrowserCell::Title => row.title.clone(),
+        BrowserCell::Key => row.key.clone(),
+        BrowserCell::NextAction => row.next_action.clone(),
+        BrowserCell::Duration => row.duration.clone().unwrap_or_else(|| "-".into()),
+        BrowserCell::Size => row.size.clone().unwrap_or_else(|| "-".into()),
+        BrowserCell::Branch => row.branch.clone().unwrap_or_else(|| "not prepared".into()),
+        BrowserCell::Source => row.source.clone(),
+        BrowserCell::Task => format!("{}  task {}", row.title, row.key),
+    }
 }
 
 fn row_style(app: &AppState, index: usize) -> Style {
@@ -470,6 +495,12 @@ fn status_style(status: &str) -> Style {
         .unwrap_or_default()
 }
 
+fn run_status_style(status: &str) -> Style {
+    theme::run_status_color(status)
+        .map(|color| Style::default().fg(color))
+        .unwrap_or_default()
+}
+
 fn menu_item_line<'a>(
     text: String,
     item: &crate::origin_action_menu::OriginActionItem,
@@ -557,8 +588,14 @@ mod tests {
             key: key.into(),
             title: title.into(),
             status: status.into(),
+            run_status: "new".into(),
             origin_label: "Linear WT-142".into(),
             next_action: "diff".into(),
+            duration: None,
+            size: None,
+            branch: Some(format!("feature/{key}")),
+            source: "provider-origin".into(),
+            body: String::new(),
             preview_lines: vec!["Origin      Linear WT-142".into()],
             menu: OriginActionMenu::for_origin_task(
                 key,

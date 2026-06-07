@@ -427,6 +427,32 @@ copy = [".env"]
     assert!(config.worktree.link.is_empty());
     assert!(config.site.is_none());
     assert!(config.workspace.is_none());
+    assert_eq!(config.task_list, TaskListConfig::default());
+}
+
+#[test]
+fn parses_task_list_column_config() {
+    let config: Config = toml::from_str(
+        r#"
+[task_list.columns.run]
+hidden = true
+width = 7
+
+[task_list.columns.dur]
+width = 6
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        config.task_list.columns.run,
+        ColumnConfig {
+            hidden: Some(true),
+            width: Some(7)
+        }
+    );
+    assert_eq!(config.task_list.columns.dur.width, Some(6));
+    assert_eq!(config.task_list.columns.dur.hidden, None);
 }
 
 #[test]

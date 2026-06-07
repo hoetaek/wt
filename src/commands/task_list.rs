@@ -1,3 +1,4 @@
+use crate::config::{ColumnConfig, Config};
 use crate::context::Ctx;
 use crate::origin_action_menu::{OriginActionMenu, OriginLabel};
 use crate::origin_snapshot::{FieldSnapshot, OriginHealthSummary, read_task_snapshot};
@@ -14,10 +15,12 @@ const LIST_START: &str = "◆";
 const BAR: &str = "│";
 const FOOTER: &str = "└";
 const BULLET: &str = "•";
-const STATUS_COLUMN_MAX: usize = 10;
-const TITLE_COLUMN_MAX: usize = 56;
+const RUN_COLUMN_MAX: usize = 9;
+const DUR_COLUMN_MAX: usize = 10;
 const SOURCE_COLUMN_MAX: usize = 18;
-const TASK_COLUMN_MAX: usize = 34;
+const ORIGIN_STATUS_COLUMN_MAX: usize = 13;
+const SIZE_COLUMN_MAX: usize = 12;
+const TASK_COLUMN_MAX: usize = 80;
 const NEXT_COLUMN_MAX: usize = 8;
 const BRANCH_COLUMN_MAX: usize = 48;
 
@@ -25,7 +28,7 @@ pub(crate) fn run(ctx: &Ctx, all: bool) -> Result<()> {
     let report = collect(ctx, all)?;
     if should_open_browser(ctx) {
         if crate::tui::terminal_size_allows_task_browser() {
-            return crate::tui::run_task_browser_with(ctx, browser_app(&report), || {
+            return crate::tui::run_task_browser_with(ctx, browser_app(ctx, &report), || {
                 let report = collect(ctx, all)?;
                 Ok((browser_rows(&report), browser_diagnostics(&report)))
             });
@@ -56,8 +59,13 @@ pub(crate) fn browser_rows(report: &TaskListReport) -> Vec<crate::tui::app::Brow
     report.tasks.iter().map(browser_row).collect()
 }
 
-pub(crate) fn browser_app(report: &TaskListReport) -> crate::tui::app::AppState {
-    crate::tui::app::AppState::with_diagnostics(browser_rows(report), browser_diagnostics(report))
+pub(crate) fn browser_app(ctx: &Ctx, report: &TaskListReport) -> crate::tui::app::AppState {
+    let columns = default_task_list_columns(&ctx.config);
+    crate::tui::app::AppState::task_with_columns(
+        browser_rows(report),
+        browser_diagnostics(report),
+        browser_columns(&columns),
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -68,8 +76,12 @@ struct TaskListRow {
     branch: Option<String>,
     origin: Option<TaskOriginSummary>,
     origin_health: OriginHealthSummary,
+    run_status: String,
+    duration: Option<String>,
+    size: Option<String>,
     publish_state: String,
     source: String,
+    body: String,
     body_summary: Option<String>,
     #[serde(skip_serializing)]
     display: task::TaskDocumentDisplay,
@@ -142,16 +154,22 @@ fn read_task_row(ctx: &Ctx, path: &Path) -> Result<TaskListRow> {
         .with_context(|| format!("Failed to read task: {relative_path}"))?;
     let document: TaskDocument = toml::from_str(&content)
         .with_context(|| format!("Failed to parse task: {relative_path}"))?;
-    Ok(task_row(ctx, key, relative_path, document))
+    task_row(ctx, key, relative_path, document)
 }
 
-fn task_row(ctx: &Ctx, key: String, path: String, document: TaskDocument) -> TaskListRow {
+fn task_row(ctx: &Ctx, key: String, path: String, document: TaskDocument) -> Result<TaskListRow> {
     let display = task::TaskDocumentDisplay::for_document(&key, &document);
     let origin = document.origin.as_ref().map(|origin| TaskOriginSummary {
         provider: origin.provider.clone(),
         id: origin.id.clone(),
     });
     let origin_health = task_origin_health(ctx, &key, &document);
+    let run_status = task_run::latest_for_task(ctx, &key)?
+        .map(|record| record.run.status.as_str().to_string())
+        .unwrap_or_else(|| "new".into());
+    let duration = parse_planning_field(&document.body, "예상 소요", "expected duration");
+    let size = parse_planning_field(&document.body, "크기", "size class");
+    let body_summary = body_summary(&document.body);
     let publish_state = if origin.is_some() {
         "published"
     } else {
@@ -163,18 +181,22 @@ fn task_row(ctx: &Ctx, key: String, path: String, document: TaskDocument) -> Tas
         "local"
     };
 
-    TaskListRow {
+    Ok(TaskListRow {
         key,
         path,
         title: document.title,
         branch: task::prepared_branch_name(&document.branch).map(str::to_string),
         origin,
         origin_health,
+        run_status,
+        duration,
+        size,
         publish_state: publish_state.into(),
         source: source.into(),
-        body_summary: body_summary(&document.body),
+        body: document.body,
+        body_summary,
         display,
-    }
+    })
 }
 
 fn task_origin_health(ctx: &Ctx, key: &str, document: &TaskDocument) -> OriginHealthSummary {
@@ -203,8 +225,14 @@ fn browser_row(row: &TaskListRow) -> crate::tui::app::BrowserRow {
         key: row.key.clone(),
         title: row.display.label().to_string(),
         status: row.origin_health.status.clone(),
+        run_status: row.run_status.clone(),
         origin_label: row.origin_health.origin_label.clone(),
         next_action: row.origin_health.next_action.clone(),
+        duration: row.duration.clone(),
+        size: row.size.clone(),
+        branch: row.branch.clone(),
+        source: row.source.clone(),
+        body: row.body.clone(),
         preview_lines: browser_preview_lines(row),
         menu: row.origin_action_menu(),
     }
@@ -213,6 +241,12 @@ fn browser_row(row: &TaskListRow) -> crate::tui::app::BrowserRow {
 fn browser_preview_lines(row: &TaskListRow) -> Vec<String> {
     vec![
         format!("Local path  {}", row.path),
+        format!("Run         {}", row.run_status),
+        format!(
+            "Duration    {}",
+            row.duration.as_deref().unwrap_or("not set")
+        ),
+        format!("Size        {}", row.size.as_deref().unwrap_or("not set")),
         format!(
             "Branch      {}",
             row.branch.as_deref().unwrap_or("not prepared")
@@ -277,6 +311,53 @@ fn body_summary(body: &str) -> Option<String> {
     }
 }
 
+fn parse_planning_field(body: &str, ko: &str, en: &str) -> Option<String> {
+    let mut in_planning = false;
+    let en = en.to_ascii_lowercase();
+
+    for line in body.lines().map(str::trim) {
+        if markdown_heading_text(line).is_some() {
+            in_planning = markdown_heading_text(line).is_some_and(is_planning_heading);
+            continue;
+        }
+        if !in_planning {
+            continue;
+        }
+
+        let Some(item) = line.strip_prefix('-').map(str::trim) else {
+            continue;
+        };
+        let Some((label, value)) = item.split_once(':') else {
+            continue;
+        };
+        if !planning_label_matches(label.trim(), ko, &en) {
+            continue;
+        }
+
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+        return Some(value.to_string());
+    }
+
+    None
+}
+
+fn markdown_heading_text(line: &str) -> Option<&str> {
+    let heading = line.strip_prefix('#')?;
+    Some(heading.trim_start_matches('#').trim())
+}
+
+fn is_planning_heading(heading: &str) -> bool {
+    heading.contains("계획") || heading.to_ascii_lowercase().contains("planning")
+}
+
+fn planning_label_matches(label: &str, ko: &str, en: &str) -> bool {
+    let normalized = label.to_ascii_lowercase();
+    label.contains(ko) || normalized == en || normalized.contains(&format!("({en})"))
+}
+
 fn truncate_chars(value: &str, max_chars: usize) -> String {
     let mut chars = value.chars();
     let truncated = chars.by_ref().take(max_chars).collect::<String>();
@@ -303,7 +384,8 @@ fn print_text(ctx: &Ctx, report: &TaskListReport) {
             .print_plain("No actionable tasks found in <repo-root>/.wt/execution/tasks");
     }
 
-    for line in render_text_lines(report) {
+    let columns = default_task_list_columns(&ctx.config);
+    for line in render_text_lines(report, &columns) {
         ctx.ui.print_plain(&line);
     }
 
@@ -316,7 +398,7 @@ fn print_text(ctx: &Ctx, report: &TaskListReport) {
     }
 }
 
-fn render_text_lines(report: &TaskListReport) -> Vec<String> {
+fn render_text_lines(report: &TaskListReport, columns: &[Column]) -> Vec<String> {
     let mut lines = vec![format!("{LIST_START} Tasks"), BAR.to_string()];
     let mut emitted_group = false;
     for group in ["provider-origin", "local"] {
@@ -334,11 +416,11 @@ fn render_text_lines(report: &TaskListReport) -> Vec<String> {
         }
         lines.push(format!("{BAR} {group}"));
         emitted_group = true;
-        let widths = task_list_column_widths(&rows);
+        let widths = task_list_column_widths(&rows, columns);
         for row in rows {
             lines.push(format!(
                 "{BAR}  {BULLET}  {}",
-                task_inventory_label(row, &widths)
+                task_inventory_label(row, columns, &widths)
             ));
         }
     }
@@ -360,80 +442,203 @@ fn hidden_task_count_hint(count: usize) -> String {
     format!("{count} {noun} hidden; use wt task list --all to show the full inventory")
 }
 
-#[derive(Debug, Clone, Copy)]
-struct TaskListColumnWidths {
-    status: usize,
-    title: usize,
-    source: usize,
-    task: usize,
-    next: usize,
-    branch: usize,
-}
-
-fn task_list_column_widths(rows: &[&TaskListRow]) -> TaskListColumnWidths {
-    rows.iter().fold(
-        TaskListColumnWidths {
-            status: 0,
-            title: 0,
-            source: 0,
-            task: 0,
-            next: 0,
-            branch: 0,
-        },
-        |widths, row| {
-            let columns = task_inventory_columns(row);
-            TaskListColumnWidths {
-                status: capped_width(widths.status, &columns.status, STATUS_COLUMN_MAX),
-                title: capped_width(widths.title, &columns.title, TITLE_COLUMN_MAX),
-                source: capped_width(widths.source, &columns.source, SOURCE_COLUMN_MAX),
-                task: capped_width(widths.task, &columns.task, TASK_COLUMN_MAX),
-                next: capped_width(widths.next, &columns.next, NEXT_COLUMN_MAX),
-                branch: columns.branch.as_deref().map_or(widths.branch, |branch| {
-                    capped_width(widths.branch, branch, BRANCH_COLUMN_MAX)
-                }),
-            }
-        },
-    )
-}
-
 #[derive(Debug, Clone)]
-struct TaskInventoryColumns {
-    status: String,
+struct Column {
     title: String,
-    source: String,
-    task: String,
-    next: String,
-    branch: Option<String>,
+    hidden: bool,
+    width: Option<u16>,
+    grow: bool,
+    kind: TaskListColumnKind,
 }
 
-fn task_inventory_columns(row: &TaskListRow) -> TaskInventoryColumns {
-    TaskInventoryColumns {
-        status: row.origin_health.status.clone(),
-        title: row.display.label().to_string(),
-        source: row.origin_health.origin_label.clone(),
-        task: format!("task {}", row.key),
-        next: row.origin_health.next_action.clone(),
-        branch: row.branch.as_ref().map(|branch| format!("branch {branch}")),
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskListColumnKind {
+    Run,
+    Next,
+    Dur,
+    Task,
+    Branch,
+    Source,
+    OriginStatus,
+    Size,
 }
 
-fn task_inventory_label(row: &TaskListRow, widths: &TaskListColumnWidths) -> String {
-    let columns = task_inventory_columns(row);
-    let mut parts = vec![
-        pad_column(&columns.status, widths.status),
-        pad_column(&columns.source, widths.source),
-        pad_column(&columns.title, widths.title),
-        pad_column(&columns.task, widths.task),
-        pad_column(&columns.next, widths.next),
+fn default_task_list_columns(cfg: &Config) -> Vec<Column> {
+    let mut columns = vec![
+        task_list_column(
+            TaskListColumnKind::Run,
+            "run",
+            false,
+            false,
+            cfg.task_list.columns.run,
+        ),
+        task_list_column(
+            TaskListColumnKind::Next,
+            "next",
+            false,
+            false,
+            cfg.task_list.columns.next,
+        ),
+        task_list_column(
+            TaskListColumnKind::Dur,
+            "dur",
+            false,
+            false,
+            cfg.task_list.columns.dur,
+        ),
+        task_list_column(
+            TaskListColumnKind::Task,
+            "task",
+            false,
+            true,
+            cfg.task_list.columns.task,
+        ),
+        task_list_column(
+            TaskListColumnKind::Branch,
+            "branch",
+            false,
+            false,
+            cfg.task_list.columns.branch,
+        ),
+        task_list_column(
+            TaskListColumnKind::Source,
+            "source",
+            true,
+            false,
+            cfg.task_list.columns.source,
+        ),
+        task_list_column(
+            TaskListColumnKind::OriginStatus,
+            "origin_status",
+            true,
+            false,
+            cfg.task_list.columns.origin_status,
+        ),
+        task_list_column(
+            TaskListColumnKind::Size,
+            "size",
+            true,
+            false,
+            cfg.task_list.columns.size,
+        ),
     ];
-    if let Some(branch) = columns.branch {
-        parts.push(truncate_display_width(&branch, widths.branch));
+
+    if columns.iter().all(|column| column.hidden) {
+        if let Some(task) = columns
+            .iter_mut()
+            .find(|column| column.kind == TaskListColumnKind::Task)
+        {
+            task.hidden = false;
+        }
     }
-    parts.join("  ")
+
+    columns
 }
 
-fn capped_width(current: usize, value: &str, max_width: usize) -> usize {
-    current.max(measure_text_width(value).min(max_width))
+fn task_list_column(
+    kind: TaskListColumnKind,
+    title: &str,
+    default_hidden: bool,
+    grow: bool,
+    config: ColumnConfig,
+) -> Column {
+    Column {
+        title: title.into(),
+        hidden: config.hidden.unwrap_or(default_hidden),
+        width: config.width,
+        grow,
+        kind,
+    }
+}
+
+fn browser_columns(columns: &[Column]) -> Vec<crate::tui::app::BrowserColumn> {
+    columns
+        .iter()
+        .filter(|column| !column.hidden)
+        .map(|column| {
+            let cell = match column.kind {
+                TaskListColumnKind::Run => crate::tui::app::BrowserCell::RunStatus,
+                TaskListColumnKind::Next => crate::tui::app::BrowserCell::NextAction,
+                TaskListColumnKind::Dur => crate::tui::app::BrowserCell::Duration,
+                TaskListColumnKind::Task => crate::tui::app::BrowserCell::Task,
+                TaskListColumnKind::Branch => crate::tui::app::BrowserCell::Branch,
+                TaskListColumnKind::Source => crate::tui::app::BrowserCell::Source,
+                TaskListColumnKind::OriginStatus => crate::tui::app::BrowserCell::OriginStatus,
+                TaskListColumnKind::Size => crate::tui::app::BrowserCell::Size,
+            };
+            let width = column
+                .width
+                .unwrap_or_else(|| task_list_column_max(column.kind, column.grow) as u16);
+            if column.grow && column.width.is_none() {
+                crate::tui::app::BrowserColumn::min(&column.title, cell, width)
+            } else {
+                crate::tui::app::BrowserColumn::length(&column.title, cell, width)
+            }
+        })
+        .collect()
+}
+
+fn task_list_column_widths(rows: &[&TaskListRow], columns: &[Column]) -> Vec<usize> {
+    columns
+        .iter()
+        .filter(|column| !column.hidden)
+        .map(|column| {
+            if let Some(width) = column.width {
+                return width as usize;
+            }
+            let max_width = task_list_column_max(column.kind, column.grow);
+            rows.iter()
+                .map(|row| measure_text_width(&task_inventory_column(row, column.kind)))
+                .max()
+                .unwrap_or(0)
+                .max(measure_text_width(&column.title))
+                .min(max_width)
+        })
+        .collect()
+}
+
+fn task_inventory_label(row: &TaskListRow, columns: &[Column], widths: &[usize]) -> String {
+    columns
+        .iter()
+        .filter(|column| !column.hidden)
+        .zip(widths.iter().copied())
+        .map(|(column, width)| pad_column(&task_inventory_column(row, column.kind), width))
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn task_inventory_column(row: &TaskListRow, kind: TaskListColumnKind) -> String {
+    match kind {
+        TaskListColumnKind::Run => row.run_status.clone(),
+        TaskListColumnKind::Next => row.origin_health.next_action.clone(),
+        TaskListColumnKind::Dur => row.duration.clone().unwrap_or_else(|| "-".into()),
+        TaskListColumnKind::Task => format!("{}  task {}", row.display.label(), row.key),
+        TaskListColumnKind::Branch => row
+            .branch
+            .as_ref()
+            .map(|branch| format!("branch {branch}"))
+            .unwrap_or_else(|| "not prepared".into()),
+        TaskListColumnKind::Source => row.origin_health.origin_label.clone(),
+        TaskListColumnKind::OriginStatus => row.origin_health.status.clone(),
+        TaskListColumnKind::Size => row.size.clone().unwrap_or_else(|| "-".into()),
+    }
+}
+
+fn task_list_column_max(kind: TaskListColumnKind, grow: bool) -> usize {
+    if grow {
+        return TASK_COLUMN_MAX;
+    }
+
+    match kind {
+        TaskListColumnKind::Run => RUN_COLUMN_MAX,
+        TaskListColumnKind::Next => NEXT_COLUMN_MAX,
+        TaskListColumnKind::Dur => DUR_COLUMN_MAX,
+        TaskListColumnKind::Task => TASK_COLUMN_MAX,
+        TaskListColumnKind::Branch => BRANCH_COLUMN_MAX,
+        TaskListColumnKind::Source => SOURCE_COLUMN_MAX,
+        TaskListColumnKind::OriginStatus => ORIGIN_STATUS_COLUMN_MAX,
+        TaskListColumnKind::Size => SIZE_COLUMN_MAX,
+    }
 }
 
 fn pad_column(value: &str, width: usize) -> String {
@@ -476,7 +681,6 @@ fn write_json(report: &TaskListReport) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions, OutputMode};
     use crate::task_run;
@@ -586,6 +790,98 @@ id = "WT-142"
     }
 
     #[test]
+    fn task_row_carries_run_status_duration_and_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("demo.toml"),
+            r#"title = "Demo"
+branch = "demo"
+body = '''
+## 계획 (Planning)
+
+- 유형 (type): AFK
+- 예상 소요 (expected duration): 2h
+- 크기 (size class): medium
+
+## 작업
+
+- Keep the full body for later browser views.
+'''
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, false).unwrap();
+        let row = report.tasks.iter().find(|row| row.key == "demo").unwrap();
+
+        assert_eq!(row.run_status, "new");
+        assert_eq!(row.duration.as_deref(), Some("2h"));
+        assert_eq!(row.size.as_deref(), Some("medium"));
+        assert!(row.body.contains("## 계획"));
+
+        let browser_rows = browser_rows(&report);
+        assert_eq!(browser_rows[0].run_status, "new");
+        assert_eq!(browser_rows[0].duration.as_deref(), Some("2h"));
+        assert_eq!(browser_rows[0].size.as_deref(), Some("medium"));
+        assert!(browser_rows[0].body.contains("full body"));
+    }
+
+    #[test]
+    fn duration_is_none_when_planning_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("provider.toml"),
+            r#"title = "Provider"
+branch = "provider"
+body = "Imported provider body without a planning section."
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, false).unwrap();
+
+        assert_eq!(report.tasks[0].duration, None);
+        assert_eq!(report.tasks[0].size, None);
+    }
+
+    #[test]
+    fn default_columns_show_run_dur_task_branch_hide_size() {
+        let cols = default_task_list_columns(&Config::default());
+        let visible = cols
+            .iter()
+            .filter(|column| !column.hidden)
+            .map(|column| column.title.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(visible.contains(&"run"));
+        assert!(visible.contains(&"dur"));
+        assert!(visible.contains(&"task"));
+        assert!(visible.contains(&"branch"));
+        assert!(!visible.contains(&"size"));
+    }
+
+    #[test]
+    fn config_can_hide_run_column_and_set_width() {
+        let mut cfg = Config::default();
+        cfg.task_list.columns.run = ColumnConfig {
+            hidden: Some(true),
+            width: Some(7),
+        };
+
+        let cols = default_task_list_columns(&cfg);
+        let run = cols.iter().find(|column| column.title == "run").unwrap();
+
+        assert!(run.hidden);
+        assert_eq!(run.width, Some(7));
+    }
+
+    #[test]
     fn task_row_builds_origin_action_menu() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
@@ -599,7 +895,8 @@ id = "WT-142"
                 body: String::new(),
                 origin: None,
             },
-        );
+        )
+        .unwrap();
 
         let menu = row.origin_action_menu();
         assert!(menu.enabled("Publish as issue"));
@@ -667,10 +964,10 @@ id = "WT-142"
         assert!(rows[0].menu.disabled_reason("Publish as issue").is_some());
     }
 
-    fn browser_report_text(report: &TaskListReport) -> String {
+    fn browser_report_text(ctx: &Ctx, report: &TaskListReport) -> String {
         let backend = ratatui::backend::TestBackend::new(100, 18);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let app = browser_app(report);
+        let app = browser_app(ctx, report);
         terminal
             .draw(|frame| crate::tui::render::draw(frame, &app))
             .unwrap();
@@ -701,7 +998,7 @@ branch = "valid"
         fs::write(tasks_dir.join("bad.toml"), "unknown = true\n").unwrap();
 
         let report = collect(&ctx, false).unwrap();
-        let text = browser_report_text(&report);
+        let text = browser_report_text(&ctx, &report);
 
         assert!(text.contains("1 invalid task file"));
         assert!(text.contains("<repo-root>/.wt/execution/tasks/bad.toml"));
@@ -731,7 +1028,7 @@ branch = "hidden"
         task_run::create(&ctx, "hidden", "hidden", None, task_run::STATUS_PASSED).unwrap();
 
         let report = collect(&ctx, false).unwrap();
-        let text = browser_report_text(&report);
+        let text = browser_report_text(&ctx, &report);
 
         assert!(text.contains("1 hidden"));
         assert!(text.contains("use --all"));

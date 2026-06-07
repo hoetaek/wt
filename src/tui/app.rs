@@ -6,10 +6,63 @@ pub(crate) struct BrowserRow {
     pub(crate) key: String,
     pub(crate) title: String,
     pub(crate) status: String,
+    pub(crate) run_status: String,
     pub(crate) origin_label: String,
     pub(crate) next_action: String,
+    pub(crate) duration: Option<String>,
+    pub(crate) size: Option<String>,
+    pub(crate) branch: Option<String>,
+    pub(crate) source: String,
+    pub(crate) body: String,
     pub(crate) preview_lines: Vec<String>,
     pub(crate) menu: OriginActionMenu,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BrowserColumn {
+    pub(crate) title: String,
+    pub(crate) cell: BrowserCell,
+    pub(crate) width: BrowserColumnWidth,
+}
+
+impl BrowserColumn {
+    pub(crate) fn length(title: impl Into<String>, cell: BrowserCell, width: u16) -> Self {
+        Self {
+            title: title.into(),
+            cell,
+            width: BrowserColumnWidth::Length(width),
+        }
+    }
+
+    pub(crate) fn min(title: impl Into<String>, cell: BrowserCell, width: u16) -> Self {
+        Self {
+            title: title.into(),
+            cell,
+            width: BrowserColumnWidth::Min(width),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BrowserColumnWidth {
+    Length(u16),
+    Min(u16),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BrowserCell {
+    Status,
+    RunStatus,
+    OriginLabel,
+    Title,
+    Key,
+    NextAction,
+    Duration,
+    Size,
+    Branch,
+    Source,
+    OriginStatus,
+    Task,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +179,7 @@ pub(crate) struct AppState {
     popup: Option<PopupState>,
     output: OutputPanel,
     running: Option<RunningAction>,
+    columns: Vec<BrowserColumn>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -134,7 +188,6 @@ struct BrowserCopy {
     origin_count_label: &'static str,
     inventory_title: &'static str,
     empty_inventory_message: &'static str,
-    key_column_title: &'static str,
     no_selection_message: &'static str,
     no_selection_status: &'static str,
 }
@@ -145,7 +198,6 @@ impl BrowserCopy {
         origin_count_label: "actionable tasks",
         inventory_title: "Tasks",
         empty_inventory_message: "No actionable tasks",
-        key_column_title: "task",
         no_selection_message: "No task selected",
         no_selection_status: "no task selected",
     };
@@ -155,7 +207,6 @@ impl BrowserCopy {
         origin_count_label: "saved workflows",
         inventory_title: "Workflows",
         empty_inventory_message: "No saved workflows",
-        key_column_title: "workflow",
         no_selection_message: "No workflow selected",
         no_selection_status: "no workflow selected",
     };
@@ -167,18 +218,32 @@ impl AppState {
         Self::with_diagnostics(rows, Vec::new())
     }
 
+    #[cfg(test)]
     pub(crate) fn with_diagnostics(rows: Vec<BrowserRow>, diagnostics: Vec<String>) -> Self {
-        Self::with_copy(rows, diagnostics, BrowserCopy::TASK)
+        Self::with_copy(rows, diagnostics, BrowserCopy::TASK, default_task_columns())
+    }
+
+    pub(crate) fn task_with_columns(
+        rows: Vec<BrowserRow>,
+        diagnostics: Vec<String>,
+        columns: Vec<BrowserColumn>,
+    ) -> Self {
+        Self::with_copy(rows, diagnostics, BrowserCopy::TASK, columns)
     }
 
     pub(crate) fn workflow_with_diagnostics(
         rows: Vec<BrowserRow>,
         diagnostics: Vec<String>,
     ) -> Self {
-        Self::with_copy(rows, diagnostics, BrowserCopy::WORKFLOW)
+        Self::with_copy(rows, diagnostics, BrowserCopy::WORKFLOW, workflow_columns())
     }
 
-    fn with_copy(rows: Vec<BrowserRow>, diagnostics: Vec<String>, copy: BrowserCopy) -> Self {
+    fn with_copy(
+        rows: Vec<BrowserRow>,
+        diagnostics: Vec<String>,
+        copy: BrowserCopy,
+        columns: Vec<BrowserColumn>,
+    ) -> Self {
         Self {
             rows,
             diagnostics,
@@ -191,6 +256,7 @@ impl AppState {
             popup: None,
             output: OutputPanel::default(),
             running: None,
+            columns,
         }
     }
 
@@ -368,10 +434,6 @@ impl AppState {
         self.copy.empty_inventory_message
     }
 
-    pub(crate) fn key_column_title(&self) -> &str {
-        self.copy.key_column_title
-    }
-
     pub(crate) fn no_selection_message(&self) -> &str {
         self.copy.no_selection_message
     }
@@ -398,6 +460,10 @@ impl AppState {
             .iter()
             .filter(|row| row_matches_filter(row, &self.filter))
             .collect()
+    }
+
+    pub(crate) fn columns(&self) -> &[BrowserColumn] {
+        &self.columns
     }
 
     pub(crate) fn selected_visible_index(&self) -> Option<usize> {
@@ -691,7 +757,42 @@ fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
     let needle = filter.to_lowercase();
     row.key.to_lowercase().contains(&needle)
         || row.title.to_lowercase().contains(&needle)
+        || row.run_status.to_lowercase().contains(&needle)
         || row.origin_label.to_lowercase().contains(&needle)
+        || row.next_action.to_lowercase().contains(&needle)
+        || row
+            .duration
+            .as_deref()
+            .is_some_and(|duration| duration.to_lowercase().contains(&needle))
+        || row
+            .size
+            .as_deref()
+            .is_some_and(|size| size.to_lowercase().contains(&needle))
+        || row
+            .branch
+            .as_deref()
+            .is_some_and(|branch| branch.to_lowercase().contains(&needle))
+}
+
+#[cfg(test)]
+fn default_task_columns() -> Vec<BrowserColumn> {
+    vec![
+        BrowserColumn::length("status", BrowserCell::Status, 10),
+        BrowserColumn::length("origin", BrowserCell::OriginLabel, 18),
+        BrowserColumn::min("title", BrowserCell::Title, 18),
+        BrowserColumn::length("task", BrowserCell::Key, 24),
+        BrowserColumn::length("next", BrowserCell::NextAction, 8),
+    ]
+}
+
+fn workflow_columns() -> Vec<BrowserColumn> {
+    vec![
+        BrowserColumn::length("status", BrowserCell::Status, 10),
+        BrowserColumn::length("origin", BrowserCell::OriginLabel, 18),
+        BrowserColumn::min("title", BrowserCell::Title, 18),
+        BrowserColumn::length("workflow", BrowserCell::Key, 24),
+        BrowserColumn::length("next", BrowserCell::NextAction, 8),
+    ]
 }
 
 #[cfg(test)]
@@ -709,8 +810,14 @@ mod tests {
             key: key.into(),
             title: title.into(),
             status: status.into(),
+            run_status: "new".into(),
             origin_label: "Linear WT-142".into(),
             next_action: "diff".into(),
+            duration: None,
+            size: None,
+            branch: Some(format!("feature/{key}")),
+            source: "provider-origin".into(),
+            body: String::new(),
             preview_lines: vec![format!("Origin      Linear WT-142")],
             menu,
         }

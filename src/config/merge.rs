@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use super::schema::{PROMPT_COMMON_SCOPE, PROMPT_RUNTIME_MODES, prompt_append_mode};
 use super::{
-    AgentConfig, Config, CopyAsEntry, EditorConfig, ReviewConfig, SetupConfig, WorkflowConfig,
-    WorkspaceConfig, WorktreeConfig,
+    AgentConfig, ColumnConfig, Config, CopyAsEntry, EditorConfig, ReviewConfig, SetupConfig,
+    TaskListConfig, WorkflowConfig, WorkspaceConfig, WorktreeConfig,
 };
 
 pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
@@ -20,6 +20,9 @@ pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
     }
     if profile.review != ReviewConfig::default() {
         merge_review_config(&mut merged.review, profile.review);
+    }
+    if profile.task_list != TaskListConfig::default() {
+        merge_task_list_config(&mut merged.task_list, profile.task_list);
     }
     if profile.profile.is_some() {
         merged.profile = profile.profile;
@@ -206,6 +209,29 @@ fn merge_workflow_config(base: &mut WorkflowConfig, profile: WorkflowConfig) {
 fn merge_review_config(base: &mut ReviewConfig, profile: ReviewConfig) {
     if profile.codex_base.is_some() {
         base.codex_base = profile.codex_base;
+    }
+}
+
+fn merge_task_list_config(base: &mut TaskListConfig, profile: TaskListConfig) {
+    merge_column_config(&mut base.columns.run, profile.columns.run);
+    merge_column_config(&mut base.columns.next, profile.columns.next);
+    merge_column_config(&mut base.columns.dur, profile.columns.dur);
+    merge_column_config(&mut base.columns.task, profile.columns.task);
+    merge_column_config(&mut base.columns.branch, profile.columns.branch);
+    merge_column_config(&mut base.columns.source, profile.columns.source);
+    merge_column_config(
+        &mut base.columns.origin_status,
+        profile.columns.origin_status,
+    );
+    merge_column_config(&mut base.columns.size, profile.columns.size);
+}
+
+fn merge_column_config(base: &mut ColumnConfig, profile: ColumnConfig) {
+    if profile.hidden.is_some() {
+        base.hidden = profile.hidden;
+    }
+    if profile.width.is_some() {
+        base.width = profile.width;
     }
 }
 

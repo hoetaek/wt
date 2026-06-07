@@ -39,6 +39,7 @@ pub struct Config {
     pub setup: SetupConfig,
     pub workflow: WorkflowConfig,
     pub review: ReviewConfig,
+    pub task_list: TaskListConfig,
     pub profile: Option<ProfileConfig>,
     pub site: Option<SiteConfig>,
     pub editor: EditorConfig,
@@ -56,6 +57,32 @@ pub struct WorkflowConfig {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReviewConfig {
     pub codex_base: Option<ReviewCodexBasePolicy>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TaskListConfig {
+    pub columns: TaskListColumns,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TaskListColumns {
+    pub run: ColumnConfig,
+    pub next: ColumnConfig,
+    pub dur: ColumnConfig,
+    pub task: ColumnConfig,
+    pub branch: ColumnConfig,
+    pub source: ColumnConfig,
+    pub origin_status: ColumnConfig,
+    pub size: ColumnConfig,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ColumnConfig {
+    pub width: Option<u16>,
+    pub hidden: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -757,6 +784,7 @@ pub struct ProfileConfig {
     pub name: Option<String>,
     pub worktree: WorktreeConfig,
     pub setup: SetupConfig,
+    pub task_list: TaskListConfig,
     pub site: Option<SiteConfig>,
     pub workspace: Option<WorkspaceConfig>,
     pub agent: Option<AgentConfig>,
@@ -768,6 +796,7 @@ struct ProfileConfigRaw {
     name: Option<String>,
     worktree: WorktreeConfig,
     setup: SetupConfig,
+    task_list: TaskListConfig,
     site: Option<SiteConfig>,
     workspace: Option<WorkspaceConfig>,
     agent: Option<AgentConfig>,
@@ -783,6 +812,7 @@ impl<'de> Deserialize<'de> for ProfileConfig {
             name: raw.name,
             worktree: raw.worktree,
             setup: raw.setup,
+            task_list: raw.task_list,
             site: raw.site,
             workspace: raw.workspace,
             agent: raw.agent,
@@ -798,6 +828,7 @@ impl ProfileConfig {
     pub fn has_inline_settings(&self) -> bool {
         self.worktree != WorktreeConfig::default()
             || self.setup != SetupConfig::default()
+            || self.task_list != TaskListConfig::default()
             || self.site.is_some()
             || self.workspace.is_some()
             || self.agent.is_some()
@@ -810,7 +841,7 @@ impl ProfileConfig {
 
         if self.name.is_some() && self.has_inline_settings() {
             bail!(
-                "[profile] name cannot be combined with inline [profile.agent], [profile.worktree], [profile.setup], [profile.workspace], or [profile.site] sections"
+                "[profile] name cannot be combined with inline [profile.agent], [profile.worktree], [profile.setup], [profile.task_list], [profile.workspace], or [profile.site] sections"
             );
         }
 
@@ -821,6 +852,7 @@ impl ProfileConfig {
         Config {
             worktree: self.worktree,
             setup: self.setup,
+            task_list: self.task_list,
             site: self.site,
             workspace: self.workspace,
             agent: self.agent,
