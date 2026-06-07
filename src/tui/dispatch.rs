@@ -1,8 +1,9 @@
 use crate::commands;
-use crate::context::Ctx;
+use crate::context::{Ctx, CtxOptions, UserInterface};
 use crate::origin_action_menu::OriginAction;
 use crate::origin_snapshot::{read_task_snapshot, read_workflow_snapshot};
 use crate::task;
+use crate::tui::remote_ui::{TuiUi, UiRequest};
 use crate::tui::terminal::{TerminalEffects, TerminalSession};
 use crate::workflow;
 use anyhow::{Context, Result, bail};
@@ -10,26 +11,28 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::crossterm::terminal;
+use std::sync::mpsc;
 
-/// Where an action's result goes. Terminal actions need the real terminal —
-/// network calls, backend gates (confirm/select/input), or long output — so
-/// the browser suspends around them. Status-line actions finish locally with
-/// a one-line result, so the browser stays up and shows the line in its
-/// status line.
+/// Where an action's result goes. Worker actions run backend flows on a worker
+/// thread and stream `UiRequest`s back to the browser. Status-line actions
+/// finish locally with a one-line result, so the browser stays up and shows
+/// the line in its status line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutputSink {
-    Terminal,
+    Worker,
     StatusLine,
 }
+
+pub(crate) type WorkerJob = Box<dyn FnOnce(&Ctx) -> Result<()> + Send>;
 
 pub(crate) trait DispatchBackend {
     /// Classify the action. Each backend keeps this match exhaustive so a new
     /// action cannot ship unclassified.
     fn output_sink(&self, action: OriginAction) -> OutputSink;
-    /// The CLI command that performs the same work; shown as a `+ <cmd>`
-    /// header before terminal-sink output. Only called for terminal actions.
-    fn command_hint(&self, action: OriginAction, key: &str) -> String;
-    fn run_terminal(&self, action: OriginAction, key: &str) -> Result<()>;
+    /// Present-tense action label used for in-flight and final status lines.
+    fn verb(&self, action: OriginAction) -> &'static str;
+    fn worker_job(&self, action: OriginAction, key: &str) -> WorkerJob;
+    fn worker_ctx(&self, ui: Box<dyn UserInterface>) -> Ctx;
     /// Run a status-line action and return its one-line result without
     /// writing to stdout/stderr.
     fn run_status_line(&self, action: OriginAction, key: &str) -> Result<String>;
@@ -53,41 +56,61 @@ impl DispatchBackend for CtxBackend<'_> {
             | OriginAction::Pull
             | OriginAction::Push
             | OriginAction::Publish
-            | OriginAction::Attach => OutputSink::Terminal,
+            | OriginAction::Attach => OutputSink::Worker,
             OriginAction::KeepLocal | OriginAction::OpenInBrowser | OriginAction::CopyReference => {
                 OutputSink::StatusLine
             }
         }
     }
 
-    fn command_hint(&self, action: OriginAction, key: &str) -> String {
+    fn verb(&self, action: OriginAction) -> &'static str {
         match action {
-            OriginAction::Diff => format!("wt task origin diff {key}"),
-            OriginAction::Fetch => format!("wt task origin fetch {key}"),
-            OriginAction::Pull => format!("wt task origin pull {key}"),
-            OriginAction::Push => format!("wt task origin push {key}"),
-            OriginAction::Publish => format!("wt task origin publish {key}"),
-            OriginAction::Attach => format!("wt task origin attach {key}"),
-            // Status-line actions never render a terminal header.
+            OriginAction::Diff => "diff",
+            OriginAction::Fetch => "fetch",
+            OriginAction::Pull => "pull",
+            OriginAction::Push => "push",
+            OriginAction::Publish => "publish",
+            OriginAction::Attach => "attach",
             OriginAction::KeepLocal | OriginAction::OpenInBrowser | OriginAction::CopyReference => {
-                String::new()
+                "run"
             }
         }
     }
 
-    fn run_terminal(&self, action: OriginAction, key: &str) -> Result<()> {
-        let tasks = [key.to_string()];
+    fn worker_job(&self, action: OriginAction, key: &str) -> WorkerJob {
+        let key = key.to_string();
         match action {
-            OriginAction::Diff => commands::task_origin::diff(self.ctx, &tasks),
-            OriginAction::Fetch => commands::task_origin::fetch(self.ctx, &tasks),
-            OriginAction::Pull => commands::task_origin::pull(self.ctx, &tasks),
-            OriginAction::Push => commands::task_origin::push(self.ctx, &tasks),
-            OriginAction::Publish => commands::task_origin::publish(self.ctx, &tasks),
-            OriginAction::Attach => attach_origin(self.ctx, key),
+            OriginAction::Diff => Box::new(move |ctx| commands::task_origin::diff(ctx, &[key])),
+            OriginAction::Fetch => Box::new(move |ctx| commands::task_origin::fetch(ctx, &[key])),
+            OriginAction::Pull => Box::new(move |ctx| commands::task_origin::pull(ctx, &[key])),
+            OriginAction::Push => Box::new(move |ctx| commands::task_origin::push(ctx, &[key])),
+            OriginAction::Publish => {
+                Box::new(move |ctx| commands::task_origin::publish(ctx, &[key]))
+            }
+            OriginAction::Attach => Box::new(move |ctx| attach_origin(ctx, &key)),
             OriginAction::KeepLocal | OriginAction::OpenInBrowser | OriginAction::CopyReference => {
-                bail!("{action:?} is a status-line action")
+                Box::new(move |_| bail!("{action:?} is a status-line action"))
             }
         }
+    }
+
+    fn worker_ctx(&self, ui: Box<dyn UserInterface>) -> Ctx {
+        Ctx::new_with_options(
+            self.ctx.repo_root.clone(),
+            self.ctx.invocation_root.clone(),
+            self.ctx.config.clone(),
+            Box::new(crate::runner::RealRunner),
+            ui,
+            CtxOptions {
+                base_config: self.ctx.base_config.clone(),
+                config_source: self.ctx.config_source.clone(),
+                storage_root: Some(self.ctx.storage_root.clone()),
+                output_mode: self.ctx.output_mode,
+                verbosity: self.ctx.verbosity,
+                quiet: self.ctx.quiet,
+                launcher_coordinator_id: self.ctx.launcher_coordinator_id.clone(),
+            },
+        )
     }
 
     fn run_status_line(&self, action: OriginAction, key: &str) -> Result<String> {
@@ -102,7 +125,7 @@ impl DispatchBackend for CtxBackend<'_> {
             | OriginAction::Pull
             | OriginAction::Push
             | OriginAction::Publish
-            | OriginAction::Attach => bail!("{action:?} is a terminal action"),
+            | OriginAction::Attach => bail!("{action:?} is a worker action"),
         }
     }
 }
@@ -124,7 +147,7 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             | OriginAction::Fetch
             | OriginAction::Pull
             | OriginAction::Push
-            | OriginAction::Attach => OutputSink::Terminal,
+            | OriginAction::Attach => OutputSink::Worker,
             // Publish and KeepLocal answer with a one-line unsupported notice
             // for workflows, so they stay in the browser.
             OriginAction::Publish
@@ -134,33 +157,62 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
         }
     }
 
-    fn command_hint(&self, action: OriginAction, key: &str) -> String {
+    fn verb(&self, action: OriginAction) -> &'static str {
         match action {
-            OriginAction::Diff => format!("wt workflow origin diff {key}"),
-            OriginAction::Fetch => format!("wt workflow origin fetch {key}"),
-            OriginAction::Pull => format!("wt workflow origin pull {key}"),
-            OriginAction::Push => format!("wt workflow origin push {key}"),
-            OriginAction::Attach => format!("wt workflow origin attach {key}"),
+            OriginAction::Diff => "diff",
+            OriginAction::Fetch => "fetch",
+            OriginAction::Pull => "pull",
+            OriginAction::Push => "push",
+            OriginAction::Attach => "attach",
             OriginAction::Publish
             | OriginAction::KeepLocal
             | OriginAction::OpenInBrowser
-            | OriginAction::CopyReference => String::new(),
+            | OriginAction::CopyReference => "run",
         }
     }
 
-    fn run_terminal(&self, action: OriginAction, key: &str) -> Result<()> {
-        let workflows = [key.to_string()];
+    fn worker_job(&self, action: OriginAction, key: &str) -> WorkerJob {
+        let key = key.to_string();
         match action {
-            OriginAction::Diff => commands::workflow::origin::diff(self.ctx, &workflows),
-            OriginAction::Fetch => commands::workflow::origin::fetch(self.ctx, &workflows),
-            OriginAction::Pull => commands::workflow::origin::pull(self.ctx, &workflows),
-            OriginAction::Push => commands::workflow::origin::push(self.ctx, &workflows),
-            OriginAction::Attach => attach_workflow_origin(self.ctx, key),
+            OriginAction::Diff => {
+                Box::new(move |ctx| commands::workflow::origin::diff(ctx, &[key]))
+            }
+            OriginAction::Fetch => {
+                Box::new(move |ctx| commands::workflow::origin::fetch(ctx, &[key]))
+            }
+            OriginAction::Pull => {
+                Box::new(move |ctx| commands::workflow::origin::pull(ctx, &[key]))
+            }
+            OriginAction::Push => {
+                Box::new(move |ctx| commands::workflow::origin::push(ctx, &[key]))
+            }
+            OriginAction::Attach => Box::new(move |ctx| attach_workflow_origin(ctx, &key)),
             OriginAction::Publish
             | OriginAction::KeepLocal
             | OriginAction::OpenInBrowser
-            | OriginAction::CopyReference => bail!("{action:?} is a status-line action"),
+            | OriginAction::CopyReference => {
+                Box::new(move |_| bail!("{action:?} is a status-line action"))
+            }
         }
+    }
+
+    fn worker_ctx(&self, ui: Box<dyn UserInterface>) -> Ctx {
+        Ctx::new_with_options(
+            self.ctx.repo_root.clone(),
+            self.ctx.invocation_root.clone(),
+            self.ctx.config.clone(),
+            Box::new(crate::runner::RealRunner),
+            ui,
+            CtxOptions {
+                base_config: self.ctx.base_config.clone(),
+                config_source: self.ctx.config_source.clone(),
+                storage_root: Some(self.ctx.storage_root.clone()),
+                output_mode: self.ctx.output_mode,
+                verbosity: self.ctx.verbosity,
+                quiet: self.ctx.quiet,
+                launcher_coordinator_id: self.ctx.launcher_coordinator_id.clone(),
+            },
+        )
     }
 
     fn run_status_line(&self, action: OriginAction, key: &str) -> Result<String> {
@@ -177,11 +229,12 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             | OriginAction::Fetch
             | OriginAction::Pull
             | OriginAction::Push
-            | OriginAction::Attach => bail!("{action:?} is a terminal action"),
+            | OriginAction::Attach => bail!("{action:?} is a worker action"),
         }
     }
 }
 
+#[allow(dead_code)]
 pub(crate) trait DispatchLifecycle {
     fn suspend(&mut self) -> Result<()>;
     fn announce(&mut self, command_hint: &str);
@@ -189,17 +242,20 @@ pub(crate) trait DispatchLifecycle {
     fn resume(&mut self) -> Result<()>;
 }
 
+#[allow(dead_code)]
 pub(crate) struct TerminalDispatchLifecycle<'a, E: TerminalEffects, B: Backend> {
     session: &'a mut TerminalSession<E>,
     terminal: &'a mut Terminal<B>,
 }
 
+#[allow(dead_code)]
 impl<'a, E: TerminalEffects, B: Backend> TerminalDispatchLifecycle<'a, E, B> {
     pub(crate) fn new(session: &'a mut TerminalSession<E>, terminal: &'a mut Terminal<B>) -> Self {
         Self { session, terminal }
     }
 }
 
+#[allow(dead_code)]
 impl<E: TerminalEffects, B: Backend> DispatchLifecycle for TerminalDispatchLifecycle<'_, E, B> {
     fn suspend(&mut self) -> Result<()> {
         self.session.suspend()
@@ -240,30 +296,46 @@ impl<E: TerminalEffects, B: Backend> DispatchLifecycle for TerminalDispatchLifec
     }
 }
 
+pub(crate) enum DispatchStart {
+    Started(InFlightAction),
+    Message(String),
+}
+
+pub(crate) struct InFlightAction {
+    pub(crate) key: String,
+    pub(crate) verb: &'static str,
+    pub(crate) ui_rx: mpsc::Receiver<UiRequest>,
+    pub(crate) done_rx: mpsc::Receiver<Result<()>>,
+}
+
 /// Run one origin action through its output sink.
 ///
-/// Returns `None` for terminal actions (the caller refreshes rows after the
-/// suspend-resume round trip) and `Some(message)` for status-line actions
-/// (the caller shows the line in the browser status line; no refresh — these
-/// actions do not change on-disk state).
+/// Worker actions start an in-flight worker thread. Status-line actions return
+/// a one-line browser message; no refresh — these actions do not change
+/// on-disk state.
 pub(crate) fn dispatch(
     action: OriginAction,
     key: &str,
     backend: &impl DispatchBackend,
-    lifecycle: &mut impl DispatchLifecycle,
-) -> Result<Option<String>> {
+) -> Result<DispatchStart> {
     match backend.output_sink(action) {
-        OutputSink::Terminal => {
-            lifecycle.suspend()?;
-            lifecycle.announce(&backend.command_hint(action, key));
-            if let Err(err) = backend.run_terminal(action, key) {
-                eprintln!("{err:#}");
-            }
-            lifecycle.wait_for_ack();
-            lifecycle.resume()?;
-            Ok(None)
+        OutputSink::Worker => {
+            let (ui_tx, ui_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            let job = backend.worker_job(action, key);
+            let ctx = backend.worker_ctx(Box::new(TuiUi::new(ui_tx)));
+            std::thread::spawn(move || {
+                let result = job(&ctx);
+                let _ = done_tx.send(result);
+            });
+            Ok(DispatchStart::Started(InFlightAction {
+                key: key.to_string(),
+                verb: backend.verb(action),
+                ui_rx,
+                done_rx,
+            }))
         }
-        OutputSink::StatusLine => Ok(Some(
+        OutputSink::StatusLine => Ok(DispatchStart::Message(
             backend
                 .run_status_line(action, key)
                 .unwrap_or_else(|err| format!("error: {err:#}")),
@@ -395,201 +467,105 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
-    use crate::context::{Ctx, CtxOptions, OutputMode};
+    use crate::context::{Ctx, CtxOptions, OutputMode, UserInterface};
+    use crate::error::WtError;
     use crate::origin_action_menu::OriginAction;
     use crate::origin_snapshot::{FieldSnapshot, OriginRef, OriginSnapshot, write_snapshot};
-    use std::sync::{Arc, Mutex};
+    use crate::tui::remote_ui::{UiReply, UiRequest};
+    use std::sync::Arc;
 
-    struct RecordingBackend {
-        sink: OutputSink,
-        calls: Mutex<Vec<String>>,
-        fail: bool,
-    }
+    struct FakeJobBackend;
 
-    impl RecordingBackend {
-        fn new(sink: OutputSink, fail: bool) -> Self {
-            Self {
-                sink,
-                calls: Mutex::new(vec![]),
-                fail,
+    impl DispatchBackend for FakeJobBackend {
+        fn output_sink(&self, action: OriginAction) -> OutputSink {
+            match action {
+                OriginAction::CopyReference => OutputSink::StatusLine,
+                _ => OutputSink::Worker,
             }
         }
-    }
 
-    impl DispatchBackend for RecordingBackend {
-        fn output_sink(&self, _action: OriginAction) -> OutputSink {
-            self.sink
+        fn verb(&self, _action: OriginAction) -> &'static str {
+            "pull"
         }
 
-        fn command_hint(&self, action: OriginAction, key: &str) -> String {
-            format!("hint {action:?} {key}")
+        fn worker_job(&self, _action: OriginAction, _key: &str) -> WorkerJob {
+            Box::new(|ctx| {
+                let _confirmed = ctx.ui.confirm("Pull selected provider fields?", false)?;
+                Ok(())
+            })
         }
 
-        fn run_terminal(&self, action: OriginAction, key: &str) -> anyhow::Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("terminal {action:?}:{key}"));
-            if self.fail {
-                anyhow::bail!("provider unreachable")
-            }
-            Ok(())
+        fn worker_ctx(&self, ui: Box<dyn UserInterface>) -> Ctx {
+            test_ctx_with_ui(ui)
         }
 
-        fn run_status_line(&self, action: OriginAction, key: &str) -> anyhow::Result<String> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("status-line {action:?}:{key}"));
-            if self.fail {
-                anyhow::bail!("provider unreachable")
-            }
-            Ok(format!("done {key}"))
-        }
-    }
-
-    struct RecordingLifecycle {
-        log: Mutex<Vec<String>>,
-    }
-
-    impl RecordingLifecycle {
-        fn new() -> Self {
-            Self {
-                log: Mutex::new(vec![]),
-            }
-        }
-    }
-
-    impl DispatchLifecycle for RecordingLifecycle {
-        fn suspend(&mut self) -> anyhow::Result<()> {
-            self.log.lock().unwrap().push("suspend".into());
-            Ok(())
-        }
-
-        fn announce(&mut self, command_hint: &str) {
-            self.log
-                .lock()
-                .unwrap()
-                .push(format!("announce {command_hint}"));
-        }
-
-        fn wait_for_ack(&mut self) {
-            self.log.lock().unwrap().push("ack".into());
-        }
-
-        fn resume(&mut self) -> anyhow::Result<()> {
-            self.log.lock().unwrap().push("resume".into());
-            Ok(())
+        fn run_status_line(&self, _action: OriginAction, key: &str) -> anyhow::Result<String> {
+            Ok(format!("Copied {key}"))
         }
     }
 
     #[test]
-    fn terminal_dispatch_wraps_backend_with_suspend_announce_ack_resume() {
-        let backend = RecordingBackend::new(OutputSink::Terminal, false);
-        let mut lifecycle = RecordingLifecycle::new();
-
-        let outcome = dispatch(
-            OriginAction::Diff,
-            "origin-sync-tui",
-            &backend,
-            &mut lifecycle,
-        )
-        .unwrap();
-
-        assert_eq!(
-            outcome, None,
-            "terminal 싱크는 status 메시지를 만들지 않는다"
-        );
-        assert_eq!(
-            *backend.calls.lock().unwrap(),
-            vec!["terminal Diff:origin-sync-tui"]
-        );
-        assert_eq!(
-            *lifecycle.log.lock().unwrap(),
-            vec![
-                "suspend",
-                "announce hint Diff origin-sync-tui",
-                "ack",
-                "resume"
-            ]
-        );
+    fn status_line_action_returns_message_without_spawning() {
+        let backend = FakeJobBackend;
+        let started = dispatch(OriginAction::CopyReference, "wt-1", &backend).unwrap();
+        let DispatchStart::Message(message) = started else {
+            panic!("expected message")
+        };
+        assert_eq!(message, "Copied wt-1");
     }
 
     #[test]
-    fn terminal_backend_failure_still_acks_and_resumes() {
-        let backend = RecordingBackend::new(OutputSink::Terminal, true);
-        let mut lifecycle = RecordingLifecycle::new();
-
-        let outcome = dispatch(
-            OriginAction::Push,
-            "origin-sync-tui",
-            &backend,
-            &mut lifecycle,
-        );
-
-        assert!(
-            matches!(outcome, Ok(None)),
-            "디스패치는 백엔드 에러를 표시 후 삼키고 세션을 유지한다"
-        );
-        assert_eq!(
-            *lifecycle.log.lock().unwrap(),
-            vec![
-                "suspend",
-                "announce hint Push origin-sync-tui",
-                "ack",
-                "resume"
-            ]
-        );
+    fn worker_action_streams_ui_requests_and_finishes() {
+        let backend = FakeJobBackend;
+        let DispatchStart::Started(inflight) =
+            dispatch(OriginAction::Pull, "wt-1", &backend).unwrap()
+        else {
+            panic!("expected started")
+        };
+        let UiRequest::Confirm { reply, .. } = inflight.ui_rx.recv().unwrap() else {
+            panic!("expected confirm request");
+        };
+        reply.send(UiReply::Bool(true)).unwrap();
+        let result = inflight.done_rx.recv().unwrap();
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn status_line_dispatch_returns_message_without_touching_lifecycle() {
-        let backend = RecordingBackend::new(OutputSink::StatusLine, false);
-        let mut lifecycle = RecordingLifecycle::new();
-
-        let outcome = dispatch(
-            OriginAction::CopyReference,
-            "origin-sync-tui",
-            &backend,
-            &mut lifecycle,
-        )
-        .unwrap();
-
-        assert_eq!(outcome, Some("done origin-sync-tui".into()));
-        assert_eq!(
-            *backend.calls.lock().unwrap(),
-            vec!["status-line CopyReference:origin-sync-tui"]
-        );
-        assert!(
-            lifecycle.log.lock().unwrap().is_empty(),
-            "status-line 싱크는 suspend/ack/resume을 거치지 않는다"
-        );
+    fn cancelled_reply_surfaces_as_cancelled_result() {
+        let backend = FakeJobBackend;
+        let DispatchStart::Started(inflight) =
+            dispatch(OriginAction::Pull, "wt-1", &backend).unwrap()
+        else {
+            panic!("expected started")
+        };
+        let UiRequest::Confirm { reply, .. } = inflight.ui_rx.recv().unwrap() else {
+            panic!("expected confirm request");
+        };
+        reply.send(UiReply::Cancelled).unwrap();
+        let result = inflight.done_rx.recv().unwrap();
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<WtError>(),
+            Some(WtError::Cancelled)
+        ));
     }
 
-    #[test]
-    fn status_line_dispatch_maps_errors_to_error_message() {
-        let backend = RecordingBackend::new(OutputSink::StatusLine, true);
-        let mut lifecycle = RecordingLifecycle::new();
-
-        let outcome = dispatch(
-            OriginAction::CopyReference,
-            "origin-sync-tui",
-            &backend,
-            &mut lifecycle,
-        )
-        .unwrap();
-
-        assert_eq!(outcome, Some("error: provider unreachable".into()));
-        assert!(lifecycle.log.lock().unwrap().is_empty());
+    fn test_ctx_with_ui(ui: Box<dyn UserInterface>) -> Ctx {
+        let dir = tempfile::tempdir().unwrap();
+        test_ctx_at(dir.path(), ui)
     }
 
     fn test_ctx(dir: &std::path::Path) -> Ctx {
+        test_ctx_at(dir, Box::new(Arc::new(MockUi::new())))
+    }
+
+    fn test_ctx_at(dir: &std::path::Path, ui: Box<dyn UserInterface>) -> Ctx {
         Ctx::new_with_options(
             dir.to_path_buf(),
             dir.to_path_buf(),
             Config::default(),
             Box::new(MockRunner::new()),
-            Box::new(Arc::new(MockUi::new())),
+            ui,
             CtxOptions {
                 output_mode: OutputMode::Text,
                 ..CtxOptions::default()
@@ -598,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn task_backend_classifies_actions_by_terminal_need() {
+    fn task_backend_classifies_actions_by_worker_need() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = test_ctx(dir.path());
         let backend = CtxBackend::new(&ctx);
@@ -613,7 +589,7 @@ mod tests {
         ] {
             assert_eq!(
                 backend.output_sink(action),
-                OutputSink::Terminal,
+                OutputSink::Worker,
                 "{action:?}"
             );
         }
@@ -645,7 +621,7 @@ mod tests {
         ] {
             assert_eq!(
                 backend.output_sink(action),
-                OutputSink::Terminal,
+                OutputSink::Worker,
                 "{action:?}"
             );
         }
@@ -664,17 +640,14 @@ mod tests {
     }
 
     #[test]
-    fn command_hints_name_the_equivalent_cli_command() {
+    fn backends_name_worker_verbs_for_status_lines() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = test_ctx(dir.path());
 
+        assert_eq!(CtxBackend::new(&ctx).verb(OriginAction::Diff), "diff");
         assert_eq!(
-            CtxBackend::new(&ctx).command_hint(OriginAction::Diff, "origin-sync-tui"),
-            "wt task origin diff origin-sync-tui"
-        );
-        assert_eq!(
-            WorkflowCtxBackend::new(&ctx).command_hint(OriginAction::Fetch, "2026-06-06-001"),
-            "wt workflow origin fetch 2026-06-06-001"
+            WorkflowCtxBackend::new(&ctx).verb(OriginAction::Fetch),
+            "fetch"
         );
     }
 
