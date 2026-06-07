@@ -63,12 +63,10 @@ pub(crate) fn browser_rows(report: &TaskListReport) -> Vec<crate::tui::app::Brow
 }
 
 pub(crate) fn browser_app(ctx: &Ctx, report: &TaskListReport) -> crate::tui::app::AppState {
+    let rows = browser_rows(report);
     let columns = default_task_list_columns(&ctx.config);
-    crate::tui::app::AppState::task_with_columns(
-        browser_rows(report),
-        browser_diagnostics(report),
-        browser_columns(&columns),
-    )
+    let browser_columns = browser_columns(&columns, &rows);
+    crate::tui::app::AppState::task_with_columns(rows, browser_diagnostics(report), browser_columns)
 }
 
 #[derive(Debug, Serialize)]
@@ -693,7 +691,11 @@ fn task_list_column(
     }
 }
 
-fn browser_columns(columns: &[Column]) -> Vec<crate::tui::app::BrowserColumn> {
+fn browser_columns(
+    columns: &[Column],
+    rows: &[crate::tui::app::BrowserRow],
+) -> Vec<crate::tui::app::BrowserColumn> {
+    let task_width = browser_task_column_min_width(rows);
     columns
         .iter()
         .filter(|column| !column.hidden)
@@ -708,9 +710,9 @@ fn browser_columns(columns: &[Column]) -> Vec<crate::tui::app::BrowserColumn> {
                 TaskListColumnKind::OriginStatus => crate::tui::app::BrowserCell::OriginStatus,
                 TaskListColumnKind::Size => crate::tui::app::BrowserCell::Size,
             };
-            let width = column
-                .width
-                .unwrap_or_else(|| browser_task_list_column_width(column.kind, column.grow) as u16);
+            let width = column.width.unwrap_or_else(|| {
+                browser_task_list_column_width(column.kind, column.grow, task_width) as u16
+            });
             if column.grow && column.width.is_none() {
                 crate::tui::app::BrowserColumn::min(&column.title, cell, width)
             } else {
@@ -720,10 +722,24 @@ fn browser_columns(columns: &[Column]) -> Vec<crate::tui::app::BrowserColumn> {
         .collect()
 }
 
-fn browser_task_list_column_width(kind: TaskListColumnKind, grow: bool) -> usize {
+fn browser_task_column_min_width(rows: &[crate::tui::app::BrowserRow]) -> usize {
+    rows.iter()
+        .map(|row| measure_text_width(&format!("task {}", row.key)))
+        .max()
+        .unwrap_or(0)
+        .max(TASK_BROWSER_MIN)
+}
+
+fn browser_task_list_column_width(
+    kind: TaskListColumnKind,
+    grow: bool,
+    task_width: usize,
+) -> usize {
     match kind {
-        TaskListColumnKind::Task if grow => TASK_BROWSER_MIN,
-        TaskListColumnKind::Branch => BRANCH_BROWSER_WIDTH,
+        TaskListColumnKind::Task if grow => task_width,
+        TaskListColumnKind::Branch => {
+            BRANCH_BROWSER_WIDTH.saturating_sub(task_width.saturating_sub(TASK_BROWSER_MIN))
+        }
         _ => task_list_column_max(kind, grow),
     }
 }
@@ -1453,6 +1469,39 @@ body = '''
                     && line.contains("branch")
             }),
             "default browser columns should remain visible at narrow width:\n{text}"
+        );
+    }
+
+    #[test]
+    fn browser_default_columns_preserve_long_key_at_narrow_width() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("task-list-row-columns.toml"),
+            r#"title = "Long key layout"
+branch = "task-list-row-columns"
+body = '''
+## 계획 (Planning)
+
+- 예상 소요 (expected duration): 2h
+'''
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+        let text = browser_report_text_with_size(&ctx, &report, 80, 18);
+
+        assert!(
+            text.contains("task task-list-row-columns"),
+            "default browser task column should preserve long keys:\n{text}"
+        );
+        assert!(
+            text.lines()
+                .any(|line| line.contains("run") && line.contains("next") && line.contains("dur")),
+            "run/next/dur columns should remain visible with long keys:\n{text}"
         );
     }
 
