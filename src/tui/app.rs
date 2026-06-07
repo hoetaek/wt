@@ -643,13 +643,13 @@ fn handle_select_popup_key(
         )),
         KeyInput::Enter => Some(PopupOutcome::Index(*cursor)),
         KeyInput::Esc => Some(PopupOutcome::Cancelled),
-        KeyInput::Down => {
+        KeyInput::Down | KeyInput::Char('j') => {
             if !items.is_empty() {
                 *cursor = (*cursor + 1).min(items.len() - 1);
             }
             None
         }
-        KeyInput::Up => {
+        KeyInput::Up | KeyInput::Char('k') => {
             *cursor = cursor.saturating_sub(1);
             None
         }
@@ -759,6 +759,23 @@ mod tests {
         });
         app.handle_popup_key(KeyInput::Char(' '));
         app.handle_popup_key(KeyInput::Down);
+        app.handle_popup_key(KeyInput::Char(' '));
+        let outcome = app.handle_popup_key(KeyInput::Enter);
+        assert_eq!(outcome, Some(PopupOutcome::Indices(vec![0, 1])));
+    }
+
+    #[test]
+    fn select_popup_accepts_vim_j_k_like_list_and_menu_modes() {
+        let mut app = app();
+        app.open_popup(PopupSpec::Select {
+            prompt: "Pull fields".into(),
+            items: vec!["title".into(), "body".into()],
+            multi: true,
+        });
+        // j moves the cursor down, then toggle there; k moves back up, toggle.
+        app.handle_popup_key(KeyInput::Char('j'));
+        app.handle_popup_key(KeyInput::Char(' '));
+        app.handle_popup_key(KeyInput::Char('k'));
         app.handle_popup_key(KeyInput::Char(' '));
         let outcome = app.handle_popup_key(KeyInput::Enter);
         assert_eq!(outcome, Some(PopupOutcome::Indices(vec![0, 1])));
