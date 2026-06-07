@@ -126,7 +126,6 @@ const STRINGS = {
     invalid: "invalid",
     record: "record",
     records: "records",
-    metricIdeas: "Ideas",
     metricTaskDocuments: "TaskDocuments",
     metricWorkflows: "Workflows",
     metricTaskRuns: "TaskRuns",
@@ -136,11 +135,9 @@ const STRINGS = {
     tabConfig: "Config",
     tabWorkflows: "Workflows",
     tabTaskRuns: "TaskRuns",
-    tabIdeas: "Ideas",
     tabRetrospecs: "Retrospecs",
     noteOverview: "Action-focused snapshot across personal wt state, prepared workflows, running TaskRuns, and records that need attention.",
-    noteIdeas: "Ideas are planning notes included for read-only context.",
-    noteRetrospecs: "Retrospectives include spec-local work lessons and cross-work learning records.",
+    noteRetrospecs: "Retrospectives include cross-work learning records.",
     noteWorkflows: "Workflows are grouped by derived state and show linked TaskRuns inside each plan.",
     noteTaskRuns: "TaskRuns are execution records from <repo-root>/.wt/execution/task-runs with linked TaskDocument content. Failed or broken links are grouped under Needs attention.",
     noteProfiles: "Profiles are effective agent/config overlays from <repo-root>/.wt/config/profiles.",
@@ -151,13 +148,10 @@ const STRINGS = {
     cockpitWorkflowSubtitle: "Derived Workflow state, runnable work, linked TaskRuns, and source paths.",
     cockpitTaskRunTitle: "TaskRun cockpit",
     cockpitTaskRunSubtitle: "Execution records grouped for comparison by status, branch, context, and source path.",
-    cockpitIdeasTitle: "Ideas cockpit",
-    cockpitIdeasSubtitle: "Planning records with status, source, tags, and source paths kept close to the title.",
     cockpitRetrospecsTitle: "Retrospecs cockpit",
-    cockpitRetrospecsSubtitle: "Spec-local and cross-work lessons with outcome, target, date, tags, and source paths.",
+    cockpitRetrospecsSubtitle: "Cross-work lessons with outcome, target, date, tags, and source paths.",
     workflowIndex: "Workflow index",
     taskRunIndex: "TaskRun index",
-    ideaIndex: "Idea index",
     retrospecIndex: "Retrospec index",
     configIndex: "Config list",
     configGroupAttention: "Needs attention",
@@ -261,8 +255,6 @@ const STRINGS = {
     runningRunCount: "running TaskRuns",
     attentionCount: "need attention",
     invalidRecords: "invalid records",
-    ideas: "Ideas",
-    invalidIdeas: "Invalid ideas",
     retrospecs: "Retrospecs",
     invalidRetrospecs: "Invalid Retrospecs",
     taskRunState: "TaskRun status",
@@ -323,8 +315,6 @@ const STRINGS = {
     noInvalidRecords: "No invalid records",
     noWorkflows: "No Workflows",
     noTaskRuns: "No TaskRuns",
-    noIdeas: "No ideas",
-    noInvalidIdeas: "No invalid ideas",
     noRetrospecs: "No Retrospecs",
     noInvalidRetrospecs: "No invalid Retrospecs",
     noUnlinkedTaskDocuments: "Every valid TaskDocument has at least one TaskRun",
@@ -441,7 +431,6 @@ const STRINGS = {
     invalid: "오류",
     record: "개",
     records: "개",
-    metricIdeas: "아이디어",
     metricTaskDocuments: "작업문서",
     metricWorkflows: "워크플로우",
     metricTaskRuns: "작업 실행",
@@ -451,11 +440,9 @@ const STRINGS = {
     tabConfig: "설정",
     tabWorkflows: "워크플로우",
     tabTaskRuns: "작업 실행",
-    tabIdeas: "아이디어",
     tabRetrospecs: "회고",
     noteOverview: "개인 wt 상태와 준비된 워크플로우, 실행 중인 작업, 확인이 필요한 항목을 우선 보여줍니다.",
-    noteIdeas: "Idea는 읽기 전용 맥락으로 보여주는 기획 노트입니다.",
-    noteRetrospecs: "회고는 spec-local 작업 교훈과 cross-work 학습 기록을 함께 보여줍니다.",
+    noteRetrospecs: "회고는 cross-work 학습 기록을 보여줍니다.",
     noteWorkflows: "워크플로우는 파생 상태별로 정렬하고 각 계획 안에 연결된 작업 실행을 묶어 보여줍니다.",
     noteTaskRuns: "작업 실행은 <repo-root>/.wt/execution/task-runs 실행 기록입니다. 실패했거나 연결이 깨진 항목은 확인 필요로 묶습니다.",
     noteProfiles: "프로필은 <repo-root>/.wt/config/profiles의 agent/config overlay입니다.",
@@ -466,13 +453,10 @@ const STRINGS = {
     cockpitWorkflowSubtitle: "파생 Workflow 상태, 실행 가능한 작업, 연결된 TaskRun, 원본 경로를 비교합니다.",
     cockpitTaskRunTitle: "TaskRun 현황",
     cockpitTaskRunSubtitle: "실행 기록을 상태, branch, context, 원본 경로 기준으로 비교합니다.",
-    cockpitIdeasTitle: "아이디어 현황",
-    cockpitIdeasSubtitle: "기획 기록의 상태, 원본, 태그, source path를 제목 가까이에 둡니다.",
     cockpitRetrospecsTitle: "회고 현황",
-    cockpitRetrospecsSubtitle: "spec-local과 cross-work 회고의 결과, 대상, 날짜, 태그, source path를 먼저 보여줍니다.",
+    cockpitRetrospecsSubtitle: "cross-work 회고의 결과, 대상, 날짜, 태그, source path를 먼저 보여줍니다.",
     workflowIndex: "워크플로우 색인",
     taskRunIndex: "TaskRun 색인",
-    ideaIndex: "아이디어 색인",
     retrospecIndex: "회고 색인",
     configIndex: "설정 목록",
     configGroupAttention: "확인 필요",
@@ -576,8 +560,6 @@ const STRINGS = {
     runningRunCount: "실행 중인 작업",
     attentionCount: "확인 필요",
     invalidRecords: "오류 기록",
-    ideas: "아이디어",
-    invalidIdeas: "오류 아이디어",
     retrospecs: "회고",
     invalidRetrospecs: "오류 회고",
     taskRunState: "TaskRun 상태",
@@ -638,8 +620,6 @@ const STRINGS = {
     noInvalidRecords: "오류 기록이 없습니다",
     noWorkflows: "워크플로우가 없습니다",
     noTaskRuns: "작업 실행이 없습니다",
-    noIdeas: "Idea가 없습니다",
-    noInvalidIdeas: "오류 Idea가 없습니다",
     noRetrospecs: "회고가 없습니다",
     noInvalidRetrospecs: "오류 회고가 없습니다",
     noUnlinkedTaskDocuments: "모든 정상 TaskDocument에 TaskRun이 있습니다",
@@ -728,7 +708,6 @@ function tabLabelKey(view) {
   if (view === "config") return "tabConfig";
   if (view === "workflows") return "tabWorkflows";
   if (view === "task-runs") return "tabTaskRuns";
-  if (view === "ideas") return "tabIdeas";
   if (view === "retrospecs") return "tabRetrospecs";
   return view;
 }
@@ -1087,7 +1066,6 @@ function render() {
   if (view === "config") renderConfig(snapshot);
   if (view === "workflows") renderWorkflows(snapshot);
   if (view === "task-runs") renderTaskRuns(snapshot);
-  if (view === "ideas") renderIdeas(snapshot);
   if (view === "retrospecs") renderRetrospecs(snapshot);
   setStatus(tr("rendered", { view: viewLabel(view) }));
 }
@@ -1123,7 +1101,6 @@ function configuredValue(value) {
 
 function renderMetrics(snapshot) {
   const rows = [
-    [t("metricIdeas"), snapshot.ideas.items.length, snapshot.ideas.invalid.length],
     [t("metricTaskDocuments"), snapshot.tasks.items.length, snapshot.tasks.invalid.length],
     [t("metricWorkflows"), snapshot.workflows.items.length, snapshot.workflows.invalid.length],
     [t("metricTaskRuns"), snapshot.task_runs.items.length, snapshot.task_runs.invalid.length],
@@ -1154,10 +1131,6 @@ function renderOverview(snapshot) {
   ].join("");
 }
 
-function renderIdeas(snapshot) {
-  content.innerHTML = ideasCockpit(snapshot);
-}
-
 function renderRetrospecs(snapshot) {
   content.innerHTML = retrospecsCockpit(snapshot);
 }
@@ -1172,18 +1145,6 @@ function renderTaskRuns(snapshot) {
 
 function renderConfig(snapshot) {
   content.innerHTML = configCockpit(snapshot);
-}
-
-function ideaCard(row) {
-  return card(row.title, [
-    pill(row.status || "unspecified", statusColor(row.status)),
-    pill(row.kind),
-    row.source ? pill(row.source) : "",
-    ...row.tags.map((tag) => pill(tag, "violet")),
-  ], [row.path], row.body_summary, statusColor(row.status), [
-    detail(t("body"), row.body, "prose", row.body_summary),
-    detail(t("source"), row.source_text, "source"),
-  ]);
 }
 
 function taskCard(row) {
@@ -2523,31 +2484,6 @@ function taskRunSourceFields(row) {
   ].filter(Boolean);
 }
 
-function ideasCockpit(snapshot) {
-  const ideas = sortedIdeas(snapshot.ideas.items);
-  const statusGroups = uniqueCount(ideas, (row) => row.status || "unspecified");
-  const tagged = ideas.filter((row) => row.tags.length).length;
-  const records = snapshot.ideas.invalid
-    .map((row) => invalidIdeaMasterDetailRecord(row))
-    .concat(ideas.map(ideaMasterDetailRecord));
-  const stats = [
-    attentionStat(snapshot.ideas.invalid.length),
-    { label: t("ideas"), value: ideas.length },
-    { label: t("statusGroups"), value: statusGroups },
-    { label: t("taggedRecords"), value: tagged },
-  ];
-  return masterDetailPanel({
-    id: "ideas-cockpit",
-    tabKey: "ideas",
-    title: t("cockpitIdeasTitle"),
-    subtitle: t("cockpitIdeasSubtitle"),
-    stats,
-    listTitle: t("ideaIndex"),
-    records,
-    emptyText: t("noIdeas"),
-  });
-}
-
 function retrospecsCockpit(snapshot) {
   const retrospecs = sortedRetrospecs(snapshot.retrospecs.items);
   const outcomeGroups = uniqueCount(retrospecs, (row) => row.outcome || "unspecified");
@@ -2571,58 +2507,6 @@ function retrospecsCockpit(snapshot) {
     records,
     emptyText: t("noRetrospecs"),
   });
-}
-
-function ideaMasterDetailRecord(row) {
-  const status = row.status || "unspecified";
-  return {
-    id: planningMasterDetailRecordId("idea", row),
-    group: status,
-    tone: statusColor(row.status),
-    kicker: row.kind,
-    title: row.title,
-    summary: row.body_summary,
-    listPills: ideaPills(row),
-    pills: ideaPills(row),
-    paths: [row.path],
-    fields: ideaFactFields(row),
-    relationshipsSectionTitle: t("sourcePaths"),
-    relationships: [{ label: t("source"), value: row.path }],
-    summarySectionTitle: t("renderedContent"),
-    collapseSources: true,
-    sources: [
-      { label: t("body"), text: row.body, kind: "prose" },
-      { label: t("sourceToml"), text: row.source_text, kind: "source" },
-    ],
-  };
-}
-
-function invalidIdeaMasterDetailRecord(row) {
-  return invalidPlanningMasterDetailRecord(row, {
-    idPrefix: "invalid-idea",
-    group: t("needsAttention"),
-    kicker: t("invalidIdeas"),
-    entityLabel: t("ideas"),
-  });
-}
-
-function ideaPills(row) {
-  return [
-    pill(row.status || "unspecified", statusColor(row.status)),
-    pill(row.kind),
-    row.source ? pill(row.source, "blue") : "",
-    ...row.tags.slice(0, 4).map((tag) => pill(tag, "violet")),
-  ];
-}
-
-function ideaFactFields(row) {
-  return [
-    { label: t("kindLabel"), value: row.kind },
-    { label: t("statusLabel"), value: row.status || "unspecified" },
-    row.source ? { label: t("source"), value: row.source } : null,
-    row.tags.length ? { label: t("tagsLabel"), value: row.tags.join(", ") } : null,
-    row.updated_at ? { label: t("updatedAtLabel"), value: row.updated_at } : null,
-  ].filter(Boolean);
 }
 
 function retrospecMasterDetailRecord(row) {
@@ -3031,22 +2915,6 @@ function taskDocumentScanRow(row) {
   });
 }
 
-function ideaScanRow(row) {
-  return scanRow({
-    tone: "",
-    kicker: row.kind,
-    title: row.title,
-    summary: row.body_summary,
-    pills: [
-      pill(row.status || "unspecified", statusColor(row.status)),
-      row.source ? pill(row.source, "blue") : "",
-      ...row.tags.slice(0, 4).map((tag) => pill(tag, "violet")),
-    ],
-    paths: [row.path],
-    detail: row.source_text,
-  });
-}
-
 function retrospecScanRow(row) {
   return scanRow({
     tone: "",
@@ -3152,7 +3020,6 @@ function overviewAttentionItems(snapshot) {
     ...sortedWorkflows(snapshot.workflows.items).filter((row) => workflowUiGroup(row) === "needs_attention").map(attentionWorkflowFocusItem),
     ...sortedTaskRuns(snapshot.task_runs.items).filter(taskRunNeedsAttention).map(attentionTaskRunFocusItem),
     ...unlinkedTaskDocuments(snapshot).map(unlinkedTaskFocusItem),
-    ...snapshot.ideas.invalid.map((row) => invalidFocusItem(row, t("invalidIdeas"))),
     ...snapshot.tasks.invalid.map((row) => invalidFocusItem(row, t("invalidTaskDocuments"))),
     ...snapshot.workflows.invalid.map((row) => invalidFocusItem(row, t("invalidWorkflows"))),
     ...snapshot.task_runs.invalid.map((row) => invalidFocusItem(row, t("invalidTaskRuns"))),
@@ -3255,7 +3122,6 @@ function overviewAttentionRows(snapshot) {
     ...sortedWorkflows(snapshot.workflows.items).filter((row) => workflowUiGroup(row) === "needs_attention").map(workflowCard),
     ...sortedTaskRuns(snapshot.task_runs.items).filter(taskRunNeedsAttention).map(taskRunCard),
     ...unlinkedTaskDocuments(snapshot).map(taskCard),
-    ...snapshot.ideas.invalid.map(invalidCard),
     ...snapshot.tasks.invalid.map(invalidCard),
     ...snapshot.workflows.invalid.map(invalidCard),
     ...snapshot.task_runs.invalid.map(invalidCard),
@@ -3549,14 +3415,6 @@ function paths(rows) {
 
 function pill(text, tone = "") {
   return `<span class="pill ${tone}">${escapeHtml(String(text))}</span>`;
-}
-
-function sortedIdeas(rows) {
-  return [...rows].sort((left, right) => {
-    const updated = String(right.updated_at || "").localeCompare(String(left.updated_at || ""));
-    if (updated !== 0) return updated;
-    return String(left.title).localeCompare(String(right.title));
-  });
 }
 
 function sortedRetrospecs(rows) {
