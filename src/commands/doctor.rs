@@ -1842,6 +1842,40 @@ mod tests {
     }
 
     #[test]
+    fn json_message_is_english_regardless_of_language() {
+        fn normalized_json_for(configured_lang: Lang) -> String {
+            let mut check = DoctorCheck::warning_msg("shell_integration", DoctorMsg::WtSetupHint);
+            assert!(check.effective_message(configured_lang).is_some());
+            if let Some(msg) = &check.msg {
+                check.message = Some(msg.render(Lang::En));
+            }
+            serde_json::to_string(&check).unwrap()
+        }
+
+        let en_json = normalized_json_for(Lang::En);
+        let ko_json = normalized_json_for(Lang::Ko);
+
+        assert_eq!(en_json, ko_json);
+        assert_eq!(
+            en_json,
+            r#"{"name":"shell_integration","status":"warning","message":"Run wt setup to install per-machine wt integration."}"#
+        );
+    }
+
+    #[test]
+    fn human_render_is_korean_under_ko_and_english_under_en() {
+        let check = DoctorCheck::warning_msg("shell_integration", DoctorMsg::WtSetupHint);
+        assert_eq!(
+            check.effective_message(Lang::En).as_deref(),
+            Some("Run wt setup to install per-machine wt integration.")
+        );
+        assert_eq!(
+            check.effective_message(Lang::Ko).as_deref(),
+            Some("머신별 wt 통합을 설치하려면 `wt setup` 을 실행하세요.")
+        );
+    }
+
+    #[test]
     fn doctor_msg_renders_current_english_strings() {
         assert_eq!(
             DoctorMsg::WtSetupHint.render(Lang::En),
