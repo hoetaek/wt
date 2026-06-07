@@ -164,9 +164,7 @@ fn task_row(ctx: &Ctx, key: String, path: String, document: TaskDocument) -> Res
         id: origin.id.clone(),
     });
     let origin_health = task_origin_health(ctx, &key, &document);
-    let run_status = task_run::latest_for_task(ctx, &key)?
-        .map(|record| record.run.status.as_str().to_string())
-        .unwrap_or_else(|| "new".into());
+    let run_status = latest_task_run_status_lossy(ctx, &key)?;
     let duration = parse_planning_field(&document.body, "예상 소요", "expected duration");
     let size = parse_planning_field(&document.body, "크기", "size class");
     let body_summary = body_summary(&document.body);
@@ -214,6 +212,46 @@ fn task_origin_health(ctx: &Ctx, key: &str, document: &TaskDocument) -> OriginHe
         ),
         Err(err) => OriginHealthSummary::from_snapshot_error(&origin.provider, &origin.id, &err),
     }
+}
+
+fn latest_task_run_status_lossy(ctx: &Ctx, key: &str) -> Result<String> {
+    let inventory = task_run::list_lossy(ctx)?;
+    let task = task::safe_task_key(key);
+    let mut runs = inventory
+        .records
+        .into_iter()
+        .filter(|record| record.run.task == task)
+        .collect::<Vec<_>>();
+    runs.sort_by(task_run::compare_task_run_records);
+    Ok(runs
+        .pop()
+        .map(|record| record.run.status.as_str().to_string())
+        .unwrap_or_else(|| {
+            if inventory
+                .invalid
+                .iter()
+                .any(|record| invalid_task_run_mentions_task(&record.path, &task))
+            {
+                "unknown".into()
+            } else {
+                "new".into()
+            }
+        }))
+}
+
+fn invalid_task_run_mentions_task(path: &Path, task: &str) -> bool {
+    let Ok(content) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(&content) else {
+        return false;
+    };
+    value
+        .get("task")
+        .and_then(toml::Value::as_str)
+        .map(task::safe_task_key)
+        .as_deref()
+        == Some(task)
 }
 
 fn should_open_browser(ctx: &Ctx) -> bool {
@@ -618,7 +656,7 @@ fn task_inventory_column(row: &TaskListRow, kind: TaskListColumnKind) -> String 
             .as_ref()
             .map(|branch| format!("branch {branch}"))
             .unwrap_or_else(|| "not prepared".into()),
-        TaskListColumnKind::Source => row.origin_health.origin_label.clone(),
+        TaskListColumnKind::Source => row.source.clone(),
         TaskListColumnKind::OriginStatus => row.origin_health.status.clone(),
         TaskListColumnKind::Size => row.size.clone().unwrap_or_else(|| "-".into()),
     }
@@ -848,6 +886,102 @@ body = "Imported provider body without a planning section."
 
         assert_eq!(report.tasks[0].duration, None);
         assert_eq!(report.tasks[0].size, None);
+    }
+
+    #[test]
+    fn malformed_task_run_does_not_invalidate_task_rows_in_full_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        let task_runs_dir = dir.path().join(".wt/execution/task-runs");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::create_dir_all(&task_runs_dir).unwrap();
+        fs::write(
+            tasks_dir.join("demo.toml"),
+            r#"title = "Demo"
+branch = "demo"
+body = "Task body"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            task_runs_dir.join("run-broken.toml"),
+            r#"task = "demo"
+branch = "demo"
+status = "started"
+created_at = "2026-05-18T00:00:00Z"
+updated_at = "2026-05-18T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+
+        assert_eq!(report.tasks.len(), 1);
+        assert_eq!(report.tasks[0].key, "demo");
+        assert_eq!(report.tasks[0].run_status, "unknown");
+        assert!(report.invalid_tasks.is_empty());
+    }
+
+    #[test]
+    fn source_column_uses_same_value_for_text_and_browser_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let row = task_row(
+            &ctx,
+            "origin-sync-tui".into(),
+            "<repo-root>/.wt/execution/tasks/origin-sync-tui.toml".into(),
+            TaskDocument {
+                title: "Origin sync TUI".into(),
+                branch: "origin-sync-tui".into(),
+                body: "local body".into(),
+                origin: Some(task::TaskOrigin {
+                    provider: "linear".into(),
+                    id: "WT-142".into(),
+                }),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            task_inventory_column(&row, TaskListColumnKind::Source),
+            browser_row(&row).source
+        );
+    }
+
+    #[test]
+    fn unrelated_malformed_task_run_leaves_new_run_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        let task_runs_dir = dir.path().join(".wt/execution/task-runs");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::create_dir_all(&task_runs_dir).unwrap();
+        fs::write(
+            tasks_dir.join("demo.toml"),
+            r#"title = "Demo"
+branch = "demo"
+body = "Task body"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            task_runs_dir.join("run-broken.toml"),
+            r#"task = "other"
+branch = "other"
+status = "started"
+created_at = "2026-05-18T00:00:00Z"
+updated_at = "2026-05-18T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+
+        assert_eq!(report.tasks.len(), 1);
+        assert_eq!(report.tasks[0].key, "demo");
+        assert_eq!(report.tasks[0].run_status, "new");
+        assert!(report.invalid_tasks.is_empty());
     }
 
     #[test]
