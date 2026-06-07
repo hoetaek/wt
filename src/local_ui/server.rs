@@ -243,9 +243,9 @@ mod tests {
         assert!(APP_JS.contains("workflowCanvasSection"));
         assert!(!APP_JS.contains("ideaMasterDetailRecord"));
         assert!(APP_JS.contains("retrospecMasterDetailRecord"));
-        assert!(APP_JS.contains("invalidPlanningMasterDetailRecord"));
-        assert!(!APP_JS.contains("planningMasterDetailRecordId(\"idea\", row)"));
-        assert!(APP_JS.contains("planningMasterDetailRecordId(\"retrospec\", row)"));
+        assert!(APP_JS.contains("invalidStateMasterDetailRecord"));
+        assert!(!APP_JS.contains("stateMasterDetailRecordId(\"idea\", row)"));
+        assert!(APP_JS.contains("stateMasterDetailRecordId(\"retrospec\", row)"));
         assert!(!APP_JS.contains("renderIdeas"));
         assert!(!APP_JS.contains("ideasCockpit"));
         assert!(APP_JS.contains("stableRecordToken(row.path || row.key || row.title)"));

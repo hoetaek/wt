@@ -426,14 +426,6 @@ fn ensure_no_legacy_bootstrap_roots(ctx: &Ctx) -> Result<()> {
             ctx.storage_root.detect_legacy_profiles(&ctx.repo_root),
         ),
         (
-            "idea storage",
-            ctx.storage_root.detect_legacy_ideas(&ctx.repo_root),
-        ),
-        (
-            "spec storage",
-            ctx.storage_root.detect_legacy_specs(&ctx.repo_root),
-        ),
-        (
             "retrospective storage",
             ctx.storage_root
                 .detect_legacy_retrospectives(&ctx.repo_root),
@@ -479,15 +471,12 @@ fn core_state_dirs(storage_root: &StorageRoot) -> Vec<PathBuf> {
     vec![
         storage_root.config_dir(),
         storage_root.profiles_dir(),
-        storage_root.planning_dir(),
-        storage_root.ideas_dir(),
-        storage_root.specs_dir(),
-        storage_root.retrospectives_dir(),
         storage_root.execution_dir(),
         storage_root.tasks_dir(),
         storage_root.workflows_dir(),
         storage_root.task_runs_dir(),
         storage_root.archive_dir(),
+        storage_root.retrospectives_dir(),
         storage_root.runtime_dir(),
         storage_root.runtime_agents_dir(),
     ]

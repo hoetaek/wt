@@ -90,10 +90,6 @@ impl StorageRoot {
         self.config_dir().join("profiles")
     }
 
-    pub fn planning_dir(&self) -> PathBuf {
-        self.personal_root.join("planning")
-    }
-
     pub fn execution_dir(&self) -> PathBuf {
         self.personal_root.join("execution")
     }
@@ -171,16 +167,8 @@ impl StorageRoot {
         self.archive_workflows_dir().join(id.as_ref())
     }
 
-    pub fn ideas_dir(&self) -> PathBuf {
-        self.planning_dir().join("ideas")
-    }
-
-    pub fn specs_dir(&self) -> PathBuf {
-        self.planning_dir().join("specs")
-    }
-
     pub fn retrospectives_dir(&self) -> PathBuf {
-        self.planning_dir().join("retrospectives")
+        self.execution_dir().join("retrospectives")
     }
 
     pub fn task_run_path(&self, id: impl AsRef<str>) -> PathBuf {
@@ -289,34 +277,20 @@ impl StorageRoot {
         )
     }
 
-    pub fn detect_legacy_ideas(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(
-            repo_root,
-            "ideas",
-            &["ideas", "planning/ideas"],
-            self.ideas_dir(),
-        )
-    }
-
-    pub fn detect_legacy_specs(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(
-            repo_root,
-            "specs",
-            &["specs", "planning/specs"],
-            self.specs_dir(),
-        )
-    }
-
     pub fn detect_legacy_retrospectives(
         &self,
         repo_root: impl AsRef<Path>,
     ) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(
-            repo_root,
-            "retrospectives",
-            &["retrospectives", "planning/retrospectives"],
-            self.retrospectives_dir(),
-        )
+        let canonical = self.retrospectives_dir();
+        self.detect_legacy_personal_dir("planning/retrospectives", canonical.clone())
+            .or_else(|| {
+                self.detect_legacy_child(
+                    repo_root,
+                    "retrospectives",
+                    &["retrospectives", "planning/retrospectives"],
+                    canonical,
+                )
+            })
     }
 
     pub fn detect_legacy_archive(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
@@ -577,8 +551,6 @@ fn legacy_local_contains_wt_state(path: &Path) -> bool {
     path.join(".wt.toml").is_file()
         || [
             "profiles",
-            "ideas",
-            "specs",
             "retrospectives",
             "tasks",
             "workflows",
@@ -594,9 +566,6 @@ fn legacy_git_common_contains_wt_state(path: &Path) -> bool {
         || [
             "config",
             "profiles",
-            "planning",
-            "ideas",
-            "specs",
             "retrospectives",
             "execution",
             "tasks",
@@ -691,16 +660,8 @@ mod tests {
             PathBuf::from("/repo/.wt/config/profiles")
         );
         assert_eq!(
-            storage.ideas_dir(),
-            PathBuf::from("/repo/.wt/planning/ideas")
-        );
-        assert_eq!(
-            storage.specs_dir(),
-            PathBuf::from("/repo/.wt/planning/specs")
-        );
-        assert_eq!(
             storage.retrospectives_dir(),
-            PathBuf::from("/repo/.wt/planning/retrospectives")
+            PathBuf::from("/repo/.wt/execution/retrospectives")
         );
         assert_eq!(
             storage.tasks_dir(),
@@ -748,6 +709,34 @@ mod tests {
             storage.runtime_agent_anchors_dir(&agent),
             PathBuf::from("/repo/.wt/runtime/agents/codex/anchors")
         );
+    }
+
+    #[test]
+    fn retrospectives_dir_lives_under_execution() {
+        let storage = StorageRoot::from_git_common_dir("/repo/.git");
+
+        assert_eq!(
+            storage.retrospectives_dir(),
+            PathBuf::from("/repo/.wt/execution/retrospectives")
+        );
+    }
+
+    #[test]
+    fn detects_personal_planning_retrospectives_as_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join(".wt/planning/retrospectives");
+        fs::create_dir_all(&legacy).unwrap();
+        let storage =
+            StorageRoot::from_git_common_dir_and_repo_root(dir.path().join(".git"), dir.path());
+
+        let found = storage
+            .detect_legacy_retrospectives(dir.path())
+            .expect("legacy planning/retrospectives must be detected");
+        let message = found.error_message_for("retrospective storage");
+
+        assert!(message.contains(".wt/planning/retrospectives"));
+        assert!(message.contains(".wt/execution/retrospectives"));
+        assert!(message.contains("import or repair legacy state explicitly"));
     }
 
     #[test]
@@ -971,16 +960,6 @@ mod tests {
             "task_runs",
             |storage| storage.task_runs_dir(),
             |storage, repo| storage.detect_legacy_task_runs(repo),
-        );
-        assert_detects_git_common_dir(
-            "ideas",
-            |storage| storage.ideas_dir(),
-            |storage, repo| storage.detect_legacy_ideas(repo),
-        );
-        assert_detects_git_common_dir(
-            "specs",
-            |storage| storage.specs_dir(),
-            |storage, repo| storage.detect_legacy_specs(repo),
         );
         assert_detects_git_common_dir(
             "retrospectives",

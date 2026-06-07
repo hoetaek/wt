@@ -2512,7 +2512,7 @@ function retrospecsCockpit(snapshot) {
 function retrospecMasterDetailRecord(row) {
   const outcome = row.outcome || "unspecified";
   return {
-    id: planningMasterDetailRecordId("retrospec", row),
+    id: stateMasterDetailRecordId("retrospec", row),
     group: outcome,
     tone: statusColor(row.outcome),
     kicker: row.kind,
@@ -2534,7 +2534,7 @@ function retrospecMasterDetailRecord(row) {
 }
 
 function invalidRetrospecMasterDetailRecord(row) {
-  return invalidPlanningMasterDetailRecord(row, {
+  return invalidStateMasterDetailRecord(row, {
     idPrefix: "invalid-retrospec",
     group: t("needsAttention"),
     kicker: t("invalidRetrospecs"),
@@ -2566,9 +2566,9 @@ function retrospecFactFields(row) {
   ].filter(Boolean);
 }
 
-function invalidPlanningMasterDetailRecord(row, options) {
+function invalidStateMasterDetailRecord(row, options) {
   return {
-    id: planningMasterDetailRecordId(options.idPrefix, row),
+    id: stateMasterDetailRecordId(options.idPrefix, row),
     group: options.group,
     tone: "red",
     needsAttention: true,
@@ -2588,7 +2588,7 @@ function invalidPlanningMasterDetailRecord(row, options) {
   };
 }
 
-function planningMasterDetailRecordId(prefix, row) {
+function stateMasterDetailRecordId(prefix, row) {
   return `${prefix}-${stableRecordToken(row.path || row.key || row.title)}`;
 }
 

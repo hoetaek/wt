@@ -254,22 +254,16 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         },
         Commands::Scaffold {
             feature,
-            idea,
-            spec,
             task,
             workflow,
-            retrospect,
             all,
             force,
         } => commands::scaffold::run(
             ctx,
             feature,
             commands::scaffold::ScaffoldFlags {
-                idea: *idea,
-                spec: *spec,
                 task: *task,
                 workflow: *workflow,
-                retrospect: *retrospect,
                 all: *all,
                 force: *force,
             },

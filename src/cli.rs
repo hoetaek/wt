@@ -21,7 +21,7 @@ Manage Work:
   list     Show current wt state
 
 Prepare:
-  scaffold  Create idea/spec/task/workflow skeletons
+  scaffold  Create task/workflow skeletons
   task      Manage local TaskDocuments
   workflow  Prepare and coordinate saved workflow tasks
 
@@ -172,32 +172,20 @@ pub enum Commands {
     },
     /// Create blank skeleton documents for a feature
     #[command(
-        long_about = "Create blank skeleton documents for a feature under LEAF idea/spec directories, tasks, workflows, and spec-local retrospects. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
+        long_about = "Create blank skeleton documents for a feature: TaskDocuments and workflows."
     )]
     Scaffold {
         /// Feature slug to use for every generated path
         #[arg(value_name = "FEATURE")]
         feature: String,
-        /// Create LEAF idea files under <repo-root>/.wt/planning/ideas/<feature>/
-        #[arg(long)]
-        idea: bool,
-        /// Create phase-folder prep files under <repo-root>/.wt/planning/specs/<feature>/
-        #[arg(long)]
-        spec: bool,
         /// Create <repo-root>/.wt/execution/tasks/<feature>.toml
         #[arg(long)]
         task: bool,
         /// Create <repo-root>/.wt/execution/workflows/<feature>.toml
         #[arg(long)]
         workflow: bool,
-        /// Create <repo-root>/.wt/planning/specs/<feature>/04-Feedback/10-retrospect.md
-        #[arg(long)]
-        retrospect: bool,
         /// Create all scaffold document kinds
-        #[arg(
-            long,
-            conflicts_with_all = ["idea", "spec", "task", "workflow", "retrospect"]
-        )]
+        #[arg(long, conflicts_with_all = ["task", "workflow"])]
         all: bool,
         /// Overwrite existing scaffold files
         #[arg(short = 'f', long)]
@@ -300,7 +288,7 @@ pub enum Commands {
     },
     /// Start a read-only personal state web UI
     #[command(
-        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <repo-root>/.wt ideas, spec-local and cross-work retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
+        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <repo-root>/.wt retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
     )]
     Ui {
         /// Port to bind on 127.0.0.1; 0 selects an available port
@@ -2129,16 +2117,13 @@ mod tests {
 
     #[test]
     fn scaffold_accepts_feature_and_kind_flags() {
-        let cli = parse(&["wt", "scaffold", "foo", "--idea", "--task"]);
+        let cli = parse(&["wt", "scaffold", "foo", "--task", "--workflow"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Scaffold {
                 ref feature,
-                idea: true,
-                spec: false,
                 task: true,
-                workflow: false,
-                retrospect: false,
+                workflow: true,
                 all: false,
                 force: false,
             }) if feature == "foo"
@@ -2147,13 +2132,21 @@ mod tests {
 
     #[test]
     fn scaffold_rejects_all_with_kind_flags() {
-        let result = Cli::try_parse_from(["wt", "scaffold", "foo", "--all", "--idea"]);
+        let result = Cli::try_parse_from(["wt", "scaffold", "foo", "--all", "--task"]);
         assert!(result.is_err());
     }
 
     #[test]
+    fn scaffold_rejects_removed_planning_flags() {
+        for flag in ["--idea", "--spec", "--retrospect"] {
+            let result = Cli::try_parse_from(["wt", "scaffold", "foo", flag]);
+            assert!(result.is_err(), "{flag} must be an unknown argument");
+        }
+    }
+
+    #[test]
     fn scaffold_rejects_missing_feature() {
-        let result = Cli::try_parse_from(["wt", "scaffold", "--idea"]);
+        let result = Cli::try_parse_from(["wt", "scaffold", "--task"]);
         assert!(result.is_err());
     }
 
@@ -2168,13 +2161,8 @@ mod tests {
 
         assert!(help.contains("Create blank skeleton documents for a feature"));
         assert!(help.contains("<FEATURE>"));
-        assert!(help.contains("--idea"));
-        assert!(help.contains("LEAF idea files"));
-        assert!(help.contains("planning/ideas/<feature>/"));
-        assert!(help.contains("--spec"));
         assert!(help.contains("--task"));
         assert!(help.contains("--workflow"));
-        assert!(help.contains("--retrospect"));
         assert!(help.contains("--all"));
         assert!(help.contains("--force"));
     }
