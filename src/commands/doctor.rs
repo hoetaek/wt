@@ -187,6 +187,12 @@ fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorRepo
         }
     };
 
+    for check in &mut checks {
+        if let Some(msg) = &check.msg {
+            check.message = Some(msg.render(Lang::En));
+        }
+    }
+
     DoctorReport {
         profile: profile.map(str::to_string),
         checks,
@@ -262,6 +268,8 @@ struct DoctorCheck {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    #[serde(skip)]
+    msg: Option<DoctorMsg>,
 }
 
 impl DoctorCheck {
@@ -270,6 +278,7 @@ impl DoctorCheck {
             name: name.into(),
             status: "ok",
             message: message.into(),
+            msg: None,
         }
     }
 
@@ -278,6 +287,34 @@ impl DoctorCheck {
             name: name.into(),
             status: "warning",
             message: Some(message.into()),
+            msg: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn ok_msg(name: impl Into<String>, msg: DoctorMsg) -> Self {
+        Self {
+            name: name.into(),
+            status: "ok",
+            message: None,
+            msg: Some(msg),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn warning_msg(name: impl Into<String>, msg: DoctorMsg) -> Self {
+        Self {
+            name: name.into(),
+            status: "warning",
+            message: None,
+            msg: Some(msg),
+        }
+    }
+
+    fn effective_message(&self, lang: Lang) -> Option<String> {
+        match &self.msg {
+            Some(msg) => Some(msg.render(lang)),
+            None => self.message.clone(),
         }
     }
 }
@@ -1526,7 +1563,8 @@ fn check_repo_setup(ctx: &Ctx) {
 fn print_named_checks(ctx: &Ctx, checks: &[DoctorCheck]) {
     for check in checks {
         let label = doctor_label(&check.name);
-        let message = check.message.as_deref().unwrap_or(check.status);
+        let rendered = check.effective_message(ctx.lang());
+        let message = rendered.as_deref().unwrap_or(check.status);
         if check.status == "ok" {
             ctx.ui.print_step(&format!("{label}: {message}"));
         } else {
@@ -1561,7 +1599,8 @@ fn check_codex_hook_readiness(ctx: &Ctx, config: &Config) {
 
     for check in checks {
         let label = codex_readiness_label(&check.name);
-        let message = check.message.as_deref().unwrap_or(check.status);
+        let rendered = check.effective_message(ctx.lang());
+        let message = rendered.as_deref().unwrap_or(check.status);
         if check.status == "ok" {
             ctx.ui.print_step(&format!("{label}: {message}"));
         } else {
@@ -1765,6 +1804,22 @@ mod tests {
                 launcher_coordinator_id: None,
             },
         )
+    }
+
+    #[test]
+    fn doctor_check_effective_message_prefers_msg_then_falls_back() {
+        // msg-based check renders via the catalog; lang flows through.
+        let c = DoctorCheck::warning_msg("shell_integration", DoctorMsg::WtSetupHint);
+        assert_eq!(
+            c.effective_message(Lang::En).as_deref(),
+            Some("Run wt setup to install per-machine wt integration.")
+        );
+        // string-based check is unchanged by language.
+        let s = DoctorCheck::warning("x", "plain english");
+        assert_eq!(
+            s.effective_message(Lang::Ko).as_deref(),
+            Some("plain english")
+        );
     }
 
     #[test]
