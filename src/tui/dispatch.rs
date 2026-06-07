@@ -106,21 +106,23 @@ fn open_origin_url(ctx: &Ctx, key: &str) -> Result<()> {
             .print_warning(&format!("No fetched origin snapshot for {key}"));
         return Ok(());
     };
+    let document = task::read_task_document(ctx, key)?;
+    if !document
+        .origin
+        .as_ref()
+        .is_some_and(|origin| snapshot.matches_origin(&origin.provider, &origin.id))
+    {
+        ctx.ui.print_warning(&format!(
+            "origin changed since last fetch — run wt task origin fetch {key}"
+        ));
+        return Ok(());
+    }
     let Some(url) = snapshot.origin.url.as_deref() else {
         ctx.ui
             .print_warning(&format!("No origin URL recorded for {key}"));
         return Ok(());
     };
-    let out = ctx
-        .runner
-        .run("open", &[url], None)
-        .with_context(|| format!("Failed to open origin URL for {key}"))?;
-    if !out.success {
-        bail!(
-            "Failed to open origin URL for {key}: {}",
-            command_failure(&out.stderr, &out.stdout)
-        );
-    }
+    opener::open_browser(url).with_context(|| format!("Failed to open origin URL for {key}"))?;
     ctx.ui.print_plain(&format!("Opened origin URL for {key}"));
     Ok(())
 }
@@ -164,7 +166,11 @@ fn command_failure(stderr: &str, stdout: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::{Ctx, CtxOptions, OutputMode};
     use crate::origin_action_menu::OriginAction;
+    use crate::origin_snapshot::{FieldSnapshot, OriginRef, OriginSnapshot, write_snapshot};
     use std::sync::{Arc, Mutex};
 
     struct RecordingBackend {
@@ -250,5 +256,55 @@ mod tests {
             "디스패치는 백엔드 에러를 표시 후 삼키고 세션을 유지한다"
         );
         assert_eq!(*log.lock().unwrap(), vec!["suspend", "ack", "resume"]);
+    }
+
+    #[test]
+    fn open_in_browser_rejects_snapshot_for_changed_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Origin sync TUI"
+branch = "origin-sync-tui"
+body = "local body"
+
+[origin]
+provider = "linear"
+id = "WT-143"
+"#,
+        )
+        .unwrap();
+        let mut origin = OriginRef::new("linear", "WT-142");
+        origin.url = Some("https://linear.app/team/issue/WT-142".into());
+        let snapshot = OriginSnapshot::task(
+            "origin-sync-tui",
+            origin,
+            FieldSnapshot::new("Original title", "local body"),
+            FieldSnapshot::new("Remote title", "local body"),
+        );
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new_with_options(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+            CtxOptions {
+                output_mode: OutputMode::Text,
+                ..CtxOptions::default()
+            },
+        );
+        write_snapshot(&ctx.storage_root, &snapshot).unwrap();
+        let backend = CtxBackend::new(&ctx);
+
+        backend
+            .run(OriginAction::OpenInBrowser, "origin-sync-tui")
+            .unwrap();
+
+        assert_eq!(
+            ui.warnings.lock().unwrap().as_slice(),
+            ["origin changed since last fetch — run wt task origin fetch origin-sync-tui"]
+        );
     }
 }

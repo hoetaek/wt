@@ -1348,19 +1348,22 @@ actionable working set을 보여주는 canonical read-only list다. Bare `wt tas
 full TaskDocument inventory mode이며 passed/running TaskDocument까지 포함한다. 두 mode 모두
 selector의 10-row visible cap을 적용하지 않는다. TTY에서 `--json`/`--quiet` 없이 실행되는
 `wt task list`는 단명 full-screen browser로 같은 TaskDocument rows와 origin health preview를
-보여준다. Pipe, redirect, CI, `--quiet`, `--json`은 interactive browser를 시도하지 않고 기존
-text/JSON contract를 유지한다. Text output은 selector와 같은 TaskDocument display order인 title,
-origin/publish state, task key, branch를 bounded column으로 나눠 보여주고, `provider-origin`과
-`local` source group 아래에 둔다. Inventory-only field인 source는 group으로 표현하고, path,
-raw origin, 짧은 body summary는 text에서 반복하지 않고 JSON output에 둔다. JSON output은 두 mode
-모두 `{ "tasks": [...], "invalid_tasks": [...] }` top-level shape를 유지하며, TaskDocument의 key,
-path, title, branch, origin/publish state, local-vs-provider-origin source, 짧은 body summary를
-stable shape로 보여준다. Bare JSON은 actionable working set만 담고, `--all --json`은 full
-inventory를 담는다.
+보여준다. Browser의 initial render는 read-only이고, interactive action menu를 통한 변경은
+대응하는 `wt task origin diff|fetch|pull|push|publish|attach` backend command와 같은 동작,
+preview, confirmation gate를 따른다. Pipe, redirect, CI, `--quiet`, `--json`은 interactive
+browser를 시도하지 않고 기존 text/JSON contract를 유지한다. Text output은 selector와 같은
+TaskDocument display order인 title, origin/publish state, task key, branch를 bounded column으로
+나눠 보여주고, `provider-origin`과 `local` source group 아래에 둔다. Inventory-only field인
+source는 group으로 표현하고, path, raw origin, 짧은 body summary는 text에서 반복하지 않고 JSON
+output에 둔다. JSON output은 두 mode 모두 `{ "tasks": [...], "invalid_tasks": [...] }`
+top-level shape를 유지하며, TaskDocument의 key, path, title, branch, origin/publish state,
+local-vs-provider-origin source, 짧은 body summary를 stable shape로 보여준다. Bare JSON은
+actionable working set만 담고, `--all --json`은 full inventory를 담는다.
 TaskDocument TOML parse/validation failure는 조용히 숨기지 않고 text warning 또는 JSON
-`invalid_tasks`로 보고한다. `wt task list`는 worktree, local branch, TaskRun, Workflow,
-provider issue, pull request, agent setup을 만들거나 수정하지 않는다. Workflow inventory는
-계속 `wt workflow list`, worktree/branch/site state는 계속 `wt list`가 맡는다.
+`invalid_tasks`로 보고한다. Non-interactive text/JSON output과 browser initial render는
+worktree, local branch, TaskRun, Workflow, provider issue, pull request, agent setup을 만들거나
+수정하지 않는다. Workflow inventory는 계속 `wt workflow list`, worktree/branch/site state는
+계속 `wt list`가 맡는다.
 
 TaskDocument origin은 runnable slice 하나가 provider issue 하나와 연결되는 durable link다.
 Workflow origin은 saved Workflow의 title/body/context가 provider issue 하나와 연결되는
