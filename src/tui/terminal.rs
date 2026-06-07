@@ -15,7 +15,6 @@ pub(crate) trait TerminalEffects {
     fn leave(&self) -> Result<()>;
 }
 
-#[allow(dead_code)]
 pub(crate) struct CrosstermEffects;
 
 impl TerminalEffects for CrosstermEffects {
@@ -97,13 +96,11 @@ fn leave_crossterm_terminal(side_effects: &impl CrosstermSideEffects) -> Result<
     }
 }
 
-#[allow(dead_code)]
 pub(crate) struct TerminalSession<E: TerminalEffects = CrosstermEffects> {
     effects: E,
     active: bool,
 }
 
-#[allow(dead_code)]
 impl TerminalSession<CrosstermEffects> {
     pub(crate) fn new() -> Result<Self> {
         install_panic_hook_once();
@@ -111,7 +108,6 @@ impl TerminalSession<CrosstermEffects> {
     }
 }
 
-#[allow(dead_code)]
 impl<E: TerminalEffects> TerminalSession<E> {
     pub(crate) fn with_effects(effects: E) -> Result<Self> {
         effects.enter()?;
