@@ -3,6 +3,7 @@ use crate::tui::app::{
 };
 use crate::tui::remote_ui::PrintKind;
 use crate::tui::theme;
+use console::measure_text_width;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
 use ratatui::style::Style;
@@ -152,7 +153,7 @@ fn browser_row<'a>(row: &'a BrowserRow, columns: &'a [BrowserColumn]) -> Row<'a>
 }
 
 fn browser_cell<'a>(row: &'a BrowserRow, column: &BrowserColumn) -> Cell<'a> {
-    let text = browser_cell_text(row, column.cell);
+    let text = browser_cell_text(row, column);
     let cell = Cell::from(text);
     match column.cell {
         BrowserCell::Status | BrowserCell::OriginStatus => cell.style(status_style(&row.status)),
@@ -161,8 +162,8 @@ fn browser_cell<'a>(row: &'a BrowserRow, column: &BrowserColumn) -> Cell<'a> {
     }
 }
 
-fn browser_cell_text(row: &BrowserRow, cell: BrowserCell) -> String {
-    match cell {
+fn browser_cell_text(row: &BrowserRow, column: &BrowserColumn) -> String {
+    match column.cell {
         BrowserCell::Status | BrowserCell::OriginStatus => row.status.clone(),
         BrowserCell::RunStatus => row.run_status.clone(),
         BrowserCell::OriginLabel => row.origin_label.clone(),
@@ -173,8 +174,51 @@ fn browser_cell_text(row: &BrowserRow, cell: BrowserCell) -> String {
         BrowserCell::Size => row.size.clone().unwrap_or_else(|| "-".into()),
         BrowserCell::Branch => row.branch.clone().unwrap_or_else(|| "not prepared".into()),
         BrowserCell::Source => row.source.clone(),
-        BrowserCell::Task => format!("{}  task {}", row.title, row.key),
+        BrowserCell::Task => browser_task_cell_text(row, browser_column_width_hint(column)),
     }
+}
+
+fn browser_column_width_hint(column: &BrowserColumn) -> usize {
+    match column.width {
+        BrowserColumnWidth::Length(width) | BrowserColumnWidth::Min(width) => width as usize,
+    }
+}
+
+fn browser_task_cell_text(row: &BrowserRow, width: usize) -> String {
+    let key = format!("task {}", row.key);
+    let key_width = measure_text_width(&key);
+    let separator = "  ";
+    let separator_width = measure_text_width(separator);
+    if width <= key_width + separator_width {
+        return key;
+    }
+
+    let title_width = width - key_width - separator_width;
+    let title = truncate_display_width(&row.title, title_width);
+    format!("{title}{separator}{key}")
+}
+
+fn truncate_display_width(value: &str, max_width: usize) -> String {
+    if measure_text_width(value) <= max_width {
+        return value.to_string();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let mut width = 0;
+    let mut truncated = String::new();
+    let target_width = max_width - 3;
+    for ch in value.chars() {
+        let ch_width = measure_text_width(&ch.to_string());
+        if width + ch_width > target_width {
+            break;
+        }
+        truncated.push(ch);
+        width += ch_width;
+    }
+    truncated.push_str("...");
+    truncated
 }
 
 fn row_style(app: &AppState, index: usize) -> Style {
@@ -536,7 +580,7 @@ fn styled_segment_line<'a>(text: String, segment: &str, style: Style) -> Line<'a
 mod tests {
     use super::*;
     use crate::origin_action_menu::{OriginActionMenu, OriginLabel};
-    use crate::tui::app::{AppState, BrowserRow, KeyInput, PopupSpec};
+    use crate::tui::app::{AppState, BrowserCell, BrowserColumn, BrowserRow, KeyInput, PopupSpec};
     use crate::tui::remote_ui::PrintKind;
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
@@ -656,6 +700,26 @@ mod tests {
         assert!(text.contains("Origin sync TUI"));
         assert!(text.contains("Linear WT-142"));
         assert!(text.contains("q quit"));
+    }
+
+    #[test]
+    fn invariant_i6_browser_task_column_preserves_key_when_title_is_truncated() {
+        let app = AppState::task_with_columns(
+            vec![row(
+                "stable-key",
+                "This imported issue title is much longer than the task column",
+                "fresh",
+            )],
+            Vec::new(),
+            vec![BrowserColumn::length("task", BrowserCell::Task, 24)],
+        );
+
+        let text = buffer_text(40, 12, &app);
+
+        assert!(
+            text.contains("task stable-key"),
+            "browser task column should keep the task key visible in `{text}`"
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::task_run;
 use anyhow::{Context, Result};
 use console::measure_text_width;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -159,8 +159,7 @@ fn collect_with_task_run_statuses(
 
 #[derive(Debug, Clone, Default)]
 struct TaskRunStatusIndex {
-    latest_status_by_task: HashMap<String, task_run::TaskRunStatus>,
-    invalid_tasks: HashSet<String>,
+    latest_by_task: HashMap<String, IndexedTaskRunRecord>,
 }
 
 impl TaskRunStatusIndex {
@@ -169,45 +168,80 @@ impl TaskRunStatusIndex {
     }
 
     fn from_inventory(inventory: task_run::TaskRunInventory) -> Self {
-        let mut records = inventory.records;
-        records.sort_by(task_run::compare_task_run_records);
-
-        let mut latest_status_by_task = HashMap::new();
-        for record in records {
-            latest_status_by_task.insert(record.run.task, record.run.status);
+        let mut index = Self::default();
+        for record in inventory.records {
+            index.insert(
+                record.run.task.clone(),
+                IndexedTaskRunRecord {
+                    order: TaskRunOrder::from_valid_record(&record),
+                    status: IndexedTaskRunStatus::Known(record.run.status),
+                },
+            );
         }
+        for record in inventory.invalid {
+            if let Some((task, entry)) = invalid_task_run_index_entry(&record) {
+                index.insert(task, entry);
+            }
+        }
+        index
+    }
 
-        let invalid_tasks = inventory
-            .invalid
-            .iter()
-            .filter_map(|record| invalid_task_run_task(&record.path))
-            .collect();
-
-        Self {
-            latest_status_by_task,
-            invalid_tasks,
+    fn insert(&mut self, task: String, entry: IndexedTaskRunRecord) {
+        if self
+            .latest_by_task
+            .get(&task)
+            .is_none_or(|current| current.order <= entry.order)
+        {
+            self.latest_by_task.insert(task, entry);
         }
     }
 
     fn status_for(&self, key: &str) -> String {
         let task = task::safe_task_key(key);
-        self.latest_status_by_task
+        self.latest_by_task
             .get(&task)
-            .map(|status| status.as_str().to_string())
-            .unwrap_or_else(|| {
-                if self.invalid_tasks.contains(&task) {
-                    "unknown".into()
-                } else {
-                    "new".into()
-                }
+            .map(|entry| match entry.status {
+                IndexedTaskRunStatus::Known(status) => status.as_str().to_string(),
+                IndexedTaskRunStatus::Unknown => "unknown".into(),
             })
+            .unwrap_or_else(|| "new".into())
     }
 
     fn is_selectable(&self, key: &str) -> bool {
         let task = task::safe_task_key(key);
-        match self.latest_status_by_task.get(&task) {
-            Some(status) => status.is_task_selectable(),
-            None => !self.invalid_tasks.contains(&task),
+        match self.latest_by_task.get(&task).map(|entry| entry.status) {
+            Some(IndexedTaskRunStatus::Known(status)) => status.is_task_selectable(),
+            Some(IndexedTaskRunStatus::Unknown) => false,
+            None => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IndexedTaskRunRecord {
+    order: TaskRunOrder,
+    status: IndexedTaskRunStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IndexedTaskRunStatus {
+    Known(task_run::TaskRunStatus),
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct TaskRunOrder {
+    creation_order: Option<u64>,
+    created_at: Option<String>,
+    id: String,
+}
+
+impl TaskRunOrder {
+    fn from_valid_record(record: &task_run::TaskRunRecord) -> Self {
+        Self {
+            creation_order: record.run.creation_order,
+            created_at: task_run::normalized_utc_timestamp(&record.run.created_at),
+            id: record.id.clone(),
         }
     }
 }
@@ -292,13 +326,34 @@ fn task_origin_health(ctx: &Ctx, key: &str, document: &TaskDocument) -> OriginHe
     }
 }
 
-fn invalid_task_run_task(path: &Path) -> Option<String> {
-    let content = fs::read_to_string(path).ok()?;
+fn invalid_task_run_index_entry(
+    record: &task_run::InvalidTaskRunRecord,
+) -> Option<(String, IndexedTaskRunRecord)> {
+    let content = fs::read_to_string(&record.path).ok()?;
     let value = toml::from_str::<toml::Value>(&content).ok()?;
-    value
+    let task = value
         .get("task")
         .and_then(toml::Value::as_str)
-        .map(task::safe_task_key)
+        .map(task::safe_task_key)?;
+    let creation_order = value
+        .get("creation_order")
+        .and_then(toml::Value::as_integer)
+        .and_then(|order| u64::try_from(order).ok());
+    let created_at = value
+        .get("created_at")
+        .and_then(toml::Value::as_str)
+        .and_then(task_run::normalized_utc_timestamp);
+    Some((
+        task,
+        IndexedTaskRunRecord {
+            order: TaskRunOrder {
+                creation_order,
+                created_at,
+                id: record.id.clone(),
+            },
+            status: IndexedTaskRunStatus::Unknown,
+        },
+    ))
 }
 
 fn should_open_browser(ctx: &Ctx) -> bool {
@@ -960,7 +1015,7 @@ body = "Imported provider body without a planning section."
     }
 
     #[test]
-    fn malformed_task_run_does_not_invalidate_task_rows_in_full_inventory() {
+    fn invariant_i1_lossy_malformed_task_run_does_not_drop_task_document() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
         let tasks_dir = dir.path().join(".wt/execution/tasks");
@@ -995,7 +1050,7 @@ updated_at = "2026-05-18T00:00:00Z"
     }
 
     #[test]
-    fn malformed_only_task_run_is_hidden_from_default_inventory() {
+    fn invariant_i5_all_inventory_includes_unknown_runs() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
         let tasks_dir = dir.path().join(".wt/execution/tasks");
@@ -1033,7 +1088,47 @@ updated_at = "2026-05-18T00:00:00Z"
     }
 
     #[test]
-    fn source_column_uses_same_value_for_text_and_browser_rows() {
+    fn invariant_i4_latest_malformed_masks_older_valid_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        let task_runs_dir = dir.path().join(".wt/execution/task-runs");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::create_dir_all(&task_runs_dir).unwrap();
+        fs::write(
+            tasks_dir.join("demo.toml"),
+            r#"title = "Demo"
+branch = "demo"
+body = "Task body"
+"#,
+        )
+        .unwrap();
+        task_run::create(&ctx, "demo", "demo", None, task_run::STATUS_FAILED).unwrap();
+        fs::write(
+            task_runs_dir.join("run-newer-broken.toml"),
+            r#"task = "demo"
+branch = "demo"
+status = "started"
+creation_order = 99
+created_at = "2026-05-18T00:00:01Z"
+updated_at = "2026-05-18T00:00:01Z"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, false).unwrap();
+
+        assert!(report.tasks.is_empty());
+        assert_eq!(report.hidden_task_count, 1);
+
+        let all_report = collect(&ctx, true).unwrap();
+        assert_eq!(all_report.tasks.len(), 1);
+        assert_eq!(all_report.tasks[0].key, "demo");
+        assert_eq!(all_report.tasks[0].run_status, "unknown");
+    }
+
+    #[test]
+    fn invariant_i7_source_column_uses_same_value_for_text_and_browser_rows() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
         let row = task_row(
@@ -1094,7 +1189,7 @@ updated_at = "2026-05-18T00:00:00Z"
     }
 
     #[test]
-    fn collect_rows_reuse_injected_task_run_status_index() {
+    fn invariant_i2_collect_reuses_single_task_run_status_index() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
         let tasks_dir = dir.path().join(".wt/execution/tasks");
@@ -1145,7 +1240,7 @@ body = "Task body"
     }
 
     #[test]
-    fn task_column_preserves_key_when_title_is_truncated() {
+    fn invariant_i6_text_task_column_preserves_key_when_title_is_truncated() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
         let row = task_row(
@@ -1387,7 +1482,7 @@ branch = "feature/task-{idx}"
     }
 
     #[test]
-    fn collect_default_uses_task_selectability_and_all_keeps_inventory() {
+    fn invariant_i3_default_inventory_matches_task_selector_statuses() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
         let tasks_dir = dir.path().join(".wt/execution/tasks");
