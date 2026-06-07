@@ -1396,8 +1396,8 @@ branch ancestry checks, workflow mode ordering, or any other landing safety gate
 
 `review.codex_base` is an additional Codex-native base-diff evidence policy for the
 coordinator. `none` means no Codex base-diff review evidence is required. `advisory`
-asks the coordinator to open a Codex surface and run
-`/review --base <resolved-parent>` when practical, with
+asks the coordinator to send the review to the task agent's Codex surface with
+`wt send <task-run-id> /review --base <resolved-parent>` when practical, with
 `codex review --base <resolved-parent>` as the non-interactive fallback, and record
 concise evidence; a missing/unavailable run is not by itself a blocker if reported.
 `required` means the coordinator must run that review against the resolved workflow
