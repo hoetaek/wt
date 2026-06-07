@@ -24,6 +24,8 @@ const SIZE_COLUMN_MAX: usize = 12;
 const TASK_COLUMN_MAX: usize = 80;
 const NEXT_COLUMN_MAX: usize = 8;
 const BRANCH_COLUMN_MAX: usize = 48;
+const TASK_BROWSER_MIN: usize = 20;
+const BRANCH_BROWSER_WIDTH: usize = 24;
 
 pub(crate) fn run(ctx: &Ctx, all: bool) -> Result<()> {
     let report = collect(ctx, all)?;
@@ -708,7 +710,7 @@ fn browser_columns(columns: &[Column]) -> Vec<crate::tui::app::BrowserColumn> {
             };
             let width = column
                 .width
-                .unwrap_or_else(|| task_list_column_max(column.kind, column.grow) as u16);
+                .unwrap_or_else(|| browser_task_list_column_width(column.kind, column.grow) as u16);
             if column.grow && column.width.is_none() {
                 crate::tui::app::BrowserColumn::min(&column.title, cell, width)
             } else {
@@ -716,6 +718,14 @@ fn browser_columns(columns: &[Column]) -> Vec<crate::tui::app::BrowserColumn> {
             }
         })
         .collect()
+}
+
+fn browser_task_list_column_width(kind: TaskListColumnKind, grow: bool) -> usize {
+    match kind {
+        TaskListColumnKind::Task if grow => TASK_BROWSER_MIN,
+        TaskListColumnKind::Branch => BRANCH_BROWSER_WIDTH,
+        _ => task_list_column_max(kind, grow),
+    }
 }
 
 fn task_list_column_widths(rows: &[&TaskListRow], columns: &[Column]) -> Vec<usize> {
@@ -1386,21 +1396,64 @@ id = "WT-142"
     }
 
     fn browser_report_text(ctx: &Ctx, report: &TaskListReport) -> String {
-        let backend = ratatui::backend::TestBackend::new(100, 18);
+        browser_report_text_with_size(ctx, report, 100, 18)
+    }
+
+    fn browser_report_text_with_size(
+        ctx: &Ctx,
+        report: &TaskListReport,
+        width: u16,
+        height: u16,
+    ) -> String {
+        let backend = ratatui::backend::TestBackend::new(width, height);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         let app = browser_app(ctx, report);
         terminal
             .draw(|frame| crate::tui::render::draw(frame, &app))
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
-        (0..18)
+        (0..height)
             .map(|y| {
-                (0..100)
+                (0..width)
                     .map(|x| buffer[(x, y)].symbol().to_string())
                     .collect::<String>()
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn browser_default_columns_fit_narrow_width() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("demo.toml"),
+            r#"title = "Demo task"
+branch = "feature/demo"
+body = '''
+## 계획 (Planning)
+
+- 예상 소요 (expected duration): 2h
+'''
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+        let text = browser_report_text_with_size(&ctx, &report, 80, 18);
+
+        assert!(
+            text.lines().any(|line| {
+                line.contains("run")
+                    && line.contains("next")
+                    && line.contains("dur")
+                    && line.contains("task")
+                    && line.contains("branch")
+            }),
+            "default browser columns should remain visible at narrow width:\n{text}"
+        );
     }
 
     #[test]
