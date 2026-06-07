@@ -25,7 +25,10 @@ pub(crate) fn run(ctx: &Ctx, all: bool) -> Result<()> {
     let report = collect(ctx, all)?;
     if should_open_browser(ctx) {
         if crate::tui::terminal_size_allows_task_browser() {
-            return crate::tui::run_task_browser_with(browser_app(&report));
+            return crate::tui::run_task_browser_with(ctx, browser_app(&report), || {
+                let report = collect(ctx, all)?;
+                Ok((browser_rows(&report), browser_diagnostics(&report)))
+            });
         }
         ctx.ui.print_warning(
             "Terminal is too small for the task browser; falling back to text output",
@@ -73,7 +76,6 @@ struct TaskListRow {
 }
 
 impl TaskListRow {
-    #[allow(dead_code)]
     pub(crate) fn origin_action_menu(&self) -> OriginActionMenu {
         let title = self.display.label();
         if let Some(origin) = &self.origin {
@@ -204,6 +206,7 @@ fn browser_row(row: &TaskListRow) -> crate::tui::app::BrowserRow {
         origin_label: row.origin_health.origin_label.clone(),
         next_action: row.origin_health.next_action.clone(),
         preview_lines: browser_preview_lines(row),
+        menu: row.origin_action_menu(),
     }
 }
 
@@ -628,6 +631,32 @@ id = "WT-142"
                 .iter()
                 .any(|line| line.contains("Linear WT-142"))
         );
+    }
+
+    #[test]
+    fn browser_rows_attach_action_menu_from_row_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Origin sync TUI"
+branch = "origin-sync-tui"
+body = "local body"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+        let rows = browser_rows(&report);
+
+        assert!(rows[0].menu.enabled("Diff with issue"));
+        assert!(rows[0].menu.disabled_reason("Publish as issue").is_some());
     }
 
     fn browser_report_text(report: &TaskListReport) -> String {

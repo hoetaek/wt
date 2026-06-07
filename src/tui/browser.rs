@@ -1,4 +1,6 @@
-use crate::tui::app::{AppState, KeyInput, Outcome};
+use crate::context::Ctx;
+use crate::tui::app::{AppState, BrowserRow, KeyInput, Outcome};
+use crate::tui::dispatch::{self, CtxBackend, TerminalDispatchLifecycle};
 use crate::tui::render::draw;
 use crate::tui::terminal::TerminalSession;
 use anyhow::{Context, Result};
@@ -16,10 +18,15 @@ pub(crate) fn terminal_size_allows_browser() -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn run_browser(mut app: AppState) -> Result<()> {
-    let _session = TerminalSession::new()?;
+pub(crate) fn run_browser(
+    ctx: &Ctx,
+    mut app: AppState,
+    mut refresh: impl FnMut() -> Result<(Vec<BrowserRow>, Vec<String>)>,
+) -> Result<()> {
+    let mut session = TerminalSession::new()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("open task browser terminal")?;
+    let dispatch_backend = CtxBackend::new(ctx);
 
     loop {
         terminal
@@ -30,10 +37,17 @@ pub(crate) fn run_browser(mut app: AppState) -> Result<()> {
                 if is_ctrl_c(key) {
                     break;
                 }
-                if let Some(input) = key_input(key)
-                    && app.handle(input) == Outcome::Quit
-                {
-                    break;
+                if let Some(input) = key_input(key) {
+                    match app.handle(input) {
+                        Outcome::Continue => {}
+                        Outcome::Quit => break,
+                        Outcome::Dispatch { key, action } => {
+                            let mut lifecycle = TerminalDispatchLifecycle::new(&mut session);
+                            dispatch::dispatch(action, &key, &dispatch_backend, &mut lifecycle)?;
+                            let (rows, diagnostics) = refresh()?;
+                            app.replace_rows_preserving_selection(rows, diagnostics, &key);
+                        }
+                    }
                 }
             }
             Event::Resize(_, _) => {}

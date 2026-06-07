@@ -1,9 +1,9 @@
 use crate::tui::app::{AppState, BrowserRow, Mode};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 
 const PREVIEW_MIN_HEIGHT: u16 = 16;
 
@@ -34,6 +34,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &AppState) {
         draw_status(frame, chunks[3], app);
     } else {
         draw_status(frame, chunks[2], app);
+    }
+
+    if app.mode() == Mode::Menu {
+        draw_menu(frame, centered_rect(area), app);
     }
 }
 
@@ -153,9 +157,59 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
+fn centered_rect(area: Rect) -> Rect {
+    let [area] = Layout::vertical([Constraint::Length(14)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [area] = Layout::horizontal([Constraint::Percentage(70)])
+        .flex(Flex::Center)
+        .areas(area);
+    area
+}
+
+fn draw_menu(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
+    let Some(row) = app.selected_row() else {
+        return;
+    };
+    let selected_index = app.selected_menu_index();
+    let mut lines = Vec::new();
+    let mut disabled_header_added = false;
+
+    for (index, item) in row.menu.items().iter().enumerate() {
+        if !item.is_enabled() && !disabled_header_added {
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from("disabled:"));
+            disabled_header_added = true;
+        }
+        let mut text = item.render_plain();
+        if item.is_external_write() && !text.contains("External write") {
+            text.push_str("  External write; confirmation required");
+        }
+        if index == selected_index {
+            text = format!("> {text}");
+        } else {
+            text = format!("  {text}");
+        }
+        lines.push(Line::from(text));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from("Enter run  Esc back").alignment(Alignment::Center));
+    let menu = Paragraph::new(lines).block(
+        Block::default()
+            .title(row.title.as_str())
+            .borders(Borders::ALL),
+    );
+    frame.render_widget(Clear, area);
+    frame.render_widget(menu, area);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::origin_action_menu::{OriginActionMenu, OriginLabel};
     use crate::tui::app::{AppState, BrowserRow, KeyInput};
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -174,16 +228,25 @@ mod tests {
             .join("\n")
     }
 
-    #[test]
-    fn renders_header_rows_and_preview() {
-        let app = AppState::new(vec![BrowserRow {
-            key: "origin-sync-tui".into(),
-            title: "Origin sync TUI".into(),
-            status: "conflict".into(),
+    fn row(key: &str, title: &str, status: &str) -> BrowserRow {
+        BrowserRow {
+            key: key.into(),
+            title: title.into(),
+            status: status.into(),
             origin_label: "Linear WT-142".into(),
             next_action: "diff".into(),
             preview_lines: vec!["Origin      Linear WT-142".into()],
-        }]);
+            menu: OriginActionMenu::for_origin_task(
+                key,
+                title,
+                OriginLabel::new("linear", "WT-142"),
+            ),
+        }
+    }
+
+    #[test]
+    fn renders_header_rows_and_preview() {
+        let app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
         let text = buffer_text(80, 24, &app);
         assert!(text.contains("conflict"));
         assert!(text.contains("Origin sync TUI"));
@@ -200,30 +263,38 @@ mod tests {
 
     #[test]
     fn narrow_terminal_omits_preview_panel() {
-        let app = AppState::new(vec![BrowserRow {
-            key: "origin-sync-tui".into(),
-            title: "Origin sync TUI".into(),
-            status: "conflict".into(),
-            origin_label: "Linear WT-142".into(),
-            next_action: "diff".into(),
-            preview_lines: vec!["PREVIEW-MARKER".into()],
-        }]);
+        let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
+        browser_row.preview_lines = vec!["PREVIEW-MARKER".into()];
+        let app = AppState::new(vec![browser_row]);
         let text = buffer_text(80, 10, &app);
         assert!(!text.contains("PREVIEW-MARKER"));
         assert!(text.contains("Origin sync TUI"));
     }
 
     #[test]
+    fn renders_action_menu_overlay() {
+        let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
+        app.handle(KeyInput::Enter);
+
+        let text = buffer_text(100, 24, &app);
+
+        assert!(text.contains("Diff with issue"));
+        assert!(text.contains("disabled:"));
+        assert!(text.contains("External write"));
+        assert!(text.contains("Enter run"));
+    }
+
+    #[test]
     fn selected_row_remains_visible_when_list_scrolls() {
         let mut app = AppState::new(
             (0..30)
-                .map(|idx| BrowserRow {
-                    key: format!("task-{idx}"),
-                    title: format!("Task {idx}"),
-                    status: "stale".into(),
-                    origin_label: format!("Linear WT-{idx}"),
-                    next_action: "fetch".into(),
-                    preview_lines: vec![format!("Origin      Linear WT-{idx}")],
+                .map(|idx| {
+                    let mut browser_row =
+                        row(&format!("task-{idx}"), &format!("Task {idx}"), "stale");
+                    browser_row.origin_label = format!("Linear WT-{idx}");
+                    browser_row.next_action = "fetch".into();
+                    browser_row.preview_lines = vec![format!("Origin      Linear WT-{idx}")];
+                    browser_row
                 })
                 .collect(),
         );

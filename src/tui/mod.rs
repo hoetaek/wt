@@ -1,10 +1,15 @@
 pub(crate) mod app;
 pub(crate) mod browser;
+pub(crate) mod dispatch;
 pub(crate) mod render;
 pub(crate) mod terminal;
 
-pub(crate) fn run_task_browser_with(app: app::AppState) -> anyhow::Result<()> {
-    browser::run_browser(app)
+pub(crate) fn run_task_browser_with(
+    ctx: &crate::context::Ctx,
+    app: app::AppState,
+    refresh: impl FnMut() -> anyhow::Result<(Vec<app::BrowserRow>, Vec<String>)>,
+) -> anyhow::Result<()> {
+    browser::run_browser(ctx, app, refresh)
 }
 
 pub(crate) fn terminal_size_allows_task_browser() -> bool {

@@ -1,3 +1,5 @@
+use crate::origin_action_menu::{OriginAction, OriginActionMenu};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserRow {
     pub(crate) key: String,
@@ -6,6 +8,7 @@ pub(crate) struct BrowserRow {
     pub(crate) origin_label: String,
     pub(crate) next_action: String,
     pub(crate) preview_lines: Vec<String>,
+    pub(crate) menu: OriginActionMenu,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,12 +24,14 @@ pub(crate) enum KeyInput {
 pub(crate) enum Mode {
     List,
     FilterInput,
+    Menu,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Outcome {
     Continue,
     Quit,
+    Dispatch { key: String, action: OriginAction },
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +40,7 @@ pub(crate) struct AppState {
     diagnostics: Vec<String>,
     filter: String,
     selected_index: usize,
+    menu_selected_index: usize,
     mode: Mode,
     status_line: String,
 }
@@ -51,6 +57,7 @@ impl AppState {
             diagnostics,
             filter: String::new(),
             selected_index: 0,
+            menu_selected_index: 0,
             mode: Mode::List,
             status_line: default_status_line(),
         }
@@ -60,6 +67,7 @@ impl AppState {
         match self.mode {
             Mode::List => self.handle_list_key(key),
             Mode::FilterInput => self.handle_filter_key(key),
+            Mode::Menu => self.handle_menu_key(key),
         }
     }
 
@@ -119,6 +127,35 @@ impl AppState {
         }
     }
 
+    pub(crate) fn selected_menu_index(&self) -> usize {
+        self.menu_selected_index
+    }
+
+    #[cfg(test)]
+    pub(crate) fn menu_selection_is_disabled(&self) -> bool {
+        self.selected_menu_item()
+            .is_some_and(|item| !item.is_enabled())
+    }
+
+    pub(crate) fn replace_rows_preserving_selection(
+        &mut self,
+        rows: Vec<BrowserRow>,
+        diagnostics: Vec<String>,
+        preferred_key: &str,
+    ) {
+        self.rows = rows;
+        self.diagnostics = diagnostics;
+        self.mode = Mode::List;
+        self.status_line = default_status_line();
+        self.selected_index = self
+            .visible_rows()
+            .iter()
+            .position(|row| row.key == preferred_key)
+            .unwrap_or(self.selected_index);
+        self.clamp_selection();
+        self.select_first_enabled_menu_item();
+    }
+
     pub(crate) fn origin_status_counts(&self) -> Vec<(&str, usize)> {
         let mut counts = Vec::<(&str, usize)>::new();
         for row in &self.rows {
@@ -143,10 +180,15 @@ impl AppState {
                 self.status_line = "type to filter; Esc clears filter".into();
             }
             KeyInput::Enter => {
-                self.status_line = "actions are unavailable in this read-only browser".into();
+                self.open_menu();
             }
             KeyInput::Char('q') => return Outcome::Quit,
-            KeyInput::Esc | KeyInput::Char(_) => {}
+            KeyInput::Char(ch) => {
+                if let Some((key, action)) = self.shortcut_dispatch(ch) {
+                    return Outcome::Dispatch { key, action };
+                }
+            }
+            KeyInput::Esc => {}
         }
         Outcome::Continue
     }
@@ -173,6 +215,21 @@ impl AppState {
         Outcome::Continue
     }
 
+    fn handle_menu_key(&mut self, key: KeyInput) -> Outcome {
+        match key {
+            KeyInput::Esc => {
+                self.mode = Mode::List;
+                self.status_line = default_status_line();
+            }
+            KeyInput::Down | KeyInput::Char('j') => self.move_menu_down(),
+            KeyInput::Up | KeyInput::Char('k') => self.move_menu_up(),
+            KeyInput::Enter => return self.menu_enter(),
+            KeyInput::Char('q') => return Outcome::Quit,
+            KeyInput::Char(_) => {}
+        }
+        Outcome::Continue
+    }
+
     fn move_down(&mut self) {
         let len = self.visible_rows().len();
         if len > 0 {
@@ -191,6 +248,72 @@ impl AppState {
         } else {
             self.selected_index = self.selected_index.min(len - 1);
         }
+    }
+
+    fn open_menu(&mut self) {
+        if self.selected_row().is_some() {
+            self.mode = Mode::Menu;
+            self.select_first_enabled_menu_item();
+            self.status_line = "Enter run  Esc back".into();
+        } else {
+            self.status_line = "no task selected".into();
+        }
+    }
+
+    fn select_first_enabled_menu_item(&mut self) {
+        self.menu_selected_index = self
+            .selected_row()
+            .and_then(|row| row.menu.first_enabled_index())
+            .unwrap_or(0);
+    }
+
+    #[cfg(test)]
+    fn selected_menu_item(&self) -> Option<&crate::origin_action_menu::OriginActionItem> {
+        self.selected_row()
+            .and_then(|row| row.menu.item(self.menu_selected_index))
+    }
+
+    fn move_menu_down(&mut self) {
+        if let Some(row) = self.selected_row() {
+            let last = row.menu.items().len().saturating_sub(1);
+            self.menu_selected_index = (self.menu_selected_index + 1).min(last);
+        }
+    }
+
+    fn move_menu_up(&mut self) {
+        self.menu_selected_index = self.menu_selected_index.saturating_sub(1);
+    }
+
+    fn menu_enter(&mut self) -> Outcome {
+        let Some(row) = self.selected_row() else {
+            self.mode = Mode::List;
+            self.status_line = "no task selected".into();
+            return Outcome::Continue;
+        };
+        let key = row.key.clone();
+        let Some(item) = row.menu.item(self.menu_selected_index) else {
+            self.status_line = "action unavailable".into();
+            return Outcome::Continue;
+        };
+        if item.is_enabled() {
+            return Outcome::Dispatch {
+                key,
+                action: item.action(),
+            };
+        }
+        self.status_line = item
+            .disabled_reason()
+            .unwrap_or("action unavailable")
+            .to_string();
+        Outcome::Continue
+    }
+
+    fn shortcut_dispatch(&self, ch: char) -> Option<(String, OriginAction)> {
+        let row = self.selected_row()?;
+        let shortcut = ch.to_string();
+        row.menu
+            .action_for_shortcut(&shortcut)
+            .map(|action| (row.key.clone(), action))
     }
 }
 
@@ -212,8 +335,14 @@ fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::origin_action_menu::{OriginAction, OriginActionMenu, OriginLabel};
 
     fn row(key: &str, title: &str, status: &str) -> BrowserRow {
+        let menu = if status == "local" {
+            OriginActionMenu::for_local_task(key, title)
+        } else {
+            OriginActionMenu::for_origin_task(key, title, OriginLabel::new("linear", "WT-142"))
+        };
         BrowserRow {
             key: key.into(),
             title: title.into(),
@@ -221,6 +350,7 @@ mod tests {
             origin_label: "Linear WT-142".into(),
             next_action: "diff".into(),
             preview_lines: vec![format!("Origin      Linear WT-142")],
+            menu,
         }
     }
 
@@ -268,10 +398,65 @@ mod tests {
     }
 
     #[test]
-    fn enter_is_noop_with_status_hint_in_this_slice() {
+    fn enter_shows_menu_status_hint() {
         let mut app = app();
         assert_eq!(app.handle(KeyInput::Enter), Outcome::Continue);
-        assert!(app.status_line().contains("actions"));
+        assert!(app.status_line().contains("Enter run"));
+    }
+
+    #[test]
+    fn enter_opens_menu_and_esc_returns_to_list() {
+        let mut app = app();
+        assert_eq!(app.handle(KeyInput::Enter), Outcome::Continue);
+        assert_eq!(app.mode(), Mode::Menu);
+        app.handle(KeyInput::Esc);
+        assert_eq!(app.mode(), Mode::List);
+    }
+
+    #[test]
+    fn menu_enter_on_enabled_item_requests_dispatch() {
+        let mut app = app();
+        app.handle(KeyInput::Enter);
+        let outcome = app.handle(KeyInput::Enter);
+        assert_eq!(
+            outcome,
+            Outcome::Dispatch {
+                key: "origin-sync-tui".into(),
+                action: OriginAction::Diff
+            }
+        );
+    }
+
+    #[test]
+    fn menu_enter_on_disabled_item_shows_reason_and_stays() {
+        let mut app = app();
+        app.handle(KeyInput::Enter);
+        for _ in 0..8 {
+            if app.menu_selection_is_disabled() {
+                app.handle(KeyInput::Enter);
+                if app.status_line().contains("already has origin") {
+                    break;
+                }
+            }
+            app.handle(KeyInput::Down);
+        }
+        assert_eq!(app.mode(), Mode::Menu);
+        assert!(app.status_line().contains("already has origin"));
+    }
+
+    #[test]
+    fn list_shortcut_dispatches_enabled_action_directly() {
+        let mut app = app();
+        assert_eq!(
+            app.handle(KeyInput::Char('d')),
+            Outcome::Dispatch {
+                key: "origin-sync-tui".into(),
+                action: OriginAction::Diff
+            }
+        );
+        app.handle(KeyInput::Down);
+        app.handle(KeyInput::Down);
+        assert_eq!(app.handle(KeyInput::Char('P')), Outcome::Continue);
     }
 
     #[test]

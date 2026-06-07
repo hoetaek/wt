@@ -225,6 +225,18 @@ impl OriginActionMenu {
             .map(|item| item.action)
     }
 
+    pub fn items(&self) -> &[OriginActionItem] {
+        &self.items
+    }
+
+    pub fn item(&self, index: usize) -> Option<&OriginActionItem> {
+        self.items.get(index)
+    }
+
+    pub fn first_enabled_index(&self) -> Option<usize> {
+        self.items.iter().position(|item| item.enabled)
+    }
+
     pub fn render_plain(&self) -> String {
         let mut lines = vec![format!("Actions: {}", self.title)];
 
@@ -320,7 +332,27 @@ impl OriginActionItem {
         &self.shortcut
     }
 
-    fn render_plain(&self) -> String {
+    pub fn action(&self) -> OriginAction {
+        self.action
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn disabled_reason(&self) -> Option<&str> {
+        self.disabled_reason.as_deref()
+    }
+
+    pub fn is_external_write(&self) -> bool {
+        self.external_write
+    }
+
+    pub fn render_plain(&self) -> String {
         let mut parts = vec![self.shortcut.clone(), self.label.clone()];
         if let Some(reason) = &self.disabled_reason {
             parts.push(reason.clone());
