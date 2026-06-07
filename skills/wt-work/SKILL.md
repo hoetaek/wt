@@ -183,6 +183,13 @@ worker runtime state and `wt msg watch` for report arrival; they answer
 different questions. Use `wt msg list --agent <coordinator-id>` for a snapshot
 instead of a wait.
 
+Known limitation: an already-answered request message that stays `new`
+(unclaimed) in the coordinator inbox makes `wt msg watch` exit immediately on
+every invocation. When such a message lingers, switch report waiting to
+`wt agent watch <target>` (idle transition as the wake signal) until the
+message is consumed. (2026-06-07 wt-leaf-separation 회고 — remove this note if
+wt gains a request ack/claim mechanism.)
+
 If status is `running`, let the agent work unless clearly stuck. If status is
 `needs_input`, Steer. If status is `idle`, inspect the worktree instead of
 polling forever.
@@ -251,6 +258,22 @@ cargo clippy --all-targets --all-features -- -D warnings
 git diff --check
 cargo test --locked --all-features
 ```
+
+Passing tests and a contract match are not proof of correctness — they only
+confirm the happy path the author chose to cover. For changes to a load-bearing
+path (a status filter, renderer, inventory scan, or any code several call sites
+depend on), do not stop at green tests: first enumerate the invariants that path
+must hold simultaneously, then adversarially try to break each one. Standing
+lenses to apply: malformed/corrupt input, ordering and precedence (newest vs
+older records), text-vs-TUI parity, O(N) re-scans, and selector/semantics
+agreement with the canonical command. Empirically (2026-06 task-triage), a
+review that checked only "tests green + matches the contract I wrote" approved
+fixes that an independent base-diff review then found broke an adjacent
+invariant five rounds running — and each narrow fix introduced the next defect.
+Enumerating invariants up front and grilling against them catches most of that
+before the gate. An independent review gate still has irreducible value: a
+coordinator who co-authored the task contract is blind to gaps in their own
+spec, so the gate is not redundant with a rigorous self-review.
 
 Accumulate findings across one inspection pass and send one consolidated
 message. Do not drip one message per finding.

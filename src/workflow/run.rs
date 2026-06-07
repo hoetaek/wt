@@ -24,7 +24,7 @@ use crate::workflow::render::{
     workflow_single_task_prompt_intro,
 };
 use crate::workflow::{
-    WorkflowMetadata, WorkflowMode, WorkflowOrigin, WorkflowTask, WorkflowTaskRun,
+    WorkflowIdSeed, WorkflowMetadata, WorkflowMode, WorkflowOrigin, WorkflowTask, WorkflowTaskRun,
 };
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
@@ -50,6 +50,7 @@ pub(crate) struct PrepareWorkflowOptions<'a> {
     pub(crate) mode: WorkflowModeArg,
     pub(crate) profile: Option<&'a str>,
     pub(crate) profiles: &'a [String],
+    pub(crate) id: Option<&'a str>,
     pub(crate) title: Option<&'a str>,
     pub(crate) body: Option<&'a str>,
     pub(crate) body_file: Option<&'a Path>,
@@ -118,7 +119,19 @@ pub(crate) fn prepare_workflow(
     let workflow_metadata = workflow_metadata_from_options(&options)?;
     validate_single_mode_branches(options.mode, &prepared_tasks)?;
     let resolved_base = resolve_workflow_base(ctx, options.base)?;
-    let workflow_path = workflow_store::next_available_path(ctx)?;
+    let workflow_id_seed =
+        automatic_workflow_id_seed(ctx, workflow_metadata.title.as_deref(), &prepared_tasks);
+    let workflow_date = workflow_store::current_utc_date();
+    let workflow_path = workflow_store::next_available_path_for_id_seed(
+        ctx,
+        match options.id {
+            Some(id) => WorkflowIdSeed::Explicit(id),
+            None => WorkflowIdSeed::Automatic {
+                date: &workflow_date,
+                seed: &workflow_id_seed,
+            },
+        },
+    )?;
     let workflow_id = task_run::group_from_path(&workflow_path)?;
     let default_policy = workflow_default_policy(ctx, options.profile)?;
     let pull_request = workflow_pr_mode(options.pr, default_policy);
@@ -648,6 +661,38 @@ fn default_workflow_title(
         first_title
     };
     Some(title)
+}
+
+fn automatic_workflow_id_seed(ctx: &Ctx, title: Option<&str>, tasks: &[PreparedTask]) -> String {
+    if let Some(title) = title.map(str::trim).filter(|title| !title.is_empty()) {
+        return title.to_string();
+    }
+
+    let task_titles = tasks
+        .iter()
+        .filter_map(|task| {
+            task_store::read_task_document(ctx, &task.key)
+                .ok()
+                .and_then(|document| {
+                    let title = document.title.trim();
+                    (!title.is_empty()).then(|| title.to_string())
+                })
+        })
+        .collect::<Vec<_>>();
+    if !task_titles.is_empty() {
+        return task_titles.join(" ");
+    }
+
+    let task_keys = tasks
+        .iter()
+        .map(|task| task.key.trim())
+        .filter(|key| !key.is_empty())
+        .collect::<Vec<_>>();
+    if task_keys.is_empty() {
+        "workflow".into()
+    } else {
+        task_keys.join(" ")
+    }
 }
 
 fn workflow_coordinator_label(title: Option<&str>, workflow_id: &str) -> String {

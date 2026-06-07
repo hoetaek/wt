@@ -1,4 +1,9 @@
 use crate::context::Ctx;
+use crate::origin_action_menu::{ChildOriginLabel, OriginActionMenu, OriginLabel};
+use crate::origin_snapshot::{
+    FieldSnapshot, OriginHealthSummary, origin_label, read_workflow_snapshot,
+};
+use crate::task as task_store;
 use crate::task_run::{
     STATUS_FAILED, STATUS_PASSED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
@@ -14,7 +19,7 @@ use crate::workflow::run::{
 use crate::workflow::{WorkflowMetadata, WorkflowMode};
 use anyhow::Result;
 use serde::Serialize;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 const LIST_START: &str = "◆";
@@ -24,6 +29,20 @@ const BULLET: &str = "•";
 
 pub(super) fn run(ctx: &Ctx) -> Result<()> {
     let report = collect(ctx)?;
+    if should_open_browser(ctx) {
+        if crate::tui::terminal_size_allows_workflow_browser() {
+            return crate::tui::run_workflow_browser(ctx, workflow_browser_app(&report), || {
+                let report = collect(ctx)?;
+                Ok((
+                    workflow_browser_rows(&report),
+                    workflow_browser_diagnostics(&report),
+                ))
+            });
+        }
+        ctx.ui.print_warning(
+            "Terminal is too small for the workflow browser; falling back to text output",
+        );
+    }
     if ctx.is_json() {
         write_json(&report)?;
     } else {
@@ -33,7 +52,7 @@ pub(super) fn run(ctx: &Ctx) -> Result<()> {
 }
 
 #[derive(Debug, Serialize)]
-struct WorkflowListReport {
+pub(crate) struct WorkflowListReport {
     workflows: Vec<WorkflowListRow>,
     invalid_workflows: Vec<InvalidWorkflowRow>,
 }
@@ -47,6 +66,8 @@ struct WorkflowListRow {
     body: Option<String>,
     body_summary: Option<String>,
     origin: Option<WorkflowOriginSummary>,
+    origin_health: OriginHealthSummary,
+    child_origins: Vec<ChildOriginSummary>,
     task_count: usize,
     task_runs: TaskRunSummary,
     runnable: RunnableMetadata,
@@ -59,10 +80,39 @@ struct WorkflowListRow {
     state_error: Option<String>,
 }
 
+impl WorkflowListRow {
+    pub(crate) fn origin_action_menu(&self) -> OriginActionMenu {
+        let origin = self
+            .origin
+            .as_ref()
+            .map(|origin| OriginLabel::new(&origin.provider, &origin.id));
+        let child_origins = self
+            .child_origins
+            .iter()
+            .map(|child| match (&child.provider, &child.id) {
+                (Some(provider), Some(id)) => {
+                    ChildOriginLabel::new(&child.task, Some(OriginLabel::new(provider, id)))
+                }
+                _ => ChildOriginLabel::with_label(&child.task, &child.origin_label),
+            })
+            .collect();
+
+        OriginActionMenu::for_workflow(&self.id, &self.title, origin, child_origins)
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct WorkflowOriginSummary {
     provider: String,
     id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChildOriginSummary {
+    task: String,
+    origin_label: String,
+    provider: Option<String>,
+    id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -154,6 +204,84 @@ fn collect(ctx: &Ctx) -> Result<WorkflowListReport> {
     })
 }
 
+pub(crate) fn workflow_browser_rows(
+    report: &WorkflowListReport,
+) -> Vec<crate::tui::app::BrowserRow> {
+    report.workflows.iter().map(workflow_browser_row).collect()
+}
+
+fn workflow_browser_app(report: &WorkflowListReport) -> crate::tui::app::AppState {
+    crate::tui::app::AppState::workflow_with_diagnostics(
+        workflow_browser_rows(report),
+        workflow_browser_diagnostics(report),
+    )
+}
+
+fn workflow_browser_row(row: &WorkflowListRow) -> crate::tui::app::BrowserRow {
+    crate::tui::app::BrowserRow {
+        key: row.id.clone(),
+        title: row.title.clone(),
+        status: row.origin_health.status.clone(),
+        origin_label: row.origin_health.origin_label.clone(),
+        next_action: row.origin_health.next_action.clone(),
+        preview_lines: workflow_browser_preview_lines(row),
+        menu: row.origin_action_menu(),
+    }
+}
+
+fn workflow_browser_preview_lines(row: &WorkflowListRow) -> Vec<String> {
+    let mut lines = vec![
+        format!("Workflow   {}", row.path),
+        format!("Mode       {}", row.mode),
+        format!("Runs       {}", task_run_row_summary(&row.task_runs)),
+        format!("Origin     {}", row.origin_health.origin_label),
+        format!(
+            "Fetched    {}",
+            row.origin_health.last_fetched.as_deref().unwrap_or("never")
+        ),
+        format!(
+            "Divergence {}",
+            row.origin_health.divergence.as_deref().unwrap_or("none")
+        ),
+        format!("Next       {}", row.origin_health.next_action),
+        format!(
+            "Policy     {}/{} review:{}",
+            row.policy.pull_request, row.policy.landing, row.policy.review_codex_base
+        ),
+    ];
+    for child in &row.child_origins {
+        lines.push(format!("child {}  {}", child.task, child.origin_label));
+    }
+    lines
+}
+
+fn workflow_browser_diagnostics(report: &WorkflowListReport) -> Vec<String> {
+    let mut diagnostics = Vec::new();
+    let invalid_count = report.invalid_workflows.len();
+    if invalid_count == 0 {
+        return diagnostics;
+    }
+    let noun = if invalid_count == 1 {
+        "workflow file"
+    } else {
+        "workflow files"
+    };
+    diagnostics.push(format!("{invalid_count} invalid {noun}"));
+    diagnostics.extend(report.invalid_workflows.iter().map(|invalid| {
+        format!(
+            "invalid workflow {}  file {}  {}",
+            invalid.id,
+            invalid.path,
+            invalid_workflow_error_summary(&invalid.error)
+        )
+    }));
+    diagnostics
+}
+
+fn should_open_browser(ctx: &Ctx) -> bool {
+    !ctx.is_json() && !ctx.quiet && ctx.ui.can_prompt() && std::io::stdout().is_terminal()
+}
+
 fn workflow_row(ctx: &Ctx, path: &Path, id: String, metadata: WorkflowMetadata) -> WorkflowListRow {
     let task_runs = task_run_summary(ctx, &metadata);
     let title = workflow_title_label(ctx, &id, &metadata);
@@ -166,6 +294,8 @@ fn workflow_row(ctx: &Ctx, path: &Path, id: String, metadata: WorkflowMetadata) 
             provider: origin.provider.clone(),
             id: origin.id.clone(),
         });
+    let origin_health = workflow_origin_health(ctx, &id, &metadata);
+    let child_origins = child_origin_summaries(ctx, &metadata);
     let (runnable, state_error) = match read_workflow_states(ctx, path, &metadata) {
         Ok(states) => (runnable_metadata(&metadata.mode, &states), None),
         Err(err) => (
@@ -187,6 +317,8 @@ fn workflow_row(ctx: &Ctx, path: &Path, id: String, metadata: WorkflowMetadata) 
         body,
         body_summary,
         origin,
+        origin_health,
+        child_origins,
         task_count: metadata.tasks.len(),
         task_runs,
         runnable,
@@ -201,6 +333,61 @@ fn workflow_row(ctx: &Ctx, path: &Path, id: String, metadata: WorkflowMetadata) 
         },
         updated_at: metadata.updated_at,
         state_error,
+    }
+}
+
+fn workflow_origin_health(ctx: &Ctx, id: &str, metadata: &WorkflowMetadata) -> OriginHealthSummary {
+    let Some(origin) = metadata.origin.as_ref() else {
+        return OriginHealthSummary::workflow_without_origin();
+    };
+    let local_fields = FieldSnapshot::new(
+        metadata.title.clone().unwrap_or_default(),
+        metadata.body.clone().unwrap_or_default(),
+    );
+    let mut health = match read_workflow_snapshot(&ctx.storage_root, id) {
+        Ok(snapshot) => OriginHealthSummary::from_snapshot(
+            &origin.provider,
+            &origin.id,
+            &local_fields,
+            snapshot.as_ref(),
+            "run",
+        ),
+        Err(err) => OriginHealthSummary::from_snapshot_error(&origin.provider, &origin.id, &err),
+    };
+    health.next_action = "none".into();
+    health
+}
+
+fn child_origin_summaries(ctx: &Ctx, metadata: &WorkflowMetadata) -> Vec<ChildOriginSummary> {
+    metadata
+        .tasks
+        .iter()
+        .map(|row| child_origin_summary(ctx, &row.task))
+        .collect()
+}
+
+fn child_origin_summary(ctx: &Ctx, task: &str) -> ChildOriginSummary {
+    match task_store::read_task_document(ctx, task) {
+        Ok(document) => match document.origin {
+            Some(origin) => ChildOriginSummary {
+                task: task.to_string(),
+                origin_label: origin_label(&origin.provider, &origin.id),
+                provider: Some(origin.provider),
+                id: Some(origin.id),
+            },
+            None => ChildOriginSummary {
+                task: task.to_string(),
+                origin_label: "not published".into(),
+                provider: None,
+                id: None,
+            },
+        },
+        Err(_) => ChildOriginSummary {
+            task: task.to_string(),
+            origin_label: "unknown".into(),
+            provider: None,
+            id: None,
+        },
     }
 }
 
@@ -394,6 +581,12 @@ fn render_text_lines(report: &WorkflowListReport) -> Vec<String> {
                 "{BAR}  {BULLET}  {}",
                 workflow_row_summary(row, group)
             ));
+            if !row.child_origins.is_empty() {
+                lines.push(format!(
+                    "{BAR}     child origins {}",
+                    child_origin_detail(row)
+                ));
+            }
         }
     }
 
@@ -454,6 +647,8 @@ fn display_group(row: &WorkflowListRow) -> WorkflowDisplayGroup {
 
 fn workflow_row_summary(row: &WorkflowListRow, group: WorkflowDisplayGroup) -> String {
     let mut parts = vec![
+        format!("status {}", row.origin_health.status),
+        format!("origin {}", row.origin_health.origin_label),
         format!("id {}", row.id),
         format!("mode {}", row.mode),
         format!("runs {}", task_run_row_summary(&row.task_runs)),
@@ -471,6 +666,14 @@ fn workflow_row_summary(row: &WorkflowListRow, group: WorkflowDisplayGroup) -> S
     ));
 
     format!("{}  {}", row.title, parts.join(" · "))
+}
+
+fn child_origin_detail(row: &WorkflowListRow) -> String {
+    row.child_origins
+        .iter()
+        .map(|origin| format!("{} {}", origin.task, origin.origin_label))
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 fn task_run_row_summary(summary: &TaskRunSummary) -> String {
@@ -591,6 +794,51 @@ mod tests {
         (ctx, ui)
     }
 
+    fn workflow_toml_with_one_task_origin(title: &str, origin_id: &str, task: &str) -> String {
+        format!(
+            r#"title = "{title}"
+body = "workflow body"
+mode = "batch"
+base_mode = "default"
+created_at = "2026-06-06T00:00:00Z"
+updated_at = "2026-06-06T00:00:00Z"
+
+[origin]
+provider = "linear"
+id = "{origin_id}"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[policy.review]
+codex_base = "none"
+
+[[tasks]]
+task = "{task}"
+run = "run-{task}"
+"#
+        )
+    }
+
+    fn workflow_browser_report_text(report: &WorkflowListReport) -> String {
+        let backend = ratatui::backend::TestBackend::new(140, 18);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let app = workflow_browser_app(report);
+        terminal
+            .draw(|frame| crate::tui::render::draw(frame, &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..18)
+            .map(|y| {
+                (0..140)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn collect_lists_valid_workflows_and_reports_invalid_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -642,6 +890,10 @@ run = "run-2026-05-18-001-schema"
         );
         assert_eq!(row.origin.as_ref().unwrap().provider, "linear");
         assert_eq!(row.origin.as_ref().unwrap().id, "WT-123");
+        assert_eq!(row.origin_health.status, "stale");
+        assert_eq!(row.origin_health.next_action, "none");
+        assert_eq!(row.origin_health.origin_label, "Linear WT-123");
+        assert_eq!(row.child_origins[0].origin_label, "not published");
         assert_eq!(row.task_count, 1);
         assert_eq!(row.task_runs.prepared, 1);
         assert!(row.runnable.runnable);
@@ -651,6 +903,223 @@ run = "run-2026-05-18-001-schema"
         assert_eq!(row.policy.review_codex_base, "none");
         assert_eq!(row.state_error, None);
         assert_eq!(report.invalid_workflows[0].id, "bad");
+    }
+
+    #[test]
+    fn origin_health_shows_workflow_and_child_task_origins_separately() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Origin sync TUI"
+branch = "origin-sync-tui"
+body = "task body"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            workflows_dir.join("2026-06-06-001.toml"),
+            workflow_toml_with_one_task_origin(
+                "Ship provider-origin UX",
+                "WT-100",
+                "origin-sync-tui",
+            ),
+        )
+        .unwrap();
+
+        let report = collect(&ctx).unwrap();
+        let row = &report.workflows[0];
+
+        assert_eq!(row.origin_health.origin_label, "Linear WT-100");
+        assert_eq!(row.origin_health.next_action, "none");
+        assert_eq!(row.child_origins.len(), 1);
+        assert_eq!(row.child_origins[0].task, "origin-sync-tui");
+        assert_eq!(row.child_origins[0].origin_label, "Linear WT-142");
+    }
+
+    #[test]
+    fn workflow_browser_rows_show_child_origins_as_inspection_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Origin sync TUI"
+branch = "origin-sync-tui"
+body = "task body"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            workflows_dir.join("2026-06-06-001.toml"),
+            workflow_toml_with_one_task_origin(
+                "Ship provider-origin UX",
+                "WT-100",
+                "origin-sync-tui",
+            ),
+        )
+        .unwrap();
+
+        let report = collect(&ctx).unwrap();
+        let rows = workflow_browser_rows(&report);
+
+        assert_eq!(rows[0].key, "2026-06-06-001");
+        assert_eq!(rows[0].origin_label, "Linear WT-100");
+        assert!(
+            rows[0]
+                .preview_lines
+                .iter()
+                .any(|line| { line.contains("origin-sync-tui") && line.contains("Linear WT-142") }),
+            "child origin should be visible as an inspection-only preview line"
+        );
+        assert!(
+            !rows[0]
+                .menu
+                .render_plain()
+                .contains("Publish workflow as issue")
+        );
+    }
+
+    #[test]
+    fn workflow_browser_report_renders_invalid_workflow_details() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            workflows_dir.join("bad.toml"),
+            r#"objective = "Bad workflow"
+mode = "batch"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx).unwrap();
+        let text = workflow_browser_report_text(&report);
+
+        assert!(text.contains("1 invalid workflow file"));
+        assert!(text.contains("bad"));
+        assert!(text.contains("<repo-root>/.wt/execution/workflows/bad.toml"));
+        assert!(text.contains("uses removed `objective`"));
+    }
+
+    #[test]
+    fn workflow_row_builds_workflow_origin_action_menu() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Origin sync TUI"
+branch = "origin-sync-tui"
+body = "task body"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            workflows_dir.join("2026-06-06-001.toml"),
+            workflow_toml_with_one_task_origin(
+                "Ship provider-origin UX",
+                "WT-100",
+                "origin-sync-tui",
+            ),
+        )
+        .unwrap();
+
+        let report = collect(&ctx).unwrap();
+        let row = &report.workflows[0];
+        let menu = row.origin_action_menu();
+
+        assert!(menu.enabled("Diff workflow with issue"));
+        assert!(menu.render_plain().contains("child task actions"));
+    }
+
+    #[test]
+    fn workflow_origin_health_does_not_advertise_reserved_origin_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        write_task(dir.path(), "local-child", "feature/local-child");
+        write_task_run(
+            dir.path(),
+            "run-2026-06-06-001-local-child",
+            "local-child",
+            "feature/local-child",
+            "prepared",
+            "2026-06-06-001",
+        );
+        write_workflow(
+            dir.path(),
+            "2026-06-06-001",
+            "batch",
+            r#"title = "Local workflow"
+"#,
+            r#"[[tasks]]
+task = "local-child"
+run = "run-2026-06-06-001-local-child"
+"#,
+        );
+        write_task(dir.path(), "origin-child", "feature/origin-child");
+        write_task_run(
+            dir.path(),
+            "run-2026-06-06-002-origin-child",
+            "origin-child",
+            "feature/origin-child",
+            "prepared",
+            "2026-06-06-002",
+        );
+        write_workflow(
+            dir.path(),
+            "2026-06-06-002",
+            "batch",
+            r#"title = "Origin workflow"
+origin = { provider = "linear", id = "WT-100" }
+"#,
+            r#"[[tasks]]
+task = "origin-child"
+run = "run-2026-06-06-002-origin-child"
+"#,
+        );
+
+        let report = collect(&ctx).unwrap();
+        let local = report
+            .workflows
+            .iter()
+            .find(|row| row.id == "2026-06-06-001")
+            .unwrap();
+        let origin = report
+            .workflows
+            .iter()
+            .find(|row| row.id == "2026-06-06-002")
+            .unwrap();
+
+        assert_eq!(local.origin_health.status, "local");
+        assert_eq!(local.origin_health.origin_label, "none");
+        assert_eq!(local.origin_health.next_action, "none");
+        assert_eq!(origin.origin_health.status, "stale");
+        assert_eq!(origin.origin_health.origin_label, "Linear WT-100");
+        assert_eq!(origin.origin_health.next_action, "none");
     }
 
     #[test]
@@ -732,13 +1201,14 @@ run = "run-2026-05-18-003-passed"
         assert!(rendered.contains("│ waiting"));
         assert!(rendered.contains("│ passed"));
         assert!(rendered.contains(
-            "│  •  Ship search  id 2026-05-18-001 · mode batch · runs 1 prepared · policy none/manual review:none"
+            "│  •  Ship search  status local · origin none · id 2026-05-18-001 · mode batch · runs 1 prepared · policy none/manual review:none"
+        ));
+        assert!(rendered.contains("│     child origins runnable-task not published"));
+        assert!(rendered.contains(
+            "│  •  waiting-task  status local · origin none · id 2026-05-18-002 · mode stack · runs 1 running · reason waiting for running task · policy none/manual review:none"
         ));
         assert!(rendered.contains(
-            "│  •  waiting-task  id 2026-05-18-002 · mode stack · runs 1 running · reason waiting for running task · policy none/manual review:none"
-        ));
-        assert!(rendered.contains(
-            "│  •  passed-task  id 2026-05-18-003 · mode single · runs 1 passed · profile codex · policy none/manual review:none"
+            "│  •  passed-task  status local · origin none · id 2026-05-18-003 · mode single · runs 1 passed · profile codex · policy none/manual review:none"
         ));
         assert!(!rendered.contains("body Keep search work coordinated."));
         assert!(!rendered.contains("file <repo-root>/.wt/execution/workflows/2026-05-18-001.toml"));

@@ -1,5 +1,9 @@
 [advisories]
 yanked = "warn"
+ignore = [
+    # paste via ratatui 0.29; no safe upgrade available in the ratatui line.
+    "RUSTSEC-2024-0436",
+]
 
 [bans]
 multiple-versions = "warn"
@@ -18,6 +22,8 @@ allow = [
     "MIT",
     "Unicode-3.0",
     "Unlicense",
+    # foldhash via ratatui — OSI-approved permissive
+    "Zlib",
 ]
 
 [licenses.private]

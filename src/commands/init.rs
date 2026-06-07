@@ -1,8 +1,8 @@
 use crate::cli::{InitAgent, InitIssueProvider, InitSiteProvider};
 use crate::config::{
-    AgentCli, AgentConfig, Config, CopyAsEntry, ReviewCodexBasePolicy, ReviewDefaultPolicy,
-    WORKSPACE_DEFAULT_COLORS, WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy,
-    WorkflowDefaultPullRequestMode, WorkspaceBrowserMode,
+    AgentCli, AgentConfig, Config, CopyAsEntry, OriginPolicy, ReviewCodexBasePolicy,
+    ReviewDefaultPolicy, WORKSPACE_DEFAULT_COLORS, WorkflowDefaultLandingPolicy,
+    WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode, WorkspaceBrowserMode,
 };
 use crate::context::{Ctx, PromptItem};
 use crate::error::WtError;
@@ -144,6 +144,7 @@ struct InitDefaults {
     review_policy: Option<ReviewDefaultPolicy>,
     issue_provider: Option<InitIssueProvider>,
     gh_user: Option<String>,
+    origin_policy: OriginPolicy,
     site_provider: Option<InitSiteProvider>,
     common: Option<InitCommonConfig>,
 }
@@ -304,6 +305,11 @@ impl InitDefaults {
             .issues
             .as_ref()
             .and_then(|issues| issues.gh_user.clone());
+        let origin_policy = config
+            .issues
+            .as_ref()
+            .map(|issues| issues.origin_policy)
+            .unwrap_or_default();
         let common = InitCommonConfig::from_config(&config);
         Self {
             from_existing_config: true,
@@ -312,6 +318,7 @@ impl InitDefaults {
             review_policy,
             issue_provider,
             gh_user,
+            origin_policy,
             site_provider,
             common: Some(common),
         }
@@ -419,14 +426,6 @@ fn ensure_no_legacy_bootstrap_roots(ctx: &Ctx) -> Result<()> {
             ctx.storage_root.detect_legacy_profiles(&ctx.repo_root),
         ),
         (
-            "idea storage",
-            ctx.storage_root.detect_legacy_ideas(&ctx.repo_root),
-        ),
-        (
-            "spec storage",
-            ctx.storage_root.detect_legacy_specs(&ctx.repo_root),
-        ),
-        (
             "retrospective storage",
             ctx.storage_root
                 .detect_legacy_retrospectives(&ctx.repo_root),
@@ -472,15 +471,12 @@ fn core_state_dirs(storage_root: &StorageRoot) -> Vec<PathBuf> {
     vec![
         storage_root.config_dir(),
         storage_root.profiles_dir(),
-        storage_root.planning_dir(),
-        storage_root.ideas_dir(),
-        storage_root.specs_dir(),
-        storage_root.retrospectives_dir(),
         storage_root.execution_dir(),
         storage_root.tasks_dir(),
         storage_root.workflows_dir(),
         storage_root.task_runs_dir(),
         storage_root.archive_dir(),
+        storage_root.retrospectives_dir(),
         storage_root.runtime_dir(),
         storage_root.runtime_agents_dir(),
     ]
@@ -771,6 +767,10 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         s.push_str(&format!(
             "provider = {}\n",
             toml_quote(issue_provider_name(provider))
+        ));
+        s.push_str(&format!(
+            "origin_policy = {}\n",
+            toml_quote(defaults.origin_policy.as_config_value())
         ));
         if *provider == InitIssueProvider::Github {
             if let Some(user) = gh_user.as_deref() {
@@ -2788,7 +2788,9 @@ fn toml_array(values: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AgentCli, IssueProviderType, SiteProvider, WorkspaceBrowserMode};
+    use crate::config::{
+        AgentCli, IssueProviderType, OriginPolicy, SiteProvider, WorkspaceBrowserMode,
+    };
     use crate::context::mock::{MockRunner, MockUi};
     use std::sync::Arc;
 
@@ -3170,6 +3172,81 @@ mod tests {
         assert!(plan.content.contains("provider = \"github\""));
         assert!(plan.content.contains("[worktree.naming]"));
         assert!(!plan.content.contains("[profile.agent]"));
+    }
+
+    #[test]
+    fn init_linear_writes_provider_preferred_origin_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                shared: false,
+                agent: Some(InitAgent::None),
+                agent_args: Vec::new(),
+                agent_command: None,
+                issue_provider: Some(InitIssueProvider::Linear),
+                site_provider: None,
+                yes: true,
+                force: false,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let config = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
+        assert!(config.contains("[issues]"));
+        assert!(config.contains("provider = \"linear\""));
+        assert!(config.contains("origin_policy = \"provider-preferred\""));
+    }
+
+    #[test]
+    fn init_rerun_preserves_existing_origin_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join(".wt/config");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(
+            local.join("local.toml"),
+            r#"[issues]
+provider = "linear"
+origin_policy = "local-only"
+"#,
+        )
+        .unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // keep Linear issue provider
+        ui.add_select(0); // keep existing common config defaults
+        ui.add_select(0); // use system editor
+        ui.add_confirm(true); // overwrite config
+        ui.add_confirm(false); // do not add Claude allow rules
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                force: true,
+                agent: Some(InitAgent::None),
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(local.join("local.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        assert_eq!(
+            config.issues.unwrap().origin_policy,
+            OriginPolicy::LocalOnly
+        );
+        assert!(content.contains("origin_policy = \"local-only\""));
     }
 
     #[test]

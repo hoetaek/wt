@@ -21,7 +21,7 @@ Manage Work:
   list     Show current wt state
 
 Prepare:
-  scaffold  Create idea/spec/task/workflow skeletons
+  scaffold  Create task/workflow skeletons
   task      Manage local TaskDocuments
   workflow  Prepare and coordinate saved workflow tasks
 
@@ -38,7 +38,7 @@ Run Agents:
 
 Setup:
   init        Start the config recommendation wizard
-  config      Print, edit, or refactor config
+  config      Show, edit, or refactor config
   profile     List or manage named profile configs
   setup       Install or remove per-machine integration
   doctor      Check config and local tools
@@ -172,32 +172,20 @@ pub enum Commands {
     },
     /// Create blank skeleton documents for a feature
     #[command(
-        long_about = "Create blank skeleton documents for a feature under LEAF idea/spec directories, tasks, workflows, and spec-local retrospects. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
+        long_about = "Create blank skeleton documents for a feature: TaskDocuments and workflows."
     )]
     Scaffold {
         /// Feature slug to use for every generated path
         #[arg(value_name = "FEATURE")]
         feature: String,
-        /// Create LEAF idea files under <repo-root>/.wt/planning/ideas/<feature>/
-        #[arg(long)]
-        idea: bool,
-        /// Create phase-folder prep files under <repo-root>/.wt/planning/specs/<feature>/
-        #[arg(long)]
-        spec: bool,
         /// Create <repo-root>/.wt/execution/tasks/<feature>.toml
         #[arg(long)]
         task: bool,
         /// Create <repo-root>/.wt/execution/workflows/<feature>.toml
         #[arg(long)]
         workflow: bool,
-        /// Create <repo-root>/.wt/planning/specs/<feature>/04-Feedback/10-retrospect.md
-        #[arg(long)]
-        retrospect: bool,
         /// Create all scaffold document kinds
-        #[arg(
-            long,
-            conflicts_with_all = ["idea", "spec", "task", "workflow", "retrospect"]
-        )]
+        #[arg(long, conflicts_with_all = ["task", "workflow"])]
         all: bool,
         /// Overwrite existing scaffold files
         #[arg(short = 'f', long)]
@@ -300,7 +288,7 @@ pub enum Commands {
     },
     /// Start a read-only personal state web UI
     #[command(
-        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <repo-root>/.wt ideas, spec-local and cross-work retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
+        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <repo-root>/.wt/execution/retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
     )]
     Ui {
         /// Port to bind on 127.0.0.1; 0 selects an available port
@@ -356,16 +344,13 @@ pub enum Commands {
         #[arg(long = "prune-env-anchors", value_name = "KEY")]
         prune_env_anchors: Option<String>,
     },
-    /// Print, edit, or refactor wt config files
+    /// Show, edit, or refactor wt config files
     #[command(
-        long_about = "Print, edit, or refactor wt-managed config files. Shared repo config is .wt.toml and SOURCE name `shared`; private repo config is <repo-root>/.wt/config/local.toml and SOURCE name `local`; named profile config is <repo-root>/.wt/config/profiles/<name>/profile.toml and SOURCE name `profiles/<name>`. Config edit, extract, and inline reject files outside that managed namespace."
+        long_about = "Show, edit, or refactor wt-managed config files.\n\n`wt config show` is the canonical display surface for effective config. Shared repo config is .wt.toml and SOURCE name `shared`; private repo config is <repo-root>/.wt/config/local.toml and SOURCE name `local`; named profile config is <repo-root>/.wt/config/profiles/<name>/profile.toml and SOURCE name `profiles/<name>`. Config edit, extract, and inline reject files outside that managed namespace."
     )]
     Config {
-        /// Show effective config using <repo-root>/.wt/config/profiles/<name>
-        #[arg(long)]
-        profile: Option<String>,
         #[command(subcommand)]
-        command: Option<ConfigCommand>,
+        command: ConfigCommand,
     },
     /// List or manage named profile configs
     #[command(
@@ -448,6 +433,15 @@ pub enum ShellInitShell {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum ConfigCommand {
+    /// Show effective config
+    #[command(
+        long_about = "`wt config show` is the canonical display surface for effective config. Omit --profile to show the effective repo config, or pass --profile <PROFILE> to show the config after applying <repo-root>/.wt/config/profiles/<name>/profile.toml."
+    )]
+    Show {
+        /// Show effective config using <repo-root>/.wt/config/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Open a config file in the configured editor
     #[command(
         long_about = "Open a wt-managed config source in the configured editor. SOURCE may be `shared`, `local`, `profiles/<name>`, or a canonical path to one of those managed files. Missing managed files are created by the editor path after parent directories are prepared. Omit SOURCE to select from existing managed config files; non-managed paths are rejected before the editor opens."
@@ -813,16 +807,25 @@ pub enum InitSiteProvider {
 pub enum TaskCommand {
     /// List actionable local TaskDocument files
     #[command(
-        long_about = "List actionable <repo-root>/.wt/execution/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is passed or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nEach mode reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
+        long_about = "List actionable <repo-root>/.wt/execution/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is passed or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nIn a TTY without --json or --quiet, opens the full-screen interactive browser. The initial browser render is read-only; choosing items from its interactive action menu can run task origin diff, fetch, pull, push, publish, and attach flows with the same previews and confirmation gates as the backend commands; pipes and --json keep the text/JSON output.\n\nThe passive text/JSON and initial-render surface reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
     )]
     List {
         /// Show the full TaskDocument inventory, including passed and running tasks
         #[arg(long)]
         all: bool,
     },
-    /// Import provider issues as local TaskDocuments
+    /// Manage provider issue origin links for local TaskDocuments
     #[command(
-        long_about = "Import existing provider issues into <repo-root>/.wt/execution/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
+        long_about = "Manage provider issue origin links for local <repo-root>/.wt/execution/tasks/<task>.toml TaskDocuments.\n\nImport creates local TaskDocuments from provider issues, publish creates provider issues from local TaskDocuments, attach links an existing TaskDocument to a provider issue, fetch refreshes provider issue evidence without changing TaskDocuments, diff compares local title/body with fetched provider evidence, pull applies selected provider title/body fields locally after preview, and push appends provider comments or selected title/body overwrites after preview."
+    )]
+    Origin {
+        #[command(subcommand)]
+        command: TaskOriginCommand,
+    },
+    /// Legacy migration alias for wt task origin import
+    #[command(
+        hide = true,
+        long_about = "Legacy migration alias for `wt task origin import`.\n\nImport existing provider issues into <repo-root>/.wt/execution/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
     )]
     Import {
         /// Provider issue ids to import
@@ -839,9 +842,10 @@ pub enum TaskCommand {
         )]
         args: Vec<String>,
     },
-    /// Publish local TaskDocuments as provider issues
+    /// Legacy migration alias for wt task origin publish
     #[command(
-        long_about = "Create provider issues from selected <repo-root>/.wt/execution/tasks/<task>.toml files, then rewrite branch to a provider-keyed branch and write [origin] with the configured provider and created issue id. This command does not start workspaces, create local branches, create TaskRuns, or run workflow work.\n\nAfter branch and [origin] are written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, the task has an empty title, or rewriting the old branch would be unsafe because it already has a TaskRun, checked-out worktree, local branch, or remote branch."
+        hide = true,
+        long_about = "Legacy migration alias for `wt task origin publish`.\n\nCreate provider issues from selected <repo-root>/.wt/execution/tasks/<task>.toml files, then rewrite branch to a provider-keyed branch and write [origin] with the configured provider and created issue id. This command does not start workspaces, create local branches, create TaskRuns, or run workflow work.\n\nAfter branch and [origin] are written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, the task has an empty title, or rewriting the old branch would be unsafe because it already has a TaskRun, checked-out worktree, local branch, or remote branch."
     )]
     Publish {
         /// Local task keys from <repo-root>/.wt/execution/tasks/<task>.toml
@@ -885,10 +889,63 @@ pub enum TaskCommand {
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum TaskOriginCommand {
+    /// Import provider issues as local TaskDocuments
+    #[command(
+        long_about = "Import existing provider issues into <repo-root>/.wt/execution/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
+    )]
+    Import {
+        /// Provider issue ids to import
+        #[arg(value_name = "ISSUE")]
+        issues: Vec<String>,
+    },
+    /// Publish local TaskDocuments as provider issues
+    #[command(
+        long_about = "Create provider issues from selected <repo-root>/.wt/execution/tasks/<task>.toml files, then rewrite branch to a provider-keyed branch and write [origin] with the configured provider and created issue id. This command does not start workspaces, create local branches, create TaskRuns, or run workflow work.\n\nAfter branch and [origin] are written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, the task has an empty title, or rewriting the old branch would be unsafe because it already has a TaskRun, checked-out worktree, local branch, or remote branch."
+    )]
+    Publish {
+        /// Local task keys from <repo-root>/.wt/execution/tasks/<task>.toml
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+    },
+    /// Attach a local TaskDocument to an existing provider issue origin
+    Attach {
+        /// Local task key from <repo-root>/.wt/execution/tasks/<task>.toml
+        task: String,
+        /// Provider issue id to record as the TaskDocument origin
+        issue: String,
+    },
+    /// Fetch provider issue evidence for TaskDocument origin comparison
+    Fetch {
+        /// Local task keys with provider issue origins
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+    },
+    /// Compare local TaskDocuments with provider issue origin evidence
+    Diff {
+        /// Local task keys with provider issue origins
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+    },
+    /// Pull provider issue fields into local TaskDocuments after preview
+    Pull {
+        /// Local task keys with provider issue origins
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+    },
+    /// Push local TaskDocument fields or status notes to provider issues
+    Push {
+        /// Local task keys with provider issue origins
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum WorkflowCommand {
     /// List saved workflow files
     #[command(
-        long_about = "List all saved <repo-root>/.wt/execution/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and passed, with indented rows and secondary detail lines."
+        long_about = "List all saved <repo-root>/.wt/execution/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and passed, with indented rows and secondary detail lines.\n\nIn a TTY without --json or --quiet, opens the full-screen interactive browser. The initial browser render is read-only; choosing items from its interactive action menu can run workflow origin diff, fetch, pull, push, and attach flows against the selected Workflow only. The child task origins are inspection-only; pipes and --json keep the text/JSON output."
     )]
     List,
     /// Move passed workflow state into the frozen archive
@@ -918,6 +975,9 @@ pub enum WorkflowCommand {
         /// Bind the workflow TaskRuns to this coordinator id at creation time
         #[arg(long, value_name = "ID", value_parser = parse_agent_id)]
         coordinator: Option<String>,
+        /// Workflow id/file stem, formatted as YYYYMMDD-<slug>
+        #[arg(long, value_name = "ID")]
+        id: Option<String>,
         /// Short workflow title for list, select, and show surfaces
         #[arg(long)]
         title: Option<String>,
@@ -953,6 +1013,9 @@ pub enum WorkflowCommand {
         /// Named profile from <repo-root>/.wt/config/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
+        /// Workflow id/file stem, formatted as YYYYMMDD-<slug>
+        #[arg(long, value_name = "ID")]
+        id: Option<String>,
         /// Short workflow title for list, select, and show surfaces
         #[arg(long)]
         title: Option<String>,
@@ -974,6 +1037,14 @@ pub enum WorkflowCommand {
         /// Override [workflow].pull_request for this prepared workflow
         #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
         pr: Option<WorkflowPrModeArg>,
+    },
+    /// Manage provider issue origin links for saved Workflows
+    #[command(
+        long_about = "Manage provider issue origin links for saved <repo-root>/.wt/execution/workflows/<id>.toml Workflow files.\n\nWorkflow origin actions affect the Workflow title, body, and [origin] only. They do not update child TaskDocuments, TaskRun status, or pull request closing references."
+    )]
+    Origin {
+        #[command(subcommand)]
+        command: WorkflowOriginCommand,
     },
     #[command(name = "run", hide = true, disable_help_flag = true)]
     DeprecatedRun {
@@ -1051,6 +1122,41 @@ pub enum WorkflowCommand {
         /// Start the next stack-mode workflow task after marking this one passed
         #[arg(long)]
         run_next: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum WorkflowOriginCommand {
+    /// Attach a saved Workflow to an existing provider issue origin
+    Attach {
+        /// Workflow TOML path or shorthand id
+        workflow: String,
+        /// Provider issue id to record as the Workflow origin
+        issue: String,
+    },
+    /// Fetch provider issue evidence for Workflow origin comparison
+    Fetch {
+        /// Workflow TOML paths or shorthand ids with provider issue origins
+        #[arg(value_name = "WORKFLOW")]
+        workflows: Vec<String>,
+    },
+    /// Compare saved Workflows with provider issue origin evidence
+    Diff {
+        /// Workflow TOML paths or shorthand ids with provider issue origins
+        #[arg(value_name = "WORKFLOW")]
+        workflows: Vec<String>,
+    },
+    /// Pull provider issue fields into saved Workflows after preview
+    Pull {
+        /// Workflow TOML paths or shorthand ids with provider issue origins
+        #[arg(value_name = "WORKFLOW")]
+        workflows: Vec<String>,
+    },
+    /// Append Workflow origin comments to provider issues
+    Push {
+        /// Workflow TOML paths or shorthand ids with provider issue origins
+        #[arg(value_name = "WORKFLOW")]
+        workflows: Vec<String>,
     },
 }
 
@@ -1744,6 +1850,119 @@ mod tests {
     }
 
     #[test]
+    fn task_origin_import_accepts_issue_id() {
+        let cli = parse(&["wt", "task", "origin", "import", "PROJ-123"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Origin {
+                    command: TaskOriginCommand::Import { ref issues }
+                }
+            }) if issues == &vec!["PROJ-123".to_string()]
+        ));
+    }
+
+    #[test]
+    fn task_origin_publish_accepts_task_key() {
+        let cli = parse(&["wt", "task", "origin", "publish", "origin-docs"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Origin {
+                    command: TaskOriginCommand::Publish { ref tasks }
+                }
+            }) if tasks == &vec!["origin-docs".to_string()]
+        ));
+    }
+
+    #[test]
+    fn task_origin_help_marks_origin_actions_as_enabled() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("origin")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("fetch refreshes provider issue evidence"));
+        assert!(help.contains("diff compares local title/body with fetched provider evidence"));
+        assert!(help.contains("attach links an existing TaskDocument to a provider issue"));
+        assert!(help.contains("pull applies selected provider title/body fields locally"));
+        assert!(help.contains("push appends provider comments or selected title/body overwrites"));
+        assert!(!help.contains("remain reserved"));
+        assert!(!help.contains("attach/fetch/diff/pull/push are reserved"));
+    }
+
+    #[test]
+    fn workflow_origin_help_names_provider_issue_origin_scope() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("workflow")
+            .unwrap()
+            .find_subcommand_mut("origin")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("Manage provider issue origin links"));
+        assert!(help.contains("Workflow title, body, and [origin] only"));
+        assert!(help.contains("They do not update child TaskDocuments"));
+        assert!(help.contains("Append Workflow origin comments to provider issues"));
+        let old_push_help = ["fields", "or status notes"].join(" ");
+        assert!(!help.contains(&old_push_help));
+    }
+
+    #[test]
+    fn task_help_shows_origin_not_legacy_import_publish() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("origin"));
+        assert!(!help.contains("Import provider issues as local TaskDocuments"));
+        assert!(!help.contains("Publish local TaskDocuments as provider issues"));
+    }
+
+    #[test]
+    fn task_list_help_describes_interactive_tty_browser() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("list")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("In a TTY without --json or --quiet"));
+        assert!(help.contains("full-screen interactive browser"));
+        assert!(help.contains("pipes and --json keep the text/JSON output"));
+        assert!(help.contains("interactive action menu"));
+    }
+
+    #[test]
+    fn workflow_list_help_describes_interactive_tty_browser() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("workflow")
+            .unwrap()
+            .find_subcommand_mut("list")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("In a TTY without --json or --quiet"));
+        assert!(help.contains("full-screen interactive browser"));
+        assert!(help.contains("pipes and --json keep the text/JSON output"));
+        assert!(help.contains("child task origins are inspection-only"));
+    }
+
+    #[test]
     fn task_import_accepts_multiple_issue_ids() {
         let cli = parse(&["wt", "task", "import", "PROJ-123", "#42"]);
         assert!(matches!(
@@ -1867,17 +2086,50 @@ mod tests {
     }
 
     #[test]
+    fn workflow_origin_attach_accepts_workflow_and_issue_id() {
+        let cli = parse(&[
+            "wt",
+            "workflow",
+            "origin",
+            "attach",
+            "2026-06-06-001",
+            "WT-100",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Origin {
+                    command: WorkflowOriginCommand::Attach {
+                        ref workflow,
+                        ref issue
+                    }
+                }
+            }) if workflow == "2026-06-06-001" && issue == "WT-100"
+        ));
+    }
+
+    #[test]
+    fn workflow_origin_fetch_accepts_workflow_id() {
+        let cli = parse(&["wt", "workflow", "origin", "fetch", "2026-06-06-001"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Origin {
+                    command: WorkflowOriginCommand::Fetch { ref workflows }
+                }
+            }) if workflows == &vec!["2026-06-06-001".to_string()]
+        ));
+    }
+
+    #[test]
     fn scaffold_accepts_feature_and_kind_flags() {
-        let cli = parse(&["wt", "scaffold", "foo", "--idea", "--task"]);
+        let cli = parse(&["wt", "scaffold", "foo", "--task", "--workflow"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Scaffold {
                 ref feature,
-                idea: true,
-                spec: false,
                 task: true,
-                workflow: false,
-                retrospect: false,
+                workflow: true,
                 all: false,
                 force: false,
             }) if feature == "foo"
@@ -1886,13 +2138,21 @@ mod tests {
 
     #[test]
     fn scaffold_rejects_all_with_kind_flags() {
-        let result = Cli::try_parse_from(["wt", "scaffold", "foo", "--all", "--idea"]);
+        let result = Cli::try_parse_from(["wt", "scaffold", "foo", "--all", "--task"]);
         assert!(result.is_err());
     }
 
     #[test]
+    fn scaffold_rejects_removed_planning_flags() {
+        for flag in ["--idea", "--spec", "--retrospect"] {
+            let result = Cli::try_parse_from(["wt", "scaffold", "foo", flag]);
+            assert!(result.is_err(), "{flag} must be an unknown argument");
+        }
+    }
+
+    #[test]
     fn scaffold_rejects_missing_feature() {
-        let result = Cli::try_parse_from(["wt", "scaffold", "--idea"]);
+        let result = Cli::try_parse_from(["wt", "scaffold", "--task"]);
         assert!(result.is_err());
     }
 
@@ -1907,13 +2167,8 @@ mod tests {
 
         assert!(help.contains("Create blank skeleton documents for a feature"));
         assert!(help.contains("<FEATURE>"));
-        assert!(help.contains("--idea"));
-        assert!(help.contains("LEAF idea files"));
-        assert!(help.contains("planning/ideas/<feature>/"));
-        assert!(help.contains("--spec"));
         assert!(help.contains("--task"));
         assert!(help.contains("--workflow"));
-        assert!(help.contains("--retrospect"));
         assert!(help.contains("--all"));
         assert!(help.contains("--force"));
     }
@@ -2053,6 +2308,8 @@ mod tests {
             "codex",
             "--coordinator",
             "coord-split",
+            "--id",
+            "20260606-split-workflow",
             "--title",
             "Split workflow",
             "--body",
@@ -2075,6 +2332,7 @@ mod tests {
                     profile: Some(ref profile),
                     ref profiles,
                     coordinator: Some(ref coordinator),
+                    id: Some(ref id),
                     title: Some(ref title),
                     body: Some(ref body),
                     body_file: None,
@@ -2087,6 +2345,7 @@ mod tests {
                 && profile == "codex"
                 && profiles.is_empty()
                 && coordinator == "agents/coord-split"
+                && id == "20260606-split-workflow"
                 && title == "Split workflow"
                 && body == "Ship the split workflow"
                 && origin_provider == "linear"
@@ -2107,6 +2366,7 @@ mod tests {
                     profile: None,
                     ref profiles,
                     coordinator: None,
+                    id: None,
                     title: None,
                     body: None,
                     body_file: None,
@@ -2217,6 +2477,7 @@ mod tests {
                     ref issues,
                     mode: WorkflowModeArg::Batch,
                     profile: None,
+                    id: None,
                     title: None,
                     body: None,
                     body_file: None,
@@ -2361,6 +2622,8 @@ mod tests {
 
         let task = workflow.find_subcommand_mut("task").unwrap();
         let task_help = task.render_long_help().to_string();
+        assert!(task_help.contains("--id <ID>"));
+        assert!(task_help.contains("YYYYMMDD-<slug>"));
         assert!(task_help.contains("--title"));
         assert!(task_help.contains("--body"));
         assert!(task_help.contains("--body-file"));
@@ -2373,6 +2636,8 @@ mod tests {
 
         let issue = workflow.find_subcommand_mut("issue").unwrap();
         let issue_help = issue.render_long_help().to_string();
+        assert!(issue_help.contains("--id <ID>"));
+        assert!(issue_help.contains("YYYYMMDD-<slug>"));
         assert!(issue_help.contains("--title"));
         assert!(issue_help.contains("--body"));
         assert!(issue_help.contains("--body-file"));
@@ -2752,27 +3017,37 @@ mod tests {
     }
 
     #[test]
-    fn config_subcommand() {
-        let cli = parse(&["wt", "config"]);
+    fn config_show_subcommand_parses() {
+        let cli = parse(&["wt", "config", "show"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
-                profile: None,
-                command: None
+                command: ConfigCommand::Show { profile: None }
             })
         ));
     }
 
     #[test]
-    fn config_accepts_profile_flag() {
-        let cli = parse(&["wt", "config", "--profile", "codex"]);
+    fn config_show_accepts_profile_flag() {
+        let cli = parse(&["wt", "config", "show", "--profile", "codex"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
-                profile: Some(ref profile),
-                command: None
+                command: ConfigCommand::Show { profile: Some(ref profile) }
             }) if profile == "codex"
         ));
+    }
+
+    #[test]
+    fn config_show_requires_explicit_subcommand() {
+        let result = Cli::try_parse_from(["wt", "config"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn config_show_rejects_old_top_level_profile_flag() {
+        let result = Cli::try_parse_from(["wt", "config", "--profile", "codex"]);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -2781,8 +3056,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
-                profile: None,
-                command: Some(ConfigCommand::Edit { ref source }),
+                command: ConfigCommand::Edit { ref source },
             }) if source.as_deref() == Some(std::path::Path::new(".wt/config/local.toml"))
         ));
     }
@@ -2793,8 +3067,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
-                profile: None,
-                command: Some(ConfigCommand::Extract { ref source }),
+                command: ConfigCommand::Extract { ref source },
             }) if source.as_deref() == Some(std::path::Path::new(".wt/config/local.toml"))
         ));
     }
@@ -2810,8 +3083,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
-                profile: None,
-                command: Some(ConfigCommand::Inline { ref source }),
+                command: ConfigCommand::Inline { ref source },
             }) if source.as_deref() == Some(std::path::Path::new(".wt/config/profiles/codex/profile.toml"))
         ));
     }
@@ -3061,6 +3333,22 @@ mod tests {
         assert!(help.contains("SOURCE name `local`"));
         assert!(help.contains("SOURCE name `profiles/<name>`"));
         assert!(help.contains("reject files outside that managed namespace"));
+    }
+
+    #[test]
+    fn config_help_describes_show_as_canonical_display() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("config")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("wt config show"), "config help was:\n{help}");
+        assert!(help.contains("show"), "config help was:\n{help}");
+        assert!(help.contains("edit"), "config help was:\n{help}");
+        assert!(help.contains("extract"), "config help was:\n{help}");
+        assert!(help.contains("inline"), "config help was:\n{help}");
     }
 
     #[test]

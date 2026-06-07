@@ -90,10 +90,6 @@ impl StorageRoot {
         self.config_dir().join("profiles")
     }
 
-    pub fn planning_dir(&self) -> PathBuf {
-        self.personal_root.join("planning")
-    }
-
     pub fn execution_dir(&self) -> PathBuf {
         self.personal_root.join("execution")
     }
@@ -104,6 +100,30 @@ impl StorageRoot {
 
     pub fn workflows_dir(&self) -> PathBuf {
         self.execution_dir().join("workflows")
+    }
+
+    pub fn origins_dir(&self) -> PathBuf {
+        self.execution_dir().join("origins")
+    }
+
+    pub fn origin_task_snapshots_dir(&self) -> PathBuf {
+        self.origins_dir().join("tasks")
+    }
+
+    pub fn origin_workflow_snapshots_dir(&self) -> PathBuf {
+        self.origins_dir().join("workflows")
+    }
+
+    pub fn origin_task_snapshot_path(&self, owner: impl AsRef<str>) -> PathBuf {
+        self.origin_task_snapshots_dir().join(format!(
+            "{}.toml",
+            crate::task::safe_task_key(owner.as_ref())
+        ))
+    }
+
+    pub fn origin_workflow_snapshot_path(&self, owner: impl AsRef<str>) -> PathBuf {
+        let file_name = format!("{}.toml", origin_workflow_snapshot_owner_id(owner.as_ref()));
+        self.origin_workflow_snapshots_dir().join(file_name)
     }
 
     pub fn task_runs_dir(&self) -> PathBuf {
@@ -147,16 +167,8 @@ impl StorageRoot {
         self.archive_workflows_dir().join(id.as_ref())
     }
 
-    pub fn ideas_dir(&self) -> PathBuf {
-        self.planning_dir().join("ideas")
-    }
-
-    pub fn specs_dir(&self) -> PathBuf {
-        self.planning_dir().join("specs")
-    }
-
     pub fn retrospectives_dir(&self) -> PathBuf {
-        self.planning_dir().join("retrospectives")
+        self.execution_dir().join("retrospectives")
     }
 
     pub fn task_run_path(&self, id: impl AsRef<str>) -> PathBuf {
@@ -265,34 +277,20 @@ impl StorageRoot {
         )
     }
 
-    pub fn detect_legacy_ideas(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(
-            repo_root,
-            "ideas",
-            &["ideas", "planning/ideas"],
-            self.ideas_dir(),
-        )
-    }
-
-    pub fn detect_legacy_specs(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(
-            repo_root,
-            "specs",
-            &["specs", "planning/specs"],
-            self.specs_dir(),
-        )
-    }
-
     pub fn detect_legacy_retrospectives(
         &self,
         repo_root: impl AsRef<Path>,
     ) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(
-            repo_root,
-            "retrospectives",
-            &["retrospectives", "planning/retrospectives"],
-            self.retrospectives_dir(),
-        )
+        let canonical = self.retrospectives_dir();
+        self.detect_legacy_personal_dir("planning/retrospectives", canonical.clone())
+            .or_else(|| {
+                self.detect_legacy_child(
+                    repo_root,
+                    "retrospectives",
+                    &["retrospectives", "planning/retrospectives"],
+                    canonical,
+                )
+            })
     }
 
     pub fn detect_legacy_archive(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
@@ -420,6 +418,33 @@ impl StorageRoot {
     }
 }
 
+pub(crate) fn origin_workflow_snapshot_owner_id(owner: &str) -> String {
+    let trimmed = owner.trim();
+    let id = Path::new(trimmed)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+        .unwrap_or(trimmed);
+    safe_workflow_snapshot_owner_id(id)
+}
+
+fn safe_workflow_snapshot_owner_id(value: &str) -> String {
+    let id = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+
+    if id.is_empty() { "workflow".into() } else { id }
+}
+
 fn repo_root_from_git_common_dir(git_common_dir: &Path) -> PathBuf {
     git_common_dir
         .parent()
@@ -526,8 +551,6 @@ fn legacy_local_contains_wt_state(path: &Path) -> bool {
     path.join(".wt.toml").is_file()
         || [
             "profiles",
-            "ideas",
-            "specs",
             "retrospectives",
             "tasks",
             "workflows",
@@ -543,9 +566,6 @@ fn legacy_git_common_contains_wt_state(path: &Path) -> bool {
         || [
             "config",
             "profiles",
-            "planning",
-            "ideas",
-            "specs",
             "retrospectives",
             "execution",
             "tasks",
@@ -640,16 +660,8 @@ mod tests {
             PathBuf::from("/repo/.wt/config/profiles")
         );
         assert_eq!(
-            storage.ideas_dir(),
-            PathBuf::from("/repo/.wt/planning/ideas")
-        );
-        assert_eq!(
-            storage.specs_dir(),
-            PathBuf::from("/repo/.wt/planning/specs")
-        );
-        assert_eq!(
             storage.retrospectives_dir(),
-            PathBuf::from("/repo/.wt/planning/retrospectives")
+            PathBuf::from("/repo/.wt/execution/retrospectives")
         );
         assert_eq!(
             storage.tasks_dir(),
@@ -696,6 +708,80 @@ mod tests {
         assert_eq!(
             storage.runtime_agent_anchors_dir(&agent),
             PathBuf::from("/repo/.wt/runtime/agents/codex/anchors")
+        );
+    }
+
+    #[test]
+    fn retrospectives_dir_lives_under_execution() {
+        let storage = StorageRoot::from_git_common_dir("/repo/.git");
+
+        assert_eq!(
+            storage.retrospectives_dir(),
+            PathBuf::from("/repo/.wt/execution/retrospectives")
+        );
+    }
+
+    #[test]
+    fn detects_personal_planning_retrospectives_as_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join(".wt/planning/retrospectives");
+        fs::create_dir_all(&legacy).unwrap();
+        let storage =
+            StorageRoot::from_git_common_dir_and_repo_root(dir.path().join(".git"), dir.path());
+
+        let found = storage
+            .detect_legacy_retrospectives(dir.path())
+            .expect("legacy planning/retrospectives must be detected");
+        let message = found.error_message_for("retrospective storage");
+
+        assert!(message.contains(".wt/planning/retrospectives"));
+        assert!(message.contains(".wt/execution/retrospectives"));
+        assert!(message.contains("import or repair legacy state explicitly"));
+    }
+
+    #[test]
+    fn origin_snapshot_paths_use_execution_origin_dirs() {
+        let root = tempfile::tempdir().unwrap();
+        let storage =
+            StorageRoot::from_git_common_dir_and_repo_root(root.path().join(".git"), root.path());
+
+        assert_eq!(
+            storage.origin_task_snapshot_path("origin-command-namespace"),
+            root.path()
+                .join(".wt/execution/origins/tasks/origin-command-namespace.toml")
+        );
+        assert_eq!(
+            storage.origin_workflow_snapshot_path("2026-06-06-001"),
+            root.path()
+                .join(".wt/execution/origins/workflows/2026-06-06-001.toml")
+        );
+        assert_eq!(
+            storage.origin_workflow_snapshot_path("2026-06-06-001.toml"),
+            root.path()
+                .join(".wt/execution/origins/workflows/2026-06-06-001.toml")
+        );
+    }
+
+    #[test]
+    fn workflow_origin_snapshot_paths_normalize_workflow_targets() {
+        let root = tempfile::tempdir().unwrap();
+        let storage =
+            StorageRoot::from_git_common_dir_and_repo_root(root.path().join(".git"), root.path());
+        let expected = root
+            .path()
+            .join(".wt/execution/origins/workflows/2026-06-06-001.toml");
+
+        assert_eq!(
+            storage.origin_workflow_snapshot_path(
+                root.path()
+                    .join(".wt/execution/workflows/2026-06-06-001.toml")
+                    .to_string_lossy()
+            ),
+            expected
+        );
+        assert_eq!(
+            storage.origin_workflow_snapshot_path("../workflows/2026-06-06-001.toml"),
+            expected
         );
     }
 
@@ -874,16 +960,6 @@ mod tests {
             "task_runs",
             |storage| storage.task_runs_dir(),
             |storage, repo| storage.detect_legacy_task_runs(repo),
-        );
-        assert_detects_git_common_dir(
-            "ideas",
-            |storage| storage.ideas_dir(),
-            |storage, repo| storage.detect_legacy_ideas(repo),
-        );
-        assert_detects_git_common_dir(
-            "specs",
-            |storage| storage.specs_dir(),
-            |storage, repo| storage.detect_legacy_specs(repo),
         );
         assert_detects_git_common_dir(
             "retrospectives",

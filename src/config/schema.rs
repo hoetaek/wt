@@ -1,6 +1,6 @@
 use anyhow::bail;
 use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -45,6 +45,18 @@ pub struct Config {
     pub workspace: Option<WorkspaceConfig>,
     pub agent: Option<AgentConfig>,
     pub issues: Option<IssuesConfig>,
+    pub language: Language,
+}
+
+/// Configured language for human-facing `wt` output. `Auto` resolves from the
+/// OS locale; an unsupported explicit value is rejected at config load.
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Language {
+    #[default]
+    Auto,
+    En,
+    Ko,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -908,6 +920,27 @@ pub fn validate_profile_name(name: &str) -> anyhow::Result<()> {
 pub struct IssuesConfig {
     pub provider: IssueProviderType,
     pub gh_user: Option<String>,
+    #[serde(default)]
+    pub origin_policy: OriginPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OriginPolicy {
+    #[default]
+    ProviderPreferred,
+    ProviderRequired,
+    LocalOnly,
+}
+
+impl OriginPolicy {
+    pub fn as_config_value(self) -> &'static str {
+        match self {
+            Self::ProviderPreferred => "provider-preferred",
+            Self::ProviderRequired => "provider-required",
+            Self::LocalOnly => "local-only",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]

@@ -148,6 +148,10 @@ fn append_issues_section(s: &mut String, issues: &IssuesConfig) {
         "provider = {}\n",
         toml_quote(issue_provider_name(&issues.provider))
     ));
+    s.push_str(&format!(
+        "origin_policy = {}\n",
+        toml_quote(issues.origin_policy.as_config_value())
+    ));
     if let Some(gh_user) = issues.gh_user.as_deref() {
         s.push_str(&format!("gh_user = {}\n", toml_quote(gh_user)));
     }
@@ -409,9 +413,10 @@ fn toml_quote(value: &str) -> String {
 mod tests {
     use super::render_effective_config;
     use crate::config::{
-        Config, EditorConfig, EditorPlacement, ReviewCodexBasePolicy, ReviewConfig, SiteConfig,
-        SiteProvider, WorkflowConfig, WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig,
-        WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig, WorkspaceConfig,
+        Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig, OriginPolicy,
+        ReviewCodexBasePolicy, ReviewConfig, SiteConfig, SiteProvider, WorkflowConfig,
+        WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig, WorkspaceBrowserMode,
+        WorkspaceChromeDevtoolsConfig, WorkspaceConfig,
     };
 
     #[test]
@@ -442,6 +447,28 @@ mod tests {
 
         assert!(rendered.contains("[review]\n"));
         assert!(rendered.contains("codex_base = \"required\"\n"));
+    }
+
+    #[test]
+    fn issues_section_preserves_non_default_origin_policy() {
+        let rendered = render_effective_config(&Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Linear,
+                gh_user: None,
+                origin_policy: OriginPolicy::ProviderRequired,
+            }),
+            ..Config::default()
+        });
+
+        assert!(rendered.contains("[issues]\n"));
+        assert!(rendered.contains("provider = \"linear\"\n"));
+        assert!(rendered.contains("origin_policy = \"provider-required\"\n"));
+
+        let parsed: Config = toml::from_str(&rendered).unwrap();
+        assert_eq!(
+            parsed.issues.unwrap().origin_policy,
+            OriginPolicy::ProviderRequired
+        );
     }
 
     #[test]

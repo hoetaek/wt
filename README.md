@@ -181,9 +181,9 @@ Prepare local TaskDocuments without starting work:
 ```bash
 wt task list
 wt task list --all
-wt task import PROJ-123
-wt task import
-wt task publish add-profile-docs
+wt task origin import PROJ-123
+wt task origin import
+wt task origin publish add-profile-docs
 ```
 
 Prepare saved workflows when local tasks or issues need coordination:
@@ -255,24 +255,39 @@ merge.
   the full TaskDocument inventory. Both modes report invalid task TOML files
   and do not start worktrees, branches, TaskRuns, Workflows, provider issues, or
   pull requests.
-- `wt task import [<issue>...]` imports provider issues as TaskDocuments,
+  In a TTY, bare `wt task list` opens the full-screen interactive browser.
+  Pipes, `--json`, and `--quiet` keep the existing text and JSON contracts.
+  Origin actions such as diff, fetch, pull, and push are available through the
+  Enter action menu and matching shortcuts.
+- `wt task origin import [<issue>...]` imports provider issues as TaskDocuments,
   records title, branch, body, and `[origin]`, and may materialize the provider
   issue branch first; it does not start worktrees, local branches, TaskRuns,
   Workflows, or pull requests.
 - `wt run task [<task>...]` starts one worktree per selected TaskDocument.
-- `wt task publish [<task>...]` creates provider issues from TaskDocuments,
+- `wt task origin publish [<task>...]` creates provider issues from TaskDocuments,
   rewrites `branch` to the created issue key plus the existing branch slug, and
   records `[origin]`; it does not start worktrees, local branches, or TaskRuns.
+- `wt task origin fetch|diff|pull|push <task>` manages an existing
+  TaskDocument `[origin]`: fetch writes provider evidence, diff is read-only,
+  pull applies selected provider title/body locally, and push writes selected
+  provider comments or fields after preview.
 - `Workflow` files in `<repo-root>/.wt/execution/workflows/<id>.toml` save coordinated execution.
   Optional top-level `title`, `body`, and `[origin]` record the larger human
   context for the saved plan. Workflow `[origin]` belongs to the large
   issue-like unit represented by the Workflow; TaskDocument `[origin]` belongs
   only to a runnable slice that is itself a provider issue.
-  `single` shares one workspace, `batch` runs independent branches from one
-  base, and `stack` runs ordered branches as a parent chain.
+- `wt workflow origin attach <workflow> <issue>` records a saved Workflow
+  `[origin]`; `wt workflow origin fetch|diff|pull|push <workflow>` manages only
+  the saved Workflow title, body, and `[origin]`. Workflow push appends a
+  provider comment; it does not overwrite provider title/body or propagate
+  origin state into child TaskDocuments.
+- Workflow mode `single` shares one workspace, `batch` runs independent branches
+  from one base, and `stack` runs ordered branches as a parent chain.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid
   Workflow files whether or not they are runnable and reports invalid workflow
   TOML files instead of hiding parse failures.
+  In a TTY, bare `wt workflow list` opens the full-screen interactive browser.
+  Pipes, `--json`, and `--quiet` keep the existing text and JSON contracts.
 - `wt workflow archive <workflow>` moves a passed Workflow plus linked
   passed/skipped TaskRuns and uniquely-owned TaskDocuments into
   `<repo-root>/.wt/execution/archive/workflows/<workflow-id>/`. Archive is
@@ -281,10 +296,10 @@ merge.
 - `TaskRun` files in `<repo-root>/.wt/execution/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
 - `wt ui [--port <port>]` starts a read-only loopback web UI for personal `wt`
-  ideas, TaskDocuments, Workflows, TaskRuns, profile summaries, and effective
-  config source paths. It serves embedded assets, exposes
-  `GET /api/snapshot`, reports invalid TOML records, and does not write state
-  or serve arbitrary repo files.
+  execution retrospectives, TaskDocuments, Workflows, TaskRuns, profile
+  summaries, and effective config source paths. It serves embedded assets,
+  exposes `GET /api/snapshot`, reports invalid TOML records, and does not write
+  state or serve arbitrary repo files.
 - `wt inspect [<target>]` is the read-only work dossier for a branch, worktree,
   or TaskRun. `wt inspect <target> --pr` adds nested pull request review
   evidence without changing lifecycle state or exit-code semantics.
@@ -424,13 +439,14 @@ threads, comments, and checks. Examples:
 Inspect the effective config:
 
 ```bash
-wt config
-wt config --profile codex
+wt config show
+wt config show --profile codex
 ```
 
-Treat `wt config` output as the source of truth for runtime behavior. Config
-files store user intent and overrides, while `wt config` shows merged profile
-layers plus built-in defaults in the shape users should copy and edit.
+Treat `wt config show` output as the source of truth for runtime behavior.
+Config files store user intent and overrides, while `wt config show` shows
+merged profile layers plus built-in defaults in the shape users should copy and
+edit.
 
 Workflow preparation reads policy from the effective config:
 
@@ -463,28 +479,28 @@ recorded dedicated Codex base review evidence for the TaskRun after the latest
 Agent Completion Report. `wt workflow pass` rejects required-review tasks
 without fresh accepted Codex base review evidence for the current parent.
 
-`wt config` prints the effective `[workflow]` and `[review]` policy, including
-the built-in defaults above. `wt init` writes an explicit starter `[workflow]`
-policy so the PR and landing behavior for newly prepared workflows is visible in
-the generated config. It only writes `[review]` when preserving an existing
-explicit review policy, so local init does not accidentally override a shared
-or root review requirement.
+`wt config show` prints the effective `[workflow]` and `[review]` policy,
+including the built-in defaults above. `wt init` writes an explicit starter
+`[workflow]` policy so the PR and landing behavior for newly prepared workflows
+is visible in the generated config. It only writes `[review]` when preserving an
+existing explicit review policy, so local init does not accidentally override a
+shared or root review requirement.
 
-When `[workspace]` is configured, `wt config` also prints effective workspace
+When `[workspace]` is configured, `wt config show` also prints effective workspace
 colors, including built-in defaults. `wt init` writes the starter color map;
 edit that line to change or disable a color.
 When `[workspace.browser]` is configured with `mode = "system"` or
-`mode = "chrome_devtools"`, `wt config` prints the effective browser launch URL.
-For Chrome DevTools mode, `wt config` also prints the effective Chrome user data
-directory. The port is shown only when it is configured; otherwise setup
+`mode = "chrome_devtools"`, `wt config show` prints the effective browser launch
+URL. For Chrome DevTools mode, `wt config show` also prints the effective Chrome
+user data directory. The port is shown only when it is configured; otherwise setup
 reserves an available localhost port at runtime.
 
-When an active `[site]` provider is configured, `wt config` prints the site
+When an active `[site]` provider is configured, `wt config show` prints the site
 defaults runtime setup uses, such as the generated name template, root,
 security, URL template, and Traefik target. A disabled `provider = "none"` site
 section is omitted from effective output. Browser launch behavior belongs to
 `[workspace.browser]`, not `[site]`.
-When `[editor]` is configured, `wt config` prints the effective editor
+When `[editor]` is configured, `wt config show` prints the effective editor
 placement default, `cmux_surface`, unless it is overridden. In cmux, that
 default opens the editor in a right-side split pane next to the caller surface.
 
@@ -582,8 +598,8 @@ Named profile `profile.toml` is an override layer: omitted `[agent]` fields
 inherit lower-precedence config, present fields override, and `args = []`
 explicitly clears inherited agent args.
 
-Omitting `--profile` means the effective config. `default` is not a profile
-name.
+Omitting `--profile` on `wt config show` means the effective config. `default`
+is not a profile name.
 
 Selected profile subsets for local TaskDocuments belong to saved workflow matrix
 mode:
@@ -610,9 +626,9 @@ there for one named profile.
 | `wt run pr` | Start worktrees from pull requests |
 | `wt run branch` | Start work from branch-name text |
 | `wt task list` | List actionable local TaskDocuments |
-| `wt task import` | Import provider issues as local TaskDocuments |
+| `wt task origin import` | Import provider issues as local TaskDocuments |
 | `wt run task` | Start work from local TaskDocuments |
-| `wt task publish` | Publish local TaskDocuments as provider issues |
+| `wt task origin publish` | Publish local TaskDocuments as provider issues |
 | `wt workflow` | Prepare, inspect, repair, archive, and pass saved workflow tasks |
 | `wt run workflow` | Start runnable tasks from saved workflows |
 | `wt ui` | Start the read-only personal state web UI |
@@ -625,7 +641,7 @@ there for one named profile.
 | `wt as <agent-id> -- <command...>` | Run any command with an explicit wt agent identity |
 | `wt send` | Send a message to the matching task agent surface |
 | `wt done` | Remove completed or disposable worktrees and branches |
-| `wt config` | Print, edit, extract, or inline config |
+| `wt config show/edit/extract/inline` | Show, edit, extract, or inline config |
 | `wt profile` | List named profiles (omission default for `wt profile list`) or scaffold a new one with `wt profile create <name>` |
 | `wt site` | Inspect and manage local site provider helpers |
 

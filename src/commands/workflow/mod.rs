@@ -46,6 +46,7 @@ mod archive;
 mod codex_base_review;
 mod display;
 mod list_command;
+pub(crate) mod origin;
 mod repair;
 mod selection;
 mod show_command;
@@ -79,6 +80,7 @@ pub struct TaskOptions<'a> {
     pub profile: Option<&'a str>,
     pub profiles: &'a [String],
     pub coordinator: Option<&'a str>,
+    pub id: Option<&'a str>,
     pub title: Option<&'a str>,
     pub body: Option<&'a str>,
     pub body_file: Option<&'a Path>,
@@ -91,6 +93,7 @@ pub struct TaskOptions<'a> {
 pub struct IssueOptions<'a> {
     pub mode: WorkflowModeArg,
     pub profile: Option<&'a str>,
+    pub id: Option<&'a str>,
     pub title: Option<&'a str>,
     pub body: Option<&'a str>,
     pub body_file: Option<&'a Path>,
@@ -115,6 +118,9 @@ pub fn task(ctx: &Ctx, tasks: &[String], options: TaskOptions<'_>) -> Result<()>
         options.origin_provider,
         options.origin_id,
     )?;
+    if let Some(id) = options.id {
+        workflow_store::validate_workflow_id(id)?;
+    }
     if options.mode == WorkflowModeArg::Matrix && tasks.len() > 1 {
         bail!("matrix mode workflow requires exactly one task");
     }
@@ -140,6 +146,7 @@ pub fn task(ctx: &Ctx, tasks: &[String], options: TaskOptions<'_>) -> Result<()>
             profile: options.profile,
             profiles: options.profiles,
             coordinator: options.coordinator,
+            id: options.id,
             title: options.title,
             body: options.body,
             body_file: options.body_file,
@@ -166,6 +173,9 @@ pub fn issue(ctx: &Ctx, issues: &[String], options: IssueOptions<'_>) -> Result<
         options.origin_provider,
         options.origin_id,
     )?;
+    if let Some(id) = options.id {
+        workflow_store::validate_workflow_id(id)?;
+    }
 
     let selected_issues = if issues.is_empty() {
         issue_selection::select_issues(ctx, "Select issues for workflow")?
@@ -188,6 +198,7 @@ pub fn issue(ctx: &Ctx, issues: &[String], options: IssueOptions<'_>) -> Result<
             mode: options.mode,
             profile: options.profile,
             profiles: &[],
+            id: options.id,
             title: options.title,
             body: options.body,
             body_file: options.body_file,
@@ -242,6 +253,26 @@ fn run_after_workflow_selection(ctx: &Ctx, workflow: Option<&str>, jobs: usize) 
 
 pub fn pass(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
     pass_workflow(ctx, workflow, task, run_next)
+}
+
+pub fn origin_attach(ctx: &Ctx, workflow: &str, issue: &str) -> Result<()> {
+    origin::attach(ctx, workflow, issue)
+}
+
+pub fn origin_fetch(ctx: &Ctx, workflows: &[String]) -> Result<()> {
+    origin::fetch(ctx, workflows)
+}
+
+pub fn origin_diff(ctx: &Ctx, workflows: &[String]) -> Result<()> {
+    origin::diff(ctx, workflows)
+}
+
+pub fn origin_pull(ctx: &Ctx, workflows: &[String]) -> Result<()> {
+    origin::pull(ctx, workflows)
+}
+
+pub fn origin_push(ctx: &Ctx, workflows: &[String]) -> Result<()> {
+    origin::push(ctx, workflows)
 }
 
 pub fn deprecated_complete(workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
@@ -403,6 +434,7 @@ cli = "none"
                 profile,
                 profiles: &[],
                 coordinator: None,
+                id: None,
                 title,
                 body: None,
                 body_file: None,
@@ -419,12 +451,20 @@ cli = "none"
         mode: WorkflowModeArg,
         task_titles: &[&str],
     ) -> workflow_store::WorkflowRecord {
+        let before = workflow_store::workflow_paths(ctx)
+            .unwrap()
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
         let tasks = task_titles
             .iter()
             .map(|title| title.to_string())
             .collect::<Vec<_>>();
         task(ctx, &tasks, mode, None, None, &Some("main".into()), None).unwrap();
-        workflow_store::list(ctx).unwrap().pop().unwrap()
+        workflow_store::list(ctx)
+            .unwrap()
+            .into_iter()
+            .find(|record| !before.contains(&record.path))
+            .unwrap()
     }
 
     fn prepare_matrix_workflow(
@@ -432,8 +472,16 @@ cli = "none"
         tasks: &[String],
         profiles: &[String],
     ) -> workflow_store::WorkflowRecord {
+        let before = workflow_store::workflow_paths(ctx)
+            .unwrap()
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
         matrix_task(ctx, tasks, profiles).unwrap();
-        workflow_store::list(ctx).unwrap().pop().unwrap()
+        workflow_store::list(ctx)
+            .unwrap()
+            .into_iter()
+            .find(|record| !before.contains(&record.path))
+            .unwrap()
     }
 
     fn matrix_task(ctx: &Ctx, tasks: &[String], profiles: &[String]) -> Result<()> {
@@ -446,6 +494,7 @@ cli = "none"
                 profile: None,
                 profiles,
                 coordinator: None,
+                id: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -455,6 +504,86 @@ cli = "none"
                 pr: None,
             },
         )
+    }
+
+    fn assert_yyyymmdd_slugged_id(id: &str, slug: &str) {
+        let (date, rest) = id
+            .split_once('-')
+            .expect("id should contain date separator");
+        assert_eq!(date.len(), 8);
+        assert!(date.chars().all(|ch| ch.is_ascii_digit()));
+        assert_eq!(rest, slug);
+    }
+
+    #[test]
+    fn task_prepares_slugged_workflow_id_from_title() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "origin-snapshot-store",
+            "title = \"Add origin snapshot store\"\nbranch = \"origin-snapshot-store\"\n",
+        );
+        let ctx = ctx(dir.path());
+
+        super::task(
+            &ctx,
+            &["origin-snapshot-store".into()],
+            TaskOptions {
+                mode: WorkflowModeArg::Batch,
+                profile: None,
+                profiles: &[],
+                coordinator: None,
+                id: None,
+                title: Some("Provider origin foundation"),
+                body: None,
+                body_file: None,
+                origin_provider: None,
+                origin_id: None,
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_yyyymmdd_slugged_id(&record.id, "provider-origin-foundation");
+        let run_path = task_run::resolve(&ctx, &record.workflow.tasks[0].run).unwrap();
+        let run = task_run::read(&run_path).unwrap();
+        assert_eq!(run.group.as_deref(), Some(record.id.as_str()));
+    }
+
+    #[test]
+    fn task_prepares_workflow_with_explicit_slugged_id() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "origin-snapshot-store",
+            "title = \"Add origin snapshot store\"\nbranch = \"origin-snapshot-store\"\n",
+        );
+        let ctx = ctx(dir.path());
+
+        super::task(
+            &ctx,
+            &["origin-snapshot-store".into()],
+            TaskOptions {
+                mode: WorkflowModeArg::Batch,
+                profile: None,
+                profiles: &[],
+                coordinator: None,
+                id: Some("20260606-provider-origin-foundation"),
+                title: Some("Provider origin foundation"),
+                body: None,
+                body_file: None,
+                origin_provider: None,
+                origin_id: None,
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(record.id, "20260606-provider-origin-foundation");
     }
 
     fn update_task_run(
@@ -710,6 +839,7 @@ cli = "none"
                 profile: None,
                 profiles: &[],
                 coordinator: Some("agents/coord-explicit"),
+                id: None,
                 title: Some("Workflow explicit"),
                 body: None,
                 body_file: None,
@@ -803,6 +933,7 @@ cli = "none"
                 profile: None,
                 profiles: &["alpha".into(), "beta".into()],
                 coordinator: None,
+                id: None,
                 title: Some("Workflow routing"),
                 body: None,
                 body_file: None,
@@ -855,6 +986,7 @@ cli = "none"
                 profile: None,
                 profiles: &["alpha".into()],
                 coordinator: None,
+                id: None,
                 title: Some("Workflow routing"),
                 body: None,
                 body_file: None,
@@ -961,6 +1093,7 @@ cli = "none"
                 profile: None,
                 profiles: &[],
                 coordinator: None,
+                id: None,
                 title: Some("Workflow migration"),
                 body: Some("Ship the larger workflow migration"),
                 body_file: None,
@@ -1019,6 +1152,7 @@ cli = "none"
                 profile: None,
                 profiles: &[],
                 coordinator: None,
+                id: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -1059,6 +1193,7 @@ cli = "none"
                 profile: None,
                 profiles: &strings(&["alpha", "beta"]),
                 coordinator: None,
+                id: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -1094,6 +1229,7 @@ cli = "none"
                 profile: None,
                 profiles: &[],
                 coordinator: None,
+                id: None,
                 title: Some("Workflow migration"),
                 body: None,
                 body_file: Some(&body_path),
@@ -1127,6 +1263,7 @@ cli = "none"
                 profile: None,
                 profiles: &[],
                 coordinator: None,
+                id: None,
                 title: None,
                 body: Some("inline"),
                 body_file: Some(&body_path),
@@ -1150,6 +1287,7 @@ cli = "none"
                 profile: None,
                 profiles: &[],
                 coordinator: None,
+                id: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -1971,6 +2109,7 @@ landing = "auto"
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
                 gh_user: None,
+                origin_policy: Default::default(),
             }),
             workflow: crate::config::WorkflowConfig {
                 pull_request: Some(WorkflowDefaultPullRequestMode::Ready),
@@ -1986,6 +2125,7 @@ landing = "auto"
             IssueOptions {
                 mode: WorkflowModeArg::Stack,
                 profile: None,
+                id: None,
                 title: None,
                 body: None,
                 body_file: None,
@@ -2024,6 +2164,7 @@ landing = "auto"
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
                 gh_user: None,
+                origin_policy: Default::default(),
             }),
             ..Config::default()
         };
@@ -2035,6 +2176,7 @@ landing = "auto"
             IssueOptions {
                 mode: WorkflowModeArg::Stack,
                 profile: None,
+                id: None,
                 title: Some("Broad provider issue"),
                 body: Some("Split the broad issue into executable slices."),
                 body_file: None,

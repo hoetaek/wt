@@ -2,6 +2,7 @@ use crate::commands::agent_hook;
 use crate::commands::workflow;
 use crate::config::{AgentCli, Config, IssueProviderType, SiteProvider};
 use crate::context::Ctx;
+use crate::i18n::{Lang, fill};
 use crate::services::identity_locator::{
     self, AnchorKey, AnchorKind, IdentityAnchor, IdentityAnchorLiveness,
 };
@@ -21,6 +22,62 @@ const CODEX_WT_HOOK_INSTALL_HINT: &str =
     "Run wt setup to enable wt inbox delivery through detected agent hook dispatchers.";
 const WT_SETUP_HINT: &str = "Run wt setup to install per-machine wt integration.";
 const WT_INIT_HINT: &str = "Run wt init to create repo-local wt setup.";
+
+/// Typed, translatable catalog of doctor's human-facing prose. English is the
+/// source of truth; a missing Korean arm falls back to English. Variants carry
+/// their interpolation slots; slot values are never translated. Defined here
+/// for the i18n mechanism; NOT yet wired into doctor's output path.
+pub enum DoctorMsg {
+    SectionDoctor,
+    Profile {
+        profile: String,
+    },
+    WtSetupHint,
+    WtInitHint,
+    CodexHookInstallHint,
+    CodexWtHookInstallHint,
+    IdentityAnchorsScanFailed {
+        err: String,
+    },
+    SupervisorsScanFailed {
+        err: String,
+    },
+    /// Pass-through for arbitrary external text that must never be translated.
+    Raw(String),
+}
+
+impl DoctorMsg {
+    pub fn render(&self, lang: Lang) -> String {
+        // English templates (source of truth). Korean arms are added in a later
+        // chunk; until then `Lang::Ko` falls through to the English template.
+        let en = match self {
+            DoctorMsg::SectionDoctor => return "Doctor".to_string(),
+            DoctorMsg::Profile { profile } => {
+                return fill("Profile: {profile}", &[("profile", profile)]);
+            }
+            DoctorMsg::WtSetupHint => "Run wt setup to install per-machine wt integration.",
+            DoctorMsg::WtInitHint => "Run wt init to create repo-local wt setup.",
+            DoctorMsg::CodexHookInstallHint => {
+                "Run cmux hooks codex install --yes to enable reliable Codex status events."
+            }
+            DoctorMsg::CodexWtHookInstallHint => {
+                "Run wt setup to enable wt inbox delivery through detected agent hook dispatchers."
+            }
+            DoctorMsg::IdentityAnchorsScanFailed { err } => {
+                return fill("Identity anchors: scan failed ({err})", &[("err", err)]);
+            }
+            DoctorMsg::SupervisorsScanFailed { err } => {
+                return fill("Supervisors: scan failed ({err})", &[("err", err)]);
+            }
+            DoctorMsg::Raw(text) => return text.clone(),
+        };
+        // `lang` is accepted now so the wiring chunk needs no signature change;
+        // with no Korean arms yet, every language renders the English template.
+        let _ = lang;
+        en.to_string()
+    }
+}
+
 const CODEX_CMUX_HOOK_EVENTS: [(&str, &str); 5] = [
     ("PermissionRequest", "permission_request"),
     ("PreToolUse", "pre_tool_use"),
@@ -545,15 +602,12 @@ fn collect_repo_setup_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     let required_dirs = [
         ctx.storage_root.config_dir(),
         ctx.storage_root.profiles_dir(),
-        ctx.storage_root.planning_dir(),
-        ctx.storage_root.ideas_dir(),
-        ctx.storage_root.specs_dir(),
-        ctx.storage_root.retrospectives_dir(),
         ctx.storage_root.execution_dir(),
         ctx.storage_root.tasks_dir(),
         ctx.storage_root.workflows_dir(),
         ctx.storage_root.task_runs_dir(),
         ctx.storage_root.archive_dir(),
+        ctx.storage_root.retrospectives_dir(),
         ctx.storage_root.runtime_dir(),
         ctx.storage_root.runtime_agents_dir(),
     ];
@@ -624,6 +678,15 @@ fn collect_active_workflow_inventory_checks(ctx: &Ctx, checks: &mut Vec<DoctorCh
 }
 
 fn collect_legacy_runtime_actor_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
+    if let Some(legacy) = ctx
+        .storage_root
+        .detect_legacy_retrospectives(&ctx.repo_root)
+    {
+        checks.push(DoctorCheck::warning(
+            "legacy_retrospectives",
+            legacy.error_message_for("retrospective storage"),
+        ));
+    }
     if let Some(legacy) = ctx.storage_root.detect_legacy_agent_state() {
         checks.push(DoctorCheck::warning(
             "legacy_runtime_observations",
@@ -1479,6 +1542,7 @@ fn doctor_label(name: &str) -> &str {
         "repo_config" => "Repo config",
         "core_dirs" => "Core dirs",
         "active_workflow_inventory" => "Active workflow inventory",
+        "legacy_retrospectives" => "Legacy retrospectives",
         "legacy_runtime_observations" => "Legacy runtime observations",
         "legacy_session_anchors" => "Legacy session anchors",
         _ => name,
@@ -1604,6 +1668,7 @@ mod tests {
     };
     use crate::context::mock::MockRunner;
     use crate::context::{Ctx, CtxOptions, OutputMode, UserInterface};
+    use crate::i18n::Lang;
     use crate::storage::StorageRoot;
     use anyhow::{Result, bail};
     use serde_json::json;
@@ -1700,6 +1765,55 @@ mod tests {
                 launcher_coordinator_id: None,
             },
         )
+    }
+
+    #[test]
+    fn doctor_msg_renders_current_english_strings() {
+        assert_eq!(
+            DoctorMsg::WtSetupHint.render(Lang::En),
+            "Run wt setup to install per-machine wt integration."
+        );
+        assert_eq!(
+            DoctorMsg::WtInitHint.render(Lang::En),
+            "Run wt init to create repo-local wt setup."
+        );
+        assert_eq!(
+            DoctorMsg::CodexHookInstallHint.render(Lang::En),
+            "Run cmux hooks codex install --yes to enable reliable Codex status events."
+        );
+        assert_eq!(
+            DoctorMsg::CodexWtHookInstallHint.render(Lang::En),
+            "Run wt setup to enable wt inbox delivery through detected agent hook dispatchers."
+        );
+        assert_eq!(DoctorMsg::SectionDoctor.render(Lang::En), "Doctor");
+        assert_eq!(
+            DoctorMsg::Profile {
+                profile: "codex".into()
+            }
+            .render(Lang::En),
+            "Profile: codex"
+        );
+        assert_eq!(
+            DoctorMsg::IdentityAnchorsScanFailed { err: "boom".into() }.render(Lang::En),
+            "Identity anchors: scan failed (boom)"
+        );
+        assert_eq!(
+            DoctorMsg::SupervisorsScanFailed { err: "boom".into() }.render(Lang::En),
+            "Supervisors: scan failed (boom)"
+        );
+        assert_eq!(
+            DoctorMsg::Raw("anything".into()).render(Lang::En),
+            "anything"
+        );
+    }
+
+    #[test]
+    fn doctor_msg_falls_back_to_english_when_korean_absent() {
+        // No Korean arm is defined yet in this chunk, so ko must fall back to en.
+        assert_eq!(
+            DoctorMsg::WtSetupHint.render(Lang::Ko),
+            DoctorMsg::WtSetupHint.render(Lang::En)
+        );
     }
 
     fn write_identity_anchor_file(ctx: &Ctx, anchor: &IdentityAnchor) -> PathBuf {
@@ -2197,6 +2311,30 @@ parent = "develop"
     }
 
     #[test]
+    fn doctor_warns_about_legacy_planning_retrospectives() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        fs::create_dir_all(
+            ctx.storage_root
+                .personal_root()
+                .join("planning/retrospectives"),
+        )
+        .unwrap();
+
+        let mut checks = Vec::new();
+        collect_repo_setup_checks(&ctx, &mut checks);
+
+        let warning = checks
+            .iter()
+            .find(|check| check.name == "legacy_retrospectives")
+            .expect("legacy_retrospectives warning must be present");
+        let message = warning.message.as_deref().unwrap();
+        assert!(message.contains(".wt/planning/retrospectives"));
+        assert!(message.contains(".wt/execution/retrospectives"));
+        assert!(message.contains("import or repair legacy state explicitly"));
+    }
+
+    #[test]
     fn supervisor_scan_cleans_stale_registration_and_keeps_log() {
         let temp = TempDir::new().unwrap();
         let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
@@ -2317,6 +2455,7 @@ parent = "develop"
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
                 gh_user: None,
+                origin_policy: Default::default(),
             }),
             ..Default::default()
         };
@@ -2337,6 +2476,7 @@ parent = "develop"
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Github,
                 gh_user: Some("alice".into()),
+                origin_policy: Default::default(),
             }),
             ..Default::default()
         };

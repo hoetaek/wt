@@ -1,25 +1,23 @@
 # Retrospect Reference
 
 Use this reference from `wt-land` to capture a closed work item, or a blocked
-`wt-lifecycle` lesson, as
-a structured retrospective that future planning, coordination, review, landing,
-or skill guidance can learn from. Do not use it to track in-flight state — that
-belongs in `<repo-root>/.wt/execution/tasks`,
+`wt-lifecycle` lesson, as a structured retrospective that future coordination,
+review, landing, or skill guidance can learn from. Do not use it to track
+in-flight state — that belongs in `<repo-root>/.wt/execution/tasks`,
 `<repo-root>/.wt/execution/task-runs`, and
 `<repo-root>/.wt/execution/workflows`.
-In the LEAF model, `wt-land` owns the final retrospect gate after landing or
-explicit discard. It can also record a blocked-loop lesson when the loop stops
-at an earlier gate and the blocker itself is worth preserving.
+
+`wt-land` owns the retrospect step after landing or explicit discard. It can
+also record a blocked-loop lesson when the loop stops earlier and the blocker
+itself is worth preserving.
 
 ## When to Use
 
 - After `wt-land` proves a branch landed and cleanup ran.
 - After an intentional discard with explicit user direction.
-- At the end of a `wt-lifecycle` loop, even when a phase blocked progress, if the
-  blocker is a reusable lesson for the next cycle.
+- At the end of a `wt-lifecycle` loop, even when a step blocked progress, if
+  the blocker is a reusable lesson for the next cycle.
 - When the user explicitly says "retrospect" or "retrospective 작성".
-- When the user references `planning/specs/<slug>/04-Feedback/10-retrospect.md` or
-  cross-work `<repo-root>/.wt/planning/retrospectives/`.
 
 Write a timing entry for every closed work item, even when no broader
 keep/problem/try lesson emerged. If no useful keep/problem/try emerged, keep
@@ -29,14 +27,15 @@ those sections short; a retrospect that restates the diff is noise.
 
 Choose the type before writing:
 
-- Closed retrospect: the work item is landed, explicitly discarded, or otherwise
-  closed after `wt-land` proved integration/discard and cleanup safety. Record
-  outcome, evidence, merge or discard proof, cleanup, and lessons.
-- Blocked lesson retrospect: the `wt-lifecycle` loop stopped at an earlier gate, such
-  as missing execution handoff, failed launch, unresolved review evidence,
-  landing conflict ownership, or unclear policy. Record the missing gate and the
-  reusable lesson only. Do not turn the retrospective into TaskRun, Workflow, or
-  branch state.
+- Closed retrospect: the work item is landed, explicitly discarded, or
+  otherwise closed after `wt-land` proved integration/discard and cleanup
+  safety. Record outcome, evidence, merge or discard proof, cleanup, and
+  lessons.
+- Blocked lesson retrospect: the `wt-lifecycle` loop stopped before landing —
+  missing execution handoff, failed launch, unresolved review evidence,
+  landing conflict ownership, or unclear policy. Record the missing step and
+  the reusable lesson only. Do not turn the retrospective into TaskRun,
+  Workflow, or branch state.
 
 If the work is merely waiting on an active agent, a check, or a normal review
 round, it is not a blocked lesson retrospect yet; continue with the matching
@@ -44,47 +43,35 @@ lifecycle skill.
 
 ## Boundary
 
-- Retrospectives are learning artifacts, not execution state.
+- Retrospectives are execution-learning artifacts, not execution state.
 - Never write TaskDocument/TaskRun/Workflow status into a retrospect file.
-- Keep future product ideas in `<repo-root>/.wt/planning/ideas/`; promote a
-  retrospect action candidate into an idea or task only when the pattern is
-  clear enough to act on.
-- Prefer one closed work item or blocked gate lesson per file. If one run
-  produced unrelated lessons, keep the spec-backed work item lesson in
-  `04-Feedback/10-retrospect.md` and promote cross-work lessons to
-  `<repo-root>/.wt/planning/retrospectives/` only when they are not owned by
-  a single spec.
-
-## Scope Choice
-
-Before writing, decide what "one work item" means for this cycle. A multi-PR
-sequence can be one item when the PRs share a single goal and the keep/problem
-lessons converge. Use the spec-local file when the lesson belongs to one
-`planning/specs/<slug>/`; split to the global retrospectives directory only when:
-
-- Different goals produced disjoint lessons (e.g. a profile cockpit decision
-  vs. a marker narrowing fix).
-- One lesson is about coordination and another is about substring traps in
-  code — readers benefit from being able to find them separately.
-
-When you split, cross-link the files in prose or with `related_retrospective`
-where the format supports it.
+- Future product ideas and open thinking belong outside wt (the `leaf-work`
+  workspace). Promote a retrospect action candidate into a leaf seed or a
+  TaskDocument only when the pattern is clear enough to act on.
+- Prefer one closed work item or blocked lesson per file. If one run produced
+  unrelated lessons, split into separate files and cross-link with
+  `related_retrospective` where the format supports it.
 
 ## Place and Name
 
-- Default path for spec-backed work:
-  `<repo-root>/.wt/planning/specs/<slug>/04-Feedback/10-retrospect.md`.
-- Cross-work/spec-less fallback path:
-  `<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml`.
+- Single home: `<repo-root>/.wt/execution/retrospectives/`.
+- Path: `YYYY-MM-DD-<slug>.md` (narrative) or `YYYY-MM-DD-<slug>.toml`
+  (structured). Choose TOML when metrics/action-candidate tables matter;
+  Markdown when the lesson is mostly prose.
 - Slug is the work item's canonical short name (branch, PR title topic, or the
   concept the lesson centers on). Avoid generic slugs like
   `2026-05-19-cleanup`.
 - One file per work item. Do not append a new retrospect to an existing file
   unless it is the same work item.
+- Write the file directly. The wt CLI does not scaffold retrospectives.
+- Legacy note: retrospectives previously lived under
+  `<repo-root>/.wt/planning/retrospectives/` and spec-local
+  `04-Feedback/10-retrospect.md` files. Treat those as historical reading
+  material; new files always go to `execution/retrospectives/`.
 
 ## Format
 
-For spec-backed work, use Markdown in `04-Feedback/10-retrospect.md` with these sections:
+Markdown shape:
 
 ```markdown
 # <title>
@@ -128,9 +115,8 @@ For spec-backed work, use Markdown in `04-Feedback/10-retrospect.md` with these 
 -
 ```
 
-For cross-work/spec-less retrospectives, use TOML under
-`<repo-root>/.wt/planning/retrospectives/`. Match the conventions in
-`<repo-root>/.wt/planning/retrospectives/README.md`. Required shape:
+TOML shape (match the conventions in
+`<repo-root>/.wt/execution/retrospectives/README.md` when present):
 
 ```toml
 title = "<concise title that names the work item>"
@@ -143,7 +129,7 @@ skills = ["wt-lifecycle", "wt-ready", ...]   # skills actually used in this loop
 tags = ["..."]                          # searchable topic tags
 
 # Optional when split into multiple files
-related_retrospective = "<repo-root>/.wt/planning/retrospectives/<other-file>.toml"
+related_retrospective = "<repo-root>/.wt/execution/retrospectives/<other-file>.toml"
 
 [context]
 goal = """..."""
@@ -169,7 +155,7 @@ next_adjustment = ""
 [evidence]
 key_observations = ["..."]       # concrete facts established during the loop
 commands_that_proved_things = ["..."]
-experiments = ["<repo-root>/.wt/planning/specs/<slug>/04-Feedback/09-review.md"]
+experiments = ["<path to prep/review notes the loop actually used, when any>"]
 prs = ["#<n>", ...]              # optional
 
 [keep]
@@ -191,7 +177,7 @@ items = [
 summary = "<one-line action this retrospective recommends>"
 owner = "<wt | wt-lifecycle | wt-ready | wt-work | wt-land | coordinator | <user>>"
 status = "candidate"               # or "addressed" / "promoted"
-promote_to = "<repo-root>/.wt/planning/ideas/"      # or a specific path when known
+promote_to = "<a TaskDocument path, or the leaf workspace, when known>"
 done_when = "<observable criterion that closes this candidate>"
 
 [[harness_tuning]]
@@ -212,9 +198,8 @@ Read enough local evidence to avoid inventing timing:
 
 - TaskDocument `계획 (Planning)` for expected duration, estimate basis, size
   class, execution shape, and acceptance checks
-- `03-Architect/08-execution.md` for launch shape and risks
-- `04-Feedback/09-review.md` for review findings, mid-process discoveries, and coordinator
-  observations
+- the work item's prep/review notes when they exist (a leaf workspace, or a
+  legacy spec folder for older in-flight work)
 - TaskRun, workflow row, branch, worktree, and agent ids from `wt inspect`
 - inbox reports and message ids used during coordination
 - git commit range and first/last commit timestamps when useful
@@ -228,10 +213,10 @@ when `wt agent watch` emits a heartbeat or timeout sample. If no watch sample
 exists, write that explicitly instead of backfilling from memory.
 
 Separate launch validation from stuck detection. A short post-launch poll such
-as a 45-second status/watch check proves that the run started; it does not prove
-the agent is stuck when the task estimate is much larger. For a 2h conservative
-planning guess, use longer steady cadence such as 10-15 minute heartbeat unless
-there is concrete stalled evidence.
+as a 45-second status/watch check proves that the run started; it does not
+prove the agent is stuck when the task estimate is much larger. For a 2h
+conservative planning guess, use longer steady cadence such as 10-15 minute
+heartbeat unless there is concrete stalled evidence.
 
 ## Rolling Timing Baseline
 
@@ -239,12 +224,12 @@ After each task timing entry, update the cross-work timing baseline when the
 result teaches anything about future estimates or watch cadence:
 
 ```bash
-<repo-root>/.wt/planning/retrospectives/timing.md
+<repo-root>/.wt/execution/retrospectives/timing.md
 ```
 
 This file is a rolling calibration note, not a replacement for per-work
-`04-Feedback/10-retrospect.md`. Keep it small enough for `wt-ready` and `wt-work` to
-read quickly. Recommended columns:
+retrospect files. Keep it small enough for `wt-ready` and `wt-work` to read
+quickly. Recommended columns:
 
 ```text
 | date | slug/task | type | size | agent/profile | expected | actual | first signal | watch cadence | result | next adjustment |
@@ -259,9 +244,9 @@ read quickly. Recommended columns:
   problems are out of scope or already addressed elsewhere.
 - Make `try` items adoptable. If the change belongs in a skill body, say so;
   if it belongs in `wt` code, say so; if it is a coordinator habit, say so.
-- For `outcome = "blocked"`, name the missing gate using the LEAF
-  vocabulary. Keep active execution details in TaskRun/Workflow state; the
-  retrospective should explain what should change next time.
+- For `outcome = "blocked"`, name the missing lifecycle step. Keep active
+  execution details in TaskRun/Workflow state; the retrospective should
+  explain what should change next time.
 - Use `action_candidates` for items that should turn into work later. Each
   candidate gets a `done_when` so the future coordinator can recognize when
   the candidate is satisfied.
@@ -279,8 +264,8 @@ such that the agent never makes that mistake again.
 
 - Distinguish lesson from harness change. Not every lesson needs one — some
   lessons are situational ("the user preferred X this time") and need no
-  permanent rule. When a lesson DOES warrant a permanent change, the retrospect
-  must name the exact target.
+  permanent rule. When a lesson DOES warrant a permanent change, the
+  retrospect must name the exact target.
 - Name the exact file AND the section, heading, anchor, or line range inside
   it. "Update CLAUDE.md somewhere" is not enough; "Add a bullet under
   `CLAUDE.md` > `## 문제 해결 원칙` after item 5" is.
@@ -297,48 +282,33 @@ Target files commonly include, but are not limited to:
 - Steering files such as `.kiro/steering/*` and equivalents in other dotfile
   setups.
 - Workflow rules and config: `.wt.toml`, `<repo-root>/.wt/config/local.toml`.
-- SKILL.md bodies under `~/.agents/skills/wt-*/SKILL.md`, especially
-  `wt-land/SKILL.md` when the lesson changes closeout behavior.
+- SKILL.md bodies under `<wt-repo>/skills/wt-*/SKILL.md` (installed views are
+  symlinks), especially `wt-land/SKILL.md` when the lesson changes closeout
+  behavior.
 - Profile prompts under `<repo-root>/.wt/config/profiles/<name>/prompts/`.
-
-When the finished work item had specs,
-`<repo-root>/.wt/planning/specs/<slug>/` may contain numbered LEAF
-files from `wt-ready`. Cite them in `evidence` or in the `rationale` of a
-`[[harness_tuning]]` entry when the lesson points at the spec template itself
-(e.g. "the EARS statement in 02-Example/03-criteria.md proved ambiguous; tighten
-the wt-ready template").
 
 ## Process
 
 1. Classify the retrospect:
    - Closed: confirm the work item is landed or explicitly discarded. If the
-     branch is still active and can continue normally, stop and let the matching
-     lifecycle skill finish first.
+     branch is still active and can continue normally, stop and let the
+     matching lifecycle skill finish first.
    - Blocked lesson: confirm the `wt-lifecycle` loop is stopped at a named
-     LEAF gate and the blocker is a reusable lesson. Do not write one
-     for ordinary waiting, active agent work, or a routine review round.
+     step and the blocker is a reusable lesson. Do not write one for ordinary
+     waiting, active agent work, or a routine review round.
 2. Decide scope: one file or split + cross-link.
 3. For `outcome = "blocked"`, set `kind = "blocked-gate"` unless a more
    specific kind is still useful, and fill `context.blocked_gate` with the
-   LEAF gate name.
-4. Diagnose Unknown surfacing misses, if the spec has them:
-   - If `<repo-root>/.wt/planning/specs/<slug>/04-Feedback/09-review.md` has a
-     `## Mid-process discoveries` section, read it. Each entry is a research
-     step that happened mid-work instead of at the Unknown surfacing gate.
-   - Classify each discovery against the four surfacing categories: `domain`,
-     `standards`, `external`, `internal`.
-   - The category(ies) that recur are the ones the next run's surfacing pass
-     should explicitly cover. Record this either as a `try` item ("add X
-     category to the surfacing checklist for this kind of work") or, when
-     the lesson belongs in a skill body, as a `[[harness_tuning]]` entry
-     pointing at the relevant SKILL.md section.
-5. Draft `04-Feedback/10-retrospect.md` under the spec for spec-backed work. Draft TOML
-   directly under
-   `<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` only for
-   cross-work/spec-less retrospectives. Skip optional sections that have no
-   content.
-6. Cross-check against `<repo-root>/.wt/planning/retrospectives/README.md`
-   only for global TOML retrospectives when conventions are uncertain.
+   blocked step name.
+4. Diagnose unknown-surfacing misses when prep/review notes recorded
+   mid-process discoveries: classify each against `domain`, `standards`,
+   `external`, `internal`. The recurring category is what the next run's
+   preparation should explicitly cover — record it as a `try` item or a
+   `[[harness_tuning]]` entry pointing at the relevant SKILL.md section.
+5. Draft the file under `<repo-root>/.wt/execution/retrospectives/`. Skip
+   optional sections that have no content.
+6. Cross-check `<repo-root>/.wt/execution/retrospectives/README.md` when TOML
+   conventions are uncertain.
 7. Re-read for adoptability: each `try` item should be something a future
    coordinator can actually do; each `action_candidate` should have a
    recognizable `done_when`.
@@ -356,6 +326,6 @@ After writing, report:
 - The created file path(s).
 - A short list of the most adoptable `try` items.
 - The highest-leverage `action_candidate` if any, and whether it should be
-  promoted to `<repo-root>/.wt/planning/ideas/` or a TaskDocument next.
+  promoted to a TaskDocument or to the leaf workspace next.
 - Any `[[harness_tuning]]` entries, each with the target file and section, so
   the user can decide whether to apply them now.

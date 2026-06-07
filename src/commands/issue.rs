@@ -13,7 +13,7 @@ use crate::parallel::{self, ParallelControl};
 use crate::services::git::{CreateType, GitService};
 use crate::services::issues::github::GithubIssueProvider;
 use crate::services::issues::linear::LinearIssueProvider;
-use crate::services::issues::{IssueInfo, IssueProvider};
+use crate::services::issues::{IssueCapabilities, IssueInfo, IssueProvider, IssueProviderFacade};
 use crate::setup;
 use crate::worktree_naming::{self, WorktreeNamingResult};
 use anyhow::{Context, Result, bail};
@@ -1215,6 +1215,13 @@ pub fn build_provider<'a>(ctx: &'a Ctx) -> Result<Box<dyn IssueProvider + 'a>> {
     }
 }
 
+pub fn build_provider_facade<'a>(ctx: &'a Ctx) -> Result<IssueProviderFacade<'a>> {
+    Ok(IssueProviderFacade::new(
+        build_provider(ctx)?,
+        IssueCapabilities::provider_default(),
+    ))
+}
+
 fn create_worktree(
     ctx: &Ctx,
     git: &GitService,
@@ -1319,6 +1326,7 @@ mod tests {
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
                 gh_user: None,
+                origin_policy: Default::default(),
             }),
             ..Config::default()
         }
@@ -1329,6 +1337,7 @@ mod tests {
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Github,
                 gh_user: None,
+                origin_policy: Default::default(),
             }),
             ..Config::default()
         }

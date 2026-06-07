@@ -1,7 +1,8 @@
 use crate::context::CmdOutput;
 use crate::context::CommandRunner;
 use crate::services::issues::{
-    CreateIssueRequest, EnsuredBranch, IssueInfo, IssueListItem, IssueProvider,
+    CreateIssueRequest, EnsuredBranch, IssueComment, IssueCommenter, IssueDetail, IssueFieldUpdate,
+    IssueInfo, IssueListItem, IssueProvider, IssueReader, IssueUpdater,
 };
 use anyhow::{Result, bail};
 use serde::Deserialize;
@@ -185,6 +186,70 @@ impl IssueProvider for GithubIssueProvider<'_> {
     }
 }
 
+impl IssueReader for GithubIssueProvider<'_> {
+    fn get_issue_detail(&self, id: &str) -> Result<IssueDetail> {
+        let out = self.runner.run(
+            "gh",
+            &["issue", "view", id, "--json", "number,title,body,url"],
+            self.cwd,
+        )?;
+        if !out.success {
+            bail!("Failed to fetch issue #{id}");
+        }
+        let gh_issue: GhIssue = serde_json::from_str(&out.stdout)?;
+
+        Ok(IssueDetail {
+            identifier: format!("#{}", gh_issue.number),
+            title: gh_issue.title,
+            body: gh_issue.body.filter(|body| !body.trim().is_empty()),
+            url: gh_issue.url,
+            status: None,
+            labels: Vec::new(),
+            comments_count: None,
+            updated_at: None,
+        })
+    }
+}
+
+impl IssueUpdater for GithubIssueProvider<'_> {
+    fn update_issue_fields(&self, id: &str, update: IssueFieldUpdate) -> Result<IssueDetail> {
+        let mut args = vec!["issue", "edit", id];
+        if let Some(title) = update.title.as_deref() {
+            args.extend_from_slice(&["--title", title]);
+        }
+        if let Some(body) = update.body.as_deref() {
+            args.extend_from_slice(&["--body", body]);
+        }
+        let out = self.runner.run("gh", &args, self.cwd)?;
+        if !out.success {
+            bail!(
+                "GitHub issue update failed: {}",
+                command_failure_detail(&out)
+            );
+        }
+        self.get_issue_detail(id)
+    }
+}
+
+impl IssueCommenter for GithubIssueProvider<'_> {
+    fn create_comment(&self, id: &str, body: &str) -> Result<IssueComment> {
+        let out = self
+            .runner
+            .run("gh", &["issue", "comment", id, "--body", body], self.cwd)?;
+        if !out.success {
+            bail!(
+                "GitHub issue comment creation failed: {}",
+                command_failure_detail(&out)
+            );
+        }
+        Ok(IssueComment {
+            id: out.stdout.trim().to_string(),
+            body: body.to_string(),
+            created_at: None,
+        })
+    }
+}
+
 fn parse_linked_branch(stdout: &str) -> Option<String> {
     stdout.lines().find_map(|line| {
         let branch = line.split('\t').next()?.trim();
@@ -320,6 +385,92 @@ mod tests {
     }
 
     #[test]
+    fn get_issue_detail_preserves_url() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"number":52,"title":"Fix editor","body":"Long issue body","url":"https://github.com/acme/repo/issues/52"}"#,
+            true,
+        );
+
+        let provider = GithubIssueProvider::new(&runner, None, None);
+        let detail = provider.get_issue_detail("52").unwrap();
+
+        assert_eq!(detail.identifier, "#52");
+        assert_eq!(detail.title, "Fix editor");
+        assert_eq!(
+            detail.url.as_deref(),
+            Some("https://github.com/acme/repo/issues/52")
+        );
+        assert_eq!(detail.body.as_deref(), Some("Long issue body"));
+    }
+
+    #[test]
+    fn create_comment_delegates_to_gh_issue_comment() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            "https://github.com/acme/repo/issues/52#issuecomment-10",
+            true,
+        );
+
+        let provider = GithubIssueProvider::new(&runner, None, None);
+        let comment = provider
+            .create_comment("52", "Workflow origin status")
+            .unwrap();
+
+        assert_eq!(
+            comment.id,
+            "https://github.com/acme/repo/issues/52#issuecomment-10"
+        );
+        assert_eq!(comment.body, "Workflow origin status");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["issue", "comment", "52", "--body", "Workflow origin status"]
+        );
+    }
+
+    #[test]
+    fn update_issue_fields_edits_then_reads_detail() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        runner.add_response(
+            r#"{"number":52,"title":"Updated","body":"Updated body","url":"https://github.com/acme/repo/issues/52"}"#,
+            true,
+        );
+
+        let provider = GithubIssueProvider::new(&runner, None, None);
+        let detail = provider
+            .update_issue_fields(
+                "52",
+                IssueFieldUpdate {
+                    title: Some("Updated".into()),
+                    body: Some("Updated body".into()),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(detail.title, "Updated");
+        assert_eq!(detail.body.as_deref(), Some("Updated body"));
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "issue",
+                "edit",
+                "52",
+                "--title",
+                "Updated",
+                "--body",
+                "Updated body"
+            ]
+        );
+        assert_eq!(
+            calls[1].1,
+            vec!["issue", "view", "52", "--json", "number,title,body,url"]
+        );
+    }
+
+    #[test]
     fn list_issues_with_gh_user_filter() {
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -425,6 +576,66 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("did not return an issue URL")
+        );
+    }
+
+    #[test]
+    fn create_comment_delegates_to_gh_cli() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            "https://github.com/acme/widgets/issues/42#issuecomment-1",
+            true,
+        );
+        let provider = GithubIssueProvider::new(&runner, None, None);
+
+        let comment = IssueCommenter::create_comment(&provider, "42", "status note").unwrap();
+
+        assert_eq!(comment.body, "status note");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["issue", "comment", "42", "--body", "status note"]
+        );
+    }
+
+    #[test]
+    fn update_issue_fields_delegates_to_gh_cli_and_refreshes_detail() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        runner.add_response(
+            r#"{"number":42,"title":"New title","body":"New body"}"#,
+            true,
+        );
+        let provider = GithubIssueProvider::new(&runner, None, None);
+
+        let detail = IssueUpdater::update_issue_fields(
+            &provider,
+            "42",
+            IssueFieldUpdate {
+                title: Some("New title".into()),
+                body: Some("New body".into()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(detail.title, "New title");
+        assert_eq!(detail.body.as_deref(), Some("New body"));
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "issue",
+                "edit",
+                "42",
+                "--title",
+                "New title",
+                "--body",
+                "New body",
+            ]
+        );
+        assert_eq!(
+            calls[1].1,
+            vec!["issue", "view", "42", "--json", "number,title,body,url"]
         );
     }
 

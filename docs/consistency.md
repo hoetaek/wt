@@ -48,13 +48,13 @@ Config precedence는 다음 순서다.
 global < team integration < personal < command-line flags
 ```
 
-`wt config`는 effective behavior를 판단하는 source of truth이며, 가능한 한 어떤 scope에서
+`wt config show`는 effective behavior를 판단하는 source of truth이며, 가능한 한 어떤 scope에서
 어떤 값이 왔는지 보여줘야 한다.
 
 ### Personal Storage
 
 Personal storage의 canonical root는 `<repo-root>/.wt/`다. 이 결정의 source는
-`<repo-root>/.wt/planning/specs/personal-storage-repo-root/`이며, 목적은 세 가지다.
+historical `<repo-root>/.wt/planning/specs/personal-storage-repo-root/`이며, 목적은 세 가지다.
 
 - `.git/` namespace는 Git 자신의 metadata 자리로 비워 둔다.
 - `.wt/...`는 `.git/wt/...`보다 짧고 사용자가 직접 열어 보기 쉽다.
@@ -75,45 +75,6 @@ Canonical personal storage layout:
 ├── config/
 │   ├── local.toml
 │   └── profiles/
-├── planning/
-│   ├── ideas/
-│   │   └── <slug>/                   # exploratory LEAF prep; kill-able
-│   │       ├── 00-status.md
-│   │       ├── 01-Learn/
-│   │       │   ├── 01-intent.md
-│   │       │   ├── 02-unknowns.md
-│   │       │   └── 02-references/
-│   │       ├── 02-Example/
-│   │       │   ├── 03-criteria.md
-│   │       │   └── 04-wireframe.md
-│   │       ├── 03-Architect/
-│   │       │   ├── 05-design.md
-│   │       │   ├── 06-critic.md
-│   │       │   ├── 07-tasks.md
-│   │       │   └── 08-execution.md
-│   │       └── 04-Feedback/
-│   │           ├── 09-review.md
-│   │           └── 10-retrospect.md
-│   ├── specs/
-│   │   └── <slug>/                   # executable-work baseline LEAF prep
-│   │       ├── 00-status.md
-│   │       ├── 01-Learn/
-│   │       │   ├── 01-intent.md
-│   │       │   ├── 02-unknowns.md
-│   │       │   └── 02-references/      # template, always scaffolded; holds bulky source material
-│   │       ├── 02-Example/
-│   │       │   ├── 03-criteria.md
-│   │       │   └── 04-wireframe.md
-│   │       ├── 03-Architect/
-│   │       │   ├── 05-design.md
-│   │       │   ├── 06-critic.md      # lazy, when critic triggers fire
-│   │       │   ├── 07-tasks.md
-│   │       │   └── 08-execution.md    # lazy, when launch handoff exists
-│   │       └── 04-Feedback/
-│   │           ├── 09-review.md       # lazy, when review/sync evidence exists
-│   │           └── 10-retrospect.md   # lazy, for spec-backed work retrospectives
-│   └── retrospectives/
-│       └── <slug>.md         # cross-work/spec-less retrospectives only
 ├── execution/
 │   ├── tasks/
 │   │   └── <task>.toml
@@ -121,8 +82,10 @@ Canonical personal storage layout:
 │   │   └── <id>.toml
 │   ├── task-runs/
 │   │   └── <id>.toml
-│   └── archive/
-│       └── workflows/<id>/
+│   ├── archive/
+│   │   └── workflows/<id>/
+│   └── retrospectives/
+│       └── <slug>.md
 └── runtime/
     ├── agents/
     │   └── <name>/
@@ -144,12 +107,11 @@ Repo-root `.local` state and legacy `.git/wt/` state are not canonical. 새 코�
 위 layout의 `<repo-root>/.wt/...` 경로를 primary state로 읽고 쓴다. 이전 storage를 다뤄야
 하면 명시적 import/repair 명령으로 다루고, silent fallback이나 alias처럼 동작시키지 않는다.
 
-The four top-level buckets are the canonical personal-state owners:
+The three top-level buckets are the canonical personal-state owners:
 
 - `config/` owns personal config and profile inputs that shape later behavior.
-- `planning/` owns prep and learning artifacts: ideas, specs, and retrospectives.
-- `execution/` owns launch and run artifacts: TaskDocuments, Workflows, TaskRuns,
-  and archive.
+- `execution/` owns launch, run, archival, and learning artifacts: TaskDocuments,
+  Workflows, TaskRuns, archive, and retrospectives.
 - `runtime/` owns local agent identity and agent-owned runtime state: inbox,
   activity/status snapshots, identity anchors, supervisor state, and runtime
   observation.
@@ -164,7 +126,7 @@ canonical state owners in this model. They may appear only as legacy/migration
 context until implementation paths are moved. New docs, new state owners, and
 normal code must not read from or write to them as canonical paths or equivalent
 aliases. Migration, import, or repair code that still touches a legacy root must
-transform the data into one of the four canonical buckets, record the canonical
+transform the data into one of the three canonical buckets, record the canonical
 result, and leave later code paths on bucket readers.
 
 Legacy `agent.state/` wait observations and `sessions/` identity anchors are runtime
@@ -174,211 +136,55 @@ them as canonical state. The canonical replacements are
 `runtime/agents/<name>/observations/wait-observations.jsonl` and
 `runtime/agents/<name>/anchors/<encoded-anchor-key>.toml`.
 
-### Idea And Spec Prep
+### Work Preparation Boundary
 
-LEAF 구조는 사고 절차이고, Idea/Spec 위치는 commit level이다. Idea와 Spec은 같은 numbered
-LEAF layout을 쓴다. 차이는 파일 모양이 아니라 사용자가 그 일을 실행 가능한 작업으로
-취급하기로 commit했는지다.
+준비/사고 산출물은 wt 밖의 일이다. wt는 실행 가능한 TaskDocument와 Workflow에서 시작한다.
 
-Idea는 kill-able exploration이다. `wt-ready`는 사용자가 아직 실행 가능한 작업으로 취급하겠다고
-commit하지 않은 탐색을 `<repo-root>/.wt/planning/ideas/<slug>/`에 쓴다. Idea 안에서도 계획,
-criteria, wireframe, design, task graph 후보를 얼마든지 작성할 수 있다. 하지만 Idea는
-committed-work status가 없고, downstream consumer가 의존하지 않으며, 언제든 삭제하거나 다시 쓸 수
-있다. Idea 삭제나 재작성은 다른 component가 관찰해야 하는 state transition이 아니다.
+TaskDocument는 `<repo-root>/.wt/execution/tasks/<slug>.toml`에 있는 launch unit이다. Body는
+외부 경로(예: `.leaf/...` 또는 historical spec path)를 human context로 언급할 수 있고, `wt`는
+그 경로를 해석하거나 짝이 되는 prep artifact를 만들지 않는다. TaskDocument schema는 title,
+branch, body, optional origin을 유지하며, 별도 prep artifact가 없어도 valid local task다.
 
-Spec은 실행 가능한 작업으로 취급하기로 commit한 LEAF prep artifact다. `wt-ready`가 idea를 받고
-사용자가 실행 가능한 작업으로 취급하겠다고 commit하면 idea는 spec으로 promotion된다. Promotion은
-`planning/ideas/<slug>/` directory를 `planning/specs/<slug>/`로 옮기는 동작이다. 이 directory
-location change가 visible commit gate다. `wt` state tree를 읽는 사람은
-`planning/ideas/<slug>/` 아래의 exploration과 `planning/specs/<slug>/` 아래의 executable-work
-baseline을 directory 위치만으로 구분할 수 있어야 한다. Flat `planning/ideas/<slug>.{md,toml}`은
-legacy/migration-only artifact이며 새 scaffold나 새 docs가 만들지 않는다.
+`wt scaffold`가 만드는 task/workflow template의 사람이 읽는 제목과 section heading은 한국어를
+기본으로 한다. TOML field name(`title`, `branch`, `mode` 등)은 schema contract이므로 영어로
+유지하지만, 값과 body template은 한국어로 읽히게 한다.
 
-TaskDocument는 계속 `<repo-root>/.wt/execution/tasks/<slug>.toml`에 있는 launch unit이다. 그
-body는 `planning/specs/<slug>/` relative path를 참조할 수 있지만 TaskDocument schema는 바뀌지
-않는다. Spec은 intent, unknowns & context, criteria, wireframe, design, tasks, execution handoff,
-review/sync, retrospect를 담는 긴 human/AI artifact이고, TaskDocument는 `wt run task`와
-`wt workflow`가 소비하는 실행 단위다. Spec 없이 TaskDocument TOML만 있는 pre-redesign task도
-valid local task로 남는다.
+`wt scaffold --task`가 만드는 TaskDocument body의 `계획 (Planning)` section은 agent에게 맡길
+작업의 deterministic launch contract다. 새로 준비되는 TaskDocument는 최소한 expected duration,
+estimate basis, suggested watch cadence, blocked by/dependency, execution shape, size class,
+acceptance checks를 적는다. Provider issue import처럼 외부 본문을 그대로 보존하는 TaskDocument는
+이 section이 없을 수 있으므로 CLI는 단순 TOML read 중에 launch body를 자동 생성하거나 provider
+body를 덮어쓰지 않는다.
 
-Idea/Spec 내부의 canonical layout은 LEAF phase folder다. `planning/ideas/<slug>/`와
-`planning/specs/<slug>/` bucket은 wt의 personal-state ownership을 유지하고, 그 안에서
-`01-Learn/`, `02-Example/`, `03-Architect/`, `04-Feedback/`이 사고 과정의 phase를 표현한다.
-일반 leaf-work는 여러 artifact를 담기 위해 `05-design-<artifact>.md`,
-`08-execution-<artifact>.md`, `09-review-<artifact>-vN.md`, `10-retrospect-<topic>.md` 같은
-suffix를 권장하지만, wt idea/spec은 slug 하나가 하나의 work item을 소유하므로 canonical file은
-`05-design.md`, `06-critic.md`, `08-execution.md`, `09-review.md`, `10-retrospect.md`처럼
-deterministic하게 둔다.
-`06-critic.md`는 critic trigger가 실제로 발동할 때만 만드는 lazy artifact이고, skip/low-risk
-판단은 `05-design.md`에 기록한다.
+### Retrospectives
 
-`wt scaffold`가 만드는 idea/spec/task/workflow/retrospect template의 사람이 읽는 제목과
-section heading은 한국어를 기본으로 한다. TOML field name(`title`, `branch`, `mode` 등)은
-schema contract이므로 영어로 유지하지만, 값과 body template은 한국어로 읽히게 한다.
+Cross-work 회고와 timing baseline은 `<repo-root>/.wt/execution/retrospectives/`에 둔다.
+이 directory는 여러 work item을 가로지르는 학습 기록, spec-less/direct work, 또는 의도적으로
+한 실행 단위에 묶이지 않는 rolling timing correction을 담는다.
 
-LEAF prep은 scaffold가 첫 동작이다. `wt scaffold <slug> --idea`와
-`wt scaffold <slug> --spec`은 각각 `planning/ideas/<slug>/` 또는 `planning/specs/<slug>/`에
-`00-status.md`와 `01-Learn/`, `02-Example/`, `03-Architect/`, `04-Feedback/` 네 phase directory를
-보장한 뒤 gate file을 채운다. 너무 작아서 이 body가 필요 없는 작업은 LEAF idea/spec prep으로
-승격하지 않는다.
+회고 파일은 도구가 자동 생성하는 산출물이 아니다. 코디네이터나 스킬이 관찰한 expected duration,
+estimate basis, 실제 시작/종료/elapsed, 최초 meaningful signal, 사용한 `wt agent watch` cadence,
+`needs_input`/report 전이, 개입 이유, 다음 추정 조정 같은 내용을 직접 기록한다.
+`runtime/agents/<name>/observations/wait-observations.jsonl`과 `wt agent wait-stats`는 watch
+heartbeat/timeout 관측 증거로 인용할 수 있으나, 실제 작업 소요시간의 canonical source로 보지
+않는다.
 
-`00-status.md`는 idea/spec을 재개 가능하게 하는 dashboard다. 현재 phase/gate,
-첫 미충족 gate, 다음 액션, 최근 return, return 횟수, gate별 progress를 적는다. progress 값은
-`0`, `25`, `50`, `75`, `100`, state 값은 `not-started`, `active`, `needs-approval`, `approved`를
-쓰고 return은 별도 gate state가 아니라 Return Log event로 기록한다. 이 파일은 index이지 source of
-truth가 아니다 — gate file이 authoritative하다.
+### Legacy Migration
 
-`01-Learn/01-intent.md`는 raw user wording, interpreted intent, and commitment note를 preserve한다.
-이 파일은 later agent가 "사용자가 실제로 무엇을 요청했는지"와 "coordinator가 어떻게 해석했는지"를
-구분할 수 있게 해야 한다.
-Intent는 core noun과 topology도 기록할 수 있다. Core noun은 사용자가 실제로 바꾸려는 대상
-(`idea`, `spec`, `task`, `workflow`, command, UI 등)이고, topology는 독립적으로 성공/실패할 수
-있는 top-level outcome, surface, integration, deliverable 목록이다. Deferred topology item은
-삭제하지 않고 왜 이번 prep에서 제외했는지 적는다.
+이전 위치 `<repo-root>/.wt/planning/retrospectives`는 legacy다. `wt doctor`가 감지해
+경고하며, `wt`는 자동 이동하지 않는다. 사용자는 파일을 `<repo-root>/.wt/execution/retrospectives`
+로 명시적으로 옮기고, 남은 참조도 같은 canonical execution path로 고쳐 repair한다.
 
-`01-Learn/02-unknowns.md`는 domain concepts, standards/conventions, external facts,
-internal facts를 구분하고 각 항목을 `blocking now` 또는 `useful later`로 표시한다. Evidence
-gathering은 이 unknown list를 agenda로 삼는다. Clarity ledger는 gate마다 역할이 다르다.
-Gate 1은 desired effect와 core noun으로 Intent row를 잠그고, Gate 2는 ledger를 learning lens로만
-써서 가장 약한 row를 판단할 수 있게 해 줄 domain / standards-conventions / external / internal
-unknown 또는 inventory를 겨냥한다. Gate 2에서 row를 억지로 닫지 않는다. Gate 3은 intent,
-topology, success, constraints, output form 전체를 score하고, purpose / requirements /
-principles / acceptance checks / explicit assumptions-or-risks로 잠근다.
-
-Gate 2는 unknown surfacing과 context/reference 탐색을 하나의 gate로 합친다. 같은
-`02-unknowns.md`에 verified facts, inventoried user/team material, flagged assumptions,
-references/options/tradeoffs를 함께 적어 각 unknown 항목 옆에서 답을 채운다. 이 파일은 결정문이
-아니라 downstream gates가 의존할 수 있는 fact inventory다. 분량이 큰 원본은 항상 seed되는
-`01-Learn/02-references/`(README 템플릿 포함)로 빼고 요약만 `02-unknowns.md`에 남긴다. 폴더가
-항상 존재하므로 보유 자료를 둘 자리는 빈 게이트에서도 보이며, `02-unknowns.md` 파일명이 unknown만
-받는다는 인상을 슬롯의 존재로 상쇄한다.
-
-LEAF의 middle gates는 produce/consume engine이다. Gate 3 Criteria는 답이 존재하기 전에 의도한
-효과와 관찰 가능한 기준을 적는 arbiter이자 test이고 `03-criteria.md`에 둔다. Gate 4 Wireframe은
-criteria가 통과해야 하는 concrete instance와 contract이므로, 의미 있는 mock data, placeholder,
-variation point, structure decision이 있으면 `04-wireframe.md` 또는 `04-wireframe/`로 분리한다.
-Gate 5 Design은 그 contract를 consume해서 empty/overflow/edge/timing/failure를 포함한 전체
-variation range로 일반화하는 generator다. 세 파일(`03-criteria.md`, `04-wireframe.md`,
-`05-design.md`)은 합치지 않는다.
-
-`wt scaffold <slug> --idea`와 `wt scaffold <slug> --spec`은 새 idea/spec에 phase folders를 seed한다:
-`00-status.md`, `01-Learn/01-intent.md`, `01-Learn/02-unknowns.md`,
-`01-Learn/02-references/README.md`, `02-Example/03-criteria.md`,
-`02-Example/04-wireframe.md`, `03-Architect/05-design.md`,
-`03-Architect/07-tasks.md`. `02-references/`는 더 이상 lazy가 아니라 항상 README
-템플릿과 함께 seed되는 보관 슬롯이다. lazy artifact인
-`03-Architect/08-execution.md`, `04-Feedback/09-review.md`, `04-Feedback/10-retrospect.md`는
-seed하지 않고 handoff/review/retrospect 시점에 만든다. 이전 numbering(`03-context.md`,
-`04+05-requirements.md`, `04+05+06-requirements.md`, `06-wireframe.md`, `07-design.md`,
-`08-tasks.md`, `09-execution.md`, `10-review.md`, `11-retrospect.md`)과 이전 wt 9-gate
-파일(`03-Architect/06-tasks.md`, `03-Architect/07-execution.md`,
-`04-Feedback/08-review.md`, `04-Feedback/09-retrospect.md`)은 pre-10-gate
-legacy/starter artifact로만 취급한다. 새 idea/spec이나 새 docs는 그 이름을 만들지 않고, scaffold는
-그런 파일이 남아 있으면 ten-gate 파일을 만들기 전에 정리하도록 거부한다.
-
-`planning/specs/<slug>/02-Example/03-criteria.md`는 purpose/success criteria,
-requirements/principles, output form을 담는다. 첫 줄은 한국어 사용자 스토리 line으로 시작한다.
-
-```text
-사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.
-```
-
-Functional requirement section heading은 한국어로 두되, requirement 문장은 EARS statement를
-유지한다.
-
-```text
-WHEN <조건> THE SYSTEM SHALL <관찰 가능한 동작>
-GIVEN <전제> WHEN <트리거> THE SYSTEM SHALL <응답>
-```
-
-`03-criteria.md`는 목적 / 성공 기준, 원칙 / 제약, 출력 형태, 기능 요구사항(EARS),
-비기능 요구사항, 회귀 보존 section을 둔다. 비기능 요구사항은 성능, 보안, 호환성, 또는 해당
-작업에 적용되는 cross-cutting constraint를 명시적으로 이름 붙인다. Regression-sensitive work는
-preserved behavior를 다음 형태로 적는다.
-
-```text
-WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>
-```
-
-`planning/specs/<slug>/02-Example/04-wireframe.md` 또는 `02-Example/04-wireframe/`는 Gate
-4의 concrete instance와 contract를 담는다. 먼저 requirements를 pages, flows, states,
-commands, document sections 같은 실제 나타날 bucket으로 묶고, text-first wireframe을 만든다:
-ASCII layout, command transcript, sequence sketch, table/state matrix, 또는 placeholder
-evidence가 있는 outline. 각 placeholder나 mock value는 어떤 contract를 instantiates하는지,
-무엇이 어떤 axis/range 안에서 변할 수 있는지 기록한다. User/operator walkthrough가 통과하기
-전에는 `03-Architect/05-design.md`가 구조를 일반화하면 안 된다.
-
-`planning/specs/<slug>/03-Architect/05-design.md`는 결정사항, 영향받는 컴포넌트, 제약을 적는다.
-Gate 5 design은 Gate 4 contract와 variation points를 input으로 consume하고, concrete instance를
-모든 valid instance를 생성할 수 있는 reusable generator로 일반화한다. Empty, overflow, edge,
-timing, failure case처럼 단일 mock instance가 보여주지 못한 variation range를 다룬다. Design이
-artifact shape, schema, placeholder meaning을 새로 발명해야 한다면 Gate 4로 돌아간다.
-Gate 5는 principles, decision drivers, viable options, steelman antithesis를 durable rationale로
-남긴다. Brownfield work에서는 새 design 전에 Static Model section(Purpose, Components, Business
-Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw code dump가 아니라
-intent와 component responsibility 중심으로 설명한다.
-
-`planning/specs/<slug>/03-Architect/06-critic.md`는 public CLI/config/state shape, migration,
-security, cross-module coupling, large UI/workflow behavior shift, weak alternatives처럼 critic trigger가
-발동할 때만 만든다. Verdict는 `APPROVE`, `ITERATE`, `REJECT` 중 하나이고, `ITERATE`/`REJECT`는
-Gate 7 tasking 전에 필요한 가장 작은 design revision을 적는다.
-
-`planning/specs/<slug>/03-Architect/07-tasks.md`는 작업 목록 section 아래에 sequenced
-atomic unit을 checkbox item으로 나열한다. 각 item은 dependency를 적고, dependency가 없는
-item은 parallel 가능하다고 표시할 수 있다.
-
-`planning/specs/<slug>/03-Architect/08-execution.md`는 `03-Architect/07-tasks.md`에서
-드러난 slice graph를 어떤 execution shape로 실행할지와 그 이유, `wt-work` target,
-TaskDocument path, optional saved Workflow TOML path, PR/landing policy, acceptance checks를
-prose로 기록하는 lazy prep/execution artifact다. 실제 handoff에는 file path, module/symbol,
-issue/task id, acceptance criteria, numbered implementation step, command/config transcript,
-representative example/mock data, named output artifact, or user-accepted residual risk 같은
-concrete execution signal이 있어야 한다. Saved execution plan은 계속
-`<repo-root>/.wt/execution/workflows/<id>.toml`에 있고, `03-Architect/08-execution.md`는
-executable Workflow TOML이 아니다.
-
-Canonical `07-tasks.md` slice graph → execution decision mapping:
-
-| 07-tasks.md slice graph | Execution decision |
-| --- | --- |
-| All sequential, single agent | `single` |
-| All independent, same base | `batch` |
-| Parent → child chain (each builds on previous branch) | `stack` |
-| One task × multiple profiles | `matrix` |
-| One direct slice only, or mixed-lifecycle slices | `none` (spec prep judgment; not persisted as Workflow mode) |
-
-`none`은 `<repo-root>/.wt/execution/workflows/<id>.toml`에 저장되는 Workflow `mode` 값이 아니라 spec
-prep 판단이다. 이 값은 direct `wt run task`로 충분하거나, slice들이 서로 다른 lifecycle에서
-실행되어 하나의 saved Workflow로 표현하면 오히려 모델이 흐려지는 경우를 뜻한다.
-
-Spec은 `wt-ready` exit 시점에 frozen되지 않는다. Execution 중 `wt-work` phase에서
-findings가 나오면 design, task list, execution shape rationale을 in place로 업데이트할 수
-있다. 선택한 mode가 더 이상 맞지 않거나 실제 Workflow TOML과 spec이 갈라지면
-`03-Architect/08-execution.md`를 rationale과 함께 업데이트한다. Review/check evidence, spec
-drift, and mid-process discoveries는 `planning/specs/<slug>/04-Feedback/09-review.md`에
-기록한다. Spec과 implementation이 drift하면 조용히 갈라지게 두지 말고 spec을 업데이트해
-다시 맞춘다.
-
-Spec-backed work의 retrospective는 기본적으로 `planning/specs/<slug>/04-Feedback/10-retrospect.md`에 둔다.
-`<repo-root>/.wt/planning/retrospectives/`는 여러 work item을 가로지르는 cross-work learning,
-spec이 없는 legacy/direct work, 또는 의도적으로 한 spec에 묶이지 않는 회고의 fallback이다.
-새 per-work retrospective를 전역 `retrospectives/` 아래에 만들지 않는다.
-
-`04-Feedback/10-retrospect.md`는 작업별 timing record를 포함한다. 최소한 TaskDocument의 expected
-duration, estimate basis, 실제 시작/종료/elapsed, 최초 meaningful signal, 사용한
-`wt agent watch` cadence, `needs_input`/report 전이, 개입 이유, 다음 추정 조정을 적는다.
-Spec-backed workflow는 workflow 전체 요약만 쓰지 말고 task/slice별 timing entry를 둔다.
-Cross-work timing 보정은 `<repo-root>/.wt/planning/retrospectives/timing.md` 같은 rolling
-retrospective에 축약할 수 있지만, 이것은 여러 작업을 가로지르는 학습 기록이지 per-work
-`04-Feedback/10-retrospect.md`의 대체물이 아니다. `runtime/agents/<name>/observations/wait-observations.jsonl`과
-`wt agent wait-stats`는 watch heartbeat/timeout 관측 증거로 인용할 수 있으나, 실제 작업
-소요시간의 canonical source로 보지 않는다.
+릴리즈 노트 문구: this is a 0.x.0 minor breaking change for
+legacy `<repo-root>/.wt/planning/retrospectives` users; run `wt doctor`, move the files to
+`<repo-root>/.wt/execution/retrospectives`, and repair any local references explicitly because
+`wt` does not auto-migrate that legacy directory.
 
 ### Worktree Facts And Agent Identity
 
 Worktree facts are not a canonical state owner. Git owns the checked-out
-worktree list; `wt` records branch/path/worktree facts only inside the planning,
-execution, or runtime record that needs them. New state must not create
+worktree list; `wt` records branch/path/worktree facts only inside the
+execution or runtime record that needs them. New state must not create
 `<repo-root>/.wt/worktrees/<id>/` as a fourth personal-state owner.
 
 When a record needs a stable worktree-ish identity, it separates opaque identity
@@ -940,7 +746,7 @@ Workflow file은 `title`, `body`, optional workflow-level `[origin]`, mode, base
 profile, color, timestamps, workflow-level policy, task/run link 같은
 prepared-plan context와 orchestration만 저장한다. `title`은 list/select/show 표면의
 짧은 display text이고, `body`는 큰 issue context, requirements, acceptance criteria,
-planning notes, decomposition rationale을 담는 긴 human context다. Workflow-level
+prep notes, decomposition rationale을 담는 긴 human context다. Workflow-level
 `[origin]`은 Workflow 자체가 provider issue에서 온 경우 durable provider link를
 저장한다. 이 origin은 larger issue-like unit의 출처이고, child TaskDocument의 provider
 origin처럼 실행 slice를 provider issue로 취급하게 만드는 값이 아니다. Workflow는 여전히
@@ -952,13 +758,14 @@ Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 �
 생략되면 `wt`가 내장 cmux named-color palette의 다음 색을 고르고 workflow file에
 기록한다. 색상은 mode나 task의 의미가 아니라 workflow-level 표시다.
 
-`wt config` 출력은 runtime behavior를 판단하는 effective source of truth다. `.wt.toml`,
-`<repo-root>/.wt/config/local.toml`, profile file은 사용자 intent와 override를 저장하고, `wt config`는
-merge된 layer, convention file, built-in default를 사용자가 복사해 수정할 수 있는 형태로
-보여준다. 명령 구현은 user-facing default를 각 call site에서 새로 해석하지 말고 config
-모델의 effective accessor나 effective policy snapshot을 거쳐 적용해야 한다.
-활성 section의 runtime default는 `wt config` 출력에 materialize한다. 예를 들어 active
-`[site]` provider는 name/root/secure/url과 Traefik target default까지 보여주고,
+`wt config show` 출력은 runtime behavior를 판단하는 effective source of truth다. `.wt.toml`,
+`<repo-root>/.wt/config/local.toml`, profile file은 사용자 intent와 override를 저장하고,
+`wt config show`는 merge된 layer, convention file, built-in default를 사용자가 복사해
+수정할 수 있는 형태로 보여준다. `config`는 `show/edit/extract/inline`의 action namespace이므로
+bare `wt config`에는 omission-default display action이 없다. 명령 구현은 user-facing default를
+각 call site에서 새로 해석하지 말고 config 모델의 effective accessor나 effective policy snapshot을
+거쳐 적용해야 한다. 활성 section의 runtime default는 `wt config show` 출력에 materialize한다.
+예를 들어 active `[site]` provider는 name/root/secure/url과 Traefik target default까지 보여주고,
 `[workspace.browser]`는 setup/open 때 browser를 띄울지와 어떤 URL을 열지 결정한다.
 `[workspace.browser.chrome_devtools]`는 `mode = "chrome_devtools"`일 때만 쓰는 Chrome
 DevTools launch detail(`port`, `user_data_dir`)을 소유한다. 이 detail은 browser mode의
@@ -1005,8 +812,9 @@ setup mode, profile 이름, workflow `mode = "single" | "batch" | "stack" | "mat
 Workflow run은 필요한 경우 TaskDocument setup을 거치더라도 최종 visible grouping color는
 저장된 `workflow.color`를 적용한다. `[workspace].colors` key를 생략하면 내장 기본값
 `task = "blue"`, `issue = "blue"`, `branch = "green"`, `pr = "magenta"`를 쓴다.
-`wt config`는 이 effective 색상값을 출력하므로 사용자가 수정할 기준은 `wt config` 출력이다.
-`wt init`은 generated config의 active `[workspace]`에 이 기본 `colors = { ... }` map을 명시한다.
+`wt config show`는 이 effective 색상값을 출력하므로 사용자가 수정할 기준은 `wt config show`
+출력이다. `wt init`은 generated config의 active `[workspace]`에 이 기본 `colors = { ... }` map을
+명시한다.
 기존 설정을 다시 init할 때는 기존 color override를 effective 값으로 보존한다. 색을 아예 쓰지 않을
 kind는 `task = ""`처럼 빈 문자열로 override한다.
 
@@ -1059,7 +867,7 @@ profile이 작업 묶음인지 다시 추론해야 한다. 이런 혼동은 기�
 
 ### Config Merge Semantics
 
-`wt config`는 `.wt.toml` (shared) → `<repo-root>/.wt/config/local.toml` (personal) →
+`wt config show`는 `.wt.toml` (shared) → `<repo-root>/.wt/config/local.toml` (personal) →
 named profile (`<repo-root>/.wt/config/profiles/<name>/`) 순서로 layer를 합쳐
 effective config을 만든다. 같은 코드 경로(`merge_config`)가 모든 layer에 적용되므로
 layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 방식이 다르고, 그 차이를
@@ -1077,6 +885,13 @@ layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 
 | `site`, `issues` (Option 섹션) | wholesale REPLACE if Some | 윗 layer가 `[site]`/`[issues]`를 가지면 아랫 layer의 같은 섹션이 통째로 사라진다. 한 필드만 바꾸려면 base의 모든 필드를 다시 적는다. |
 | `agent.{cli, args, command, ready, submit, timeout, send_after}` | per-field presence-based REPLACE | 윗 layer가 명시한 필드만 덮어쓴다. |
 | `agent.prompt[mode]` | REPLACE per mode unless `[agent.prompt.append].<mode>` | 같은 mode를 적으면 덮어쓴다. append-key form은 기존 prompt에 `\n\n`으로 이어붙인다. |
+
+`[issues].origin_policy`는 TaskDocument와 Workflow가 provider origin을 어떻게 다룰지에
+대한 canonical config intent다. 값은 `provider-preferred`, `provider-required`,
+`local-only`만 받으며, 생략하면 `provider-preferred`다. `provider-required`와
+`local-only`는 launch/preparation gate가 실제로 구현되기 전까지 reserved intent이며,
+그 전의 docs/help/output은 provider auth, provider API, offline failure가 unrelated local
+work를 막는다고 설명하면 안 된다.
 
 Named profile에는 profile.toml 외에 두 가지 convention이 더 있다.
 
@@ -1319,18 +1134,17 @@ Profile convention file은 `<repo-root>/.wt/config/profiles/<name>/prompts/workf
 저장되는 상태는 사용자가 이해할 수 있는 상태여야 한다.
 
 TaskDocument는 작업이 무엇인지를 담는 실행 정의다. `<repo-root>/.wt/execution/tasks/<task>.toml`
-아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다. Spec이
-있는 작업에서는 자세한 requirements/design/tasks prep artifact가
-`<repo-root>/.wt/planning/specs/<slug>/`에 병렬로 존재할 수 있고, TaskDocument body는 그 경로를
-가리키는 launch summary로 남는다.
+아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다. Body는
+외부 경로(예: `.leaf/...` 또는 historical spec path)를 human context로 언급할 수 있지만
+`wt`는 그 경로를 해석하지 않는다.
 
 `wt scaffold --task`가 만드는 TaskDocument body의 `계획 (Planning)` section은
 agent에게 맡길 작업의 deterministic launch contract다. 새로 준비되는 TaskDocument는 최소한
 expected duration, estimate basis, suggested watch cadence, blocked by/dependency,
 execution shape, size class, acceptance checks를 적는다. Provider issue import처럼 외부
 본문을 그대로 보존하는 TaskDocument는 이 section이 없을 수 있으므로 CLI는 단순 TOML read
-중에 planning body를 자동 생성하거나 provider body를 덮어쓰지 않는다. `wt-ready` /
-`wt-work` flow가 launch 전에 부족한 planning 정보를 채우는 소유자다.
+중에 launch body를 자동 생성하거나 provider body를 덮어쓰지 않는다. `wt-ready` /
+`wt-work` flow가 launch 전에 부족한 execution context를 채우는 소유자다.
 
 `wt task list`는 `<repo-root>/.wt/execution/tasks/<task>.toml`에 저장된 TaskDocument file 중
 actionable working set을 보여주는 canonical read-only list다. Bare `wt task list`는
@@ -1339,22 +1153,33 @@ actionable working set을 보여주는 canonical read-only list다. Bare `wt tas
 `running`인 TaskDocument는 숨긴다. 숨겨진 TaskDocument가 있으면 text output은 count와
 `wt task list --all` 안내를 보여주되 TaskDocument row를 dump하지 않는다. `wt task list --all`은
 full TaskDocument inventory mode이며 passed/running TaskDocument까지 포함한다. 두 mode 모두
-selector의 10-row visible cap을 적용하지 않는다. Text output은 selector와 같은 TaskDocument
-display order인 title, origin/publish state, task key, branch를 bounded column으로 나눠
-보여주고, `provider-origin`과 `local` source group 아래에 둔다. Inventory-only field인 source는
-group으로 표현하고, path, raw origin, 짧은 body summary는 text에서 반복하지 않고 JSON output에
-둔다. JSON output은 두 mode 모두 `{ "tasks": [...], "invalid_tasks": [...] }` top-level shape를
-유지하며, TaskDocument의 key, path, title, branch, origin/publish state, local-vs-provider-origin
-source, 짧은 body summary를 stable shape로 보여준다. Bare JSON은 actionable working set만
-담고, `--all --json`은 full inventory를 담는다.
+selector의 10-row visible cap을 적용하지 않는다. TTY에서 `--json`/`--quiet` 없이 실행되는
+`wt task list`는 단명 full-screen browser로 같은 TaskDocument rows와 origin health preview를
+보여준다. Browser의 initial render는 read-only이고, interactive action menu를 통한 변경은
+대응하는 `wt task origin diff|fetch|pull|push|publish|attach` backend command와 같은 동작,
+preview, confirmation gate를 따른다. Pipe, redirect, CI, `--quiet`, `--json`은 interactive
+browser를 시도하지 않고 기존 text/JSON contract를 유지한다. Text output은 selector와 같은
+TaskDocument display order인 title, origin/publish state, task key, branch를 bounded column으로
+나눠 보여주고, `provider-origin`과 `local` source group 아래에 둔다. Inventory-only field인
+source는 group으로 표현하고, path, raw origin, 짧은 body summary는 text에서 반복하지 않고 JSON
+output에 둔다. JSON output은 두 mode 모두 `{ "tasks": [...], "invalid_tasks": [...] }`
+top-level shape를 유지하며, TaskDocument의 key, path, title, branch, origin/publish state,
+local-vs-provider-origin source, 짧은 body summary를 stable shape로 보여준다. Bare JSON은
+actionable working set만 담고, `--all --json`은 full inventory를 담는다.
 TaskDocument TOML parse/validation failure는 조용히 숨기지 않고 text warning 또는 JSON
-`invalid_tasks`로 보고한다. `wt task list`는 worktree, local branch, TaskRun, Workflow,
-provider issue, pull request, agent setup을 만들거나 수정하지 않는다. Workflow inventory는
-계속 `wt workflow list`, worktree/branch/site state는 계속 `wt list`가 맡는다.
+`invalid_tasks`로 보고한다. Non-interactive text/JSON output과 browser initial render는
+worktree, local branch, TaskRun, Workflow, provider issue, pull request, agent setup을 만들거나
+수정하지 않는다. Workflow inventory는 계속 `wt workflow list`, worktree/branch/site state는
+계속 `wt list`가 맡는다.
+
+TaskDocument origin은 runnable slice 하나가 provider issue 하나와 연결되는 durable link다.
+Workflow origin은 saved Workflow의 title/body/context가 provider issue 하나와 연결되는
+workflow-level link다. 두 `[origin]`은 scope가 다르며, Workflow `[origin]`은 child
+TaskDocument `[origin]`, TaskRun status, PR closing keyword로 자동 전파되지 않는다.
 
 TaskDocument import는 configured issue provider의 기존 issue를 local task 정의로
-가져오는 side effect다. Canonical command shape는 `wt task import` 또는
-`wt task import <issue>...`다. Bare `wt task import`는 provider issue를
+가져오는 side effect다. Canonical command shape는 `wt task origin import` 또는
+`wt task origin import <issue>...`다. Bare `wt task origin import`는 provider issue를
 multi-select로 고르게 하고, 명시 issue id는 scriptable path로 남긴다. `import`는
 `<repo-root>/.wt/execution/tasks/<safe-issue-id>.toml`에 title, branch, body, `[origin]`을 기록한다.
 이때 branch는 `wt run issue <issue>`가 사용할 provider issue branch와 같은 값이어야 하며,
@@ -1362,8 +1187,8 @@ multi-select로 고르게 하고, 명시 issue id는 scriptable path로 남긴�
 `gh issue develop`을 호출할 수 있다. Import는 provider branch materialization 외에는
 worktree, local branch, TaskRun, Workflow, pull request, agent setup을 만들지 않는다.
 Provider가 branch를 공급하거나 materialize할 수 없으면 branch가 빈 TaskDocument를 쓰지
-말고 실패해야 한다. `[origin]`은 provider issue와의 durable link이지, 자동 동기화 계약이
-아니다.
+말고 실패해야 한다. `[origin]`은 provider issue와의 durable link이지, 자동 양방향 업데이트
+계약이 아니다.
 
 Import ambiguity는 local TaskDocument write 전에 실패해야 한다. Configured issue
 provider가 없으면 실패한다. 같은 invocation 안의 duplicate issue id는 실패한다. Provider
@@ -1373,8 +1198,8 @@ provider가 없으면 실패한다. 같은 invocation 안의 duplicate issue id�
 help/test/documentation이 먼저 필요하다.
 
 TaskDocument publish는 local task 정의를 configured issue provider의 issue로 만드는
-side effect다. Canonical command shape는 `wt task publish` 또는
-`wt task publish <task>...`다. Bare `wt task publish`는 아직 `[origin]`이 없는 local
+side effect다. Canonical command shape는 `wt task origin publish` 또는
+`wt task origin publish <task>...`다. Bare `wt task origin publish`는 아직 `[origin]`이 없는 local
 TaskDocument를 multi-select로 고르게 하고, 명시 task key는 scriptable path로 남긴다.
 `publish`는 각 task의 provider issue 생성, provider-keyed `branch` rewrite, 그리고
 `<repo-root>/.wt/execution/tasks/<task>.toml`의 `origin` 업데이트가 모두 끝났을 때만 해당 task를
@@ -1382,12 +1207,50 @@ TaskDocument를 multi-select로 고르게 하고, 명시 task key는 scriptable 
 durable link이지, 아직 publish해야 한다는 pending request가 아니다. 성공 output은 생성된
 provider issue와 함께 old branch와 new branch를 보여줘야 한다.
 
+Legacy `wt task import`와 `wt task publish`는 old script migration을 위한 hidden alias일
+때만 남을 수 있다. Primary help, README examples, consistency docs의 canonical command는
+항상 `wt task origin import`와 `wt task origin publish`를 가리켜야 한다.
+
 `wt run issue`는 이미 존재하는 provider issue에서 worktree를 시작하는 명령으로 남긴다. Bare
 `wt run issue`는 provider issue를 multi-select로 고르게 하고, 명시 issue key 목록은
 scriptable path로 남긴다.
-Provider issue를 TaskDocument로 가져오는 흐름은 `wt task import`, Local TaskDocument를
-provider issue로 만드는 흐름은 `wt task publish`다. `wt run issue import`, `wt run issue create`,
-`sync`, `pull`, `push`, `export` 같은 이름을 같은 개념의 alias로 추가하지 않는다.
+Provider issue를 TaskDocument로 가져오는 흐름은 `wt task origin import`, Local TaskDocument를
+provider issue로 만드는 흐름은 `wt task origin publish`다. `wt run issue import`,
+`wt run issue create`, 양방향 자동 업데이트, `export` 같은 이름을 같은 개념의 alias로
+추가하지 않는다.
+
+TaskDocument origin management는 existing `[origin]` link와 fetched provider evidence를
+다루는 별도 command set이다. Canonical command shape는
+`wt task origin fetch|diff|pull|push <task>`다. `fetch`는 provider issue를 읽어
+`<repo-root>/.wt/execution/origins/tasks/<task>.toml` snapshot evidence만 쓰고 local
+TaskDocument title/body/branch를 바꾸지 않는다. `diff`는 local TaskDocument title/body와
+fetched provider evidence를 비교하는 read-only command이며 provider나 local 파일에 쓰지
+않는다. `pull`은 preview와 field selection 뒤 selected provider title/body만 local
+TaskDocument에 적용한다. `push`는 preview와 confirmation 뒤 provider issue comment append
+또는 selected title/body field overwrite를 수행한다. Comment-only push는 title/body baseline을
+전진시키지 않는다.
+
+Workflow origin management는 saved Workflow의 provider issue link와 fetched provider
+evidence만 다룬다. Canonical command shape는 `wt workflow origin attach <workflow> <issue>`와
+`wt workflow origin fetch|diff|pull|push <workflow>`다. `attach`는 saved Workflow
+top-level `[origin]`만 기록하고 provider issue id를 필수 인자로 받는다. `fetch`는
+`<repo-root>/.wt/execution/origins/workflows/<workflow-id>.toml` snapshot evidence만 쓴다.
+`diff`는 Workflow title/body와 fetched provider evidence를 비교하는 read-only command다.
+`pull`은 preview와 field selection 뒤 selected provider title/body만 Workflow에 적용한다.
+`push`는 preview와 confirmation 뒤 Workflow title/body를 담은 provider issue comment만
+append한다. Provider title/body overwrite는 current Workflow push surface에 노출되지 않는다.
+Workflow origin action은 child TaskDocument origin을 만들거나 수정하지 않고, TaskRun status나
+PR closing keyword도 바꾸지 않는다.
+
+Origin snapshot은 source-of-truth file이 아니라 last provider read와 local comparison point를
+보존하는 evidence file이다. Task snapshot path는
+`<repo-root>/.wt/execution/origins/tasks/<task>.toml`이고, Workflow snapshot path는
+`<repo-root>/.wt/execution/origins/workflows/<workflow-id>.toml`이다. Snapshot TOML은
+top-level `kind`, `owner`, `origin`, `baseline`, `remote`, `provider_context`를 가진다.
+`baseline.fields`와 `baseline.local_hashes`는 비교 기준점의 local title/body와 hash를 기록하고,
+`remote.fields`, `remote.fetched_at`, `remote.remote_updated_at`은 마지막 provider evidence를
+기록한다. Snapshot owner와 current local `[origin]`이 맞지 않으면 active comparison에는 쓰지
+않고 새 fetch가 필요하다.
 
 여러 대상을 시작하는 `wt run issue`, `wt run pr`, `wt run task`는 기본 `--jobs 3`
 bounded parallel 실행을 사용하고, 순차 실행과 interactive conflict prompt가 필요하면
@@ -1426,13 +1289,13 @@ Dry-run은 첫 write-path의 필수 표면이 아니다. 추가한다면 실제 
 거친 뒤 생성될 provider, title, body, branch metadata, 업데이트될 `origin` 위치를 보여주는
 plan이어야 하고, TaskDocument에 pending state를 저장해서 dry-run 결과를 표현하지 않는다.
 
-`wt task publish --help`는 이 side effect를 그대로 설명해야 한다. 즉 provider issue를
+`wt task origin publish --help`는 이 side effect를 그대로 설명해야 한다. 즉 provider issue를
 생성하고 local TaskDocument branch rewrite와 origin 기록을 수행한다는 점, 이미 origin이
 있거나 provider가 불명확하거나 old branch state가 있으면 실패한다는 점, bare publish는 아직
 origin이 없는 TaskDocument를 고른다는 점을 보여줘야 한다. Worktree 시작, TaskRun 생성,
 workflow 실행, branch landing처럼 다른 lifecycle을 publish 도움말에 섞지 않는다.
 
-`wt task import --help`는 import가 provider issue에서 TaskDocument로 향하는
+`wt task origin import --help`는 import가 provider issue에서 TaskDocument로 향하는
 non-executing 흐름임을 그대로 설명해야 한다. 즉 explicit issue id와 bare provider issue
 selector를 모두 지원한다는 점, title/branch/body/`[origin]`을 기록한다는 점, provider
 branch materialization은 할 수 있지만 worktree/local branch/TaskRun/Workflow/PR/agent
@@ -1443,8 +1306,9 @@ setup은 만들지 않는다는 점, duplicate ids나 existing TaskDocument coll
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `<repo-root>/.wt/execution/task-runs/<id>.toml` 아래에
 task, branch, status, group, error, creation_order, route fields, report/review metadata,
 created_at, updated_at을 저장한다.
-`group`은 Workflow file stem과 맞는 workflow-linked run을 식별하는 link이고, 직접
-`wt run task`로 만든 TaskRun은 group을 저장하지 않는다. Legacy TaskRun TOML의
+`group`은 Workflow id와 정확히 같은 문자열이며, Workflow file stem과 맞는
+workflow-linked run을 식별하는 link다. 직접 `wt run task`로 만든 TaskRun은 group을
+저장하지 않는다. Legacy TaskRun TOML의
 source 값 `new`, `batch`, `stack`은 읽기 전용 migration compatibility로만 받으며 새
 TaskRun 출력에는 쓰지 않는다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
 초 단위 timestamp 우연성에 기대지 않도록 새 TaskRun마다 증가하는 실행 생성 순서다.
@@ -1470,6 +1334,13 @@ Workflow 준비는 `<repo-root>/.wt/execution/workflows/<id>.toml` 하나와 각
 TaskRun id, stack-mode parent처럼 orchestration에 필요한 link와 실행 지시만 저장한다.
 Workflow row는 status/error를 따로 가지지 않고, branch 이름도 복사하지 않는다. 실행
 인스턴스의 canonical 기록은 TaskRun이고, branch name의 canonical 기록은 TaskDocument다.
+새로 준비하는 Workflow의 canonical id와 file stem은 `YYYYMMDD-<slug>`다. `--id`가
+있으면 그 값이 id/file stem이 되고, 없으면 creation-time `title`, selected TaskDocument
+title, task key 순서로 slug seed를 고른다. `title`은 생성 뒤에는 display metadata일 뿐이며
+Workflow id와 동기화되지 않는다. 기존 `YYYY-MM-DD-NNN` Workflow ids는 active local state를
+읽고 실행하기 위한 legacy 형식으로 계속 valid하지만, 새 preparation path의 canonical 형식은
+아니다. 모든 workflow-linked TaskRun의 `group`은 legacy/new 형식과 관계없이 Workflow id,
+즉 Workflow file stem과 정확히 같아야 한다.
 TaskDocument `title`/`body`/`[origin]`은 slice-level source of truth이며 Workflow row로
 복사하지 않는다. Workflow-level `title`/`body`/`[origin]`은 task row가 아니라 Workflow
 top-level metadata다. `wt workflow issue`에서 선택한 provider issue들은 각각 executable
@@ -1525,8 +1396,8 @@ branch ancestry checks, workflow mode ordering, or any other landing safety gate
 
 `review.codex_base` is an additional Codex-native base-diff evidence policy for the
 coordinator. `none` means no Codex base-diff review evidence is required. `advisory`
-asks the coordinator to open a Codex surface and run
-`/review --base <resolved-parent>` when practical, with
+asks the coordinator to send the review to the task agent's Codex surface with
+`wt send <task-run-id> /review --base <resolved-parent>` when practical, with
 `codex review --base <resolved-parent>` as the non-interactive fallback, and record
 concise evidence; a missing/unavailable run is not by itself a blocker if reported.
 `required` means the coordinator must run that review against the resolved workflow
@@ -1588,9 +1459,9 @@ The built-in config defaults are `pull_request = "none"`, `landing = "manual"`, 
 `review.codex_base = "none"`.
 Explicit workflow preparation flags override the config for one run while keeping the
 same value names and failing early for conflicting forms instead of introducing aliases.
-`wt config` shows the effective `[workflow]` and `[review]` policy, including built-in
-defaults, so scripts and humans can inspect the actual policy that new workflow
-preparation will use.
+`wt config show` shows the effective `[workflow]` and `[review]` policy, including
+built-in defaults, so scripts and humans can inspect the actual policy that new
+workflow preparation will use.
 `wt init` does not write a commented optional `[workflow]` tutorial block; generated config
 writes an explicit starter `[workflow]` policy with `pull_request = "none"` and `landing = "manual"`
 unless it is preserving an existing explicit workflow policy from the target config.
@@ -1611,8 +1482,8 @@ eventual version bump.
 Workflow-level `title`/`body`/`[origin]` are saved to `<repo-root>/.wt/execution/workflows/<id>.toml` as
 top-level Workflow metadata. They appear in `wt workflow show` and workflow-started agent
 prompts as context, but do not change runnable selection, TaskRun lifecycle, landing
-policy, cleanup behavior, provider issue status transitions, provider sync, or PR
-issue-closing keywords. Prompt에서는 coordinator handoff가 먼저 전달되고, Workflow
+policy, cleanup behavior, provider issue status transitions, provider field/comment
+writes, or PR issue-closing keywords. Prompt에서는 coordinator handoff가 먼저 전달되고, Workflow
 metadata는 그 뒤 TaskDocument snapshot 근처에 배치된다. Existing `objective` values may
 be read only to diagnose or repair old local files, and any explicit repair should
 rewrite them into the canonical title/body/origin shape instead of preserving
@@ -1674,6 +1545,32 @@ text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계
 command를 추가하지 않는다. `wt task list`는 symmetry command가 아니라 별도 TaskDocument
 inventory surface이며 Workflow, TaskRun, branch, worktree 목록 의미를 갖지 않는다.
 
+Inventory interactive mode는 `wt task list`와 `wt workflow list`의 TTY human 표면에만 붙는
+추가 surface다. stdout이 TTY이고 `--json`/`--quiet`가 아니면 bare `wt task list`와 bare
+`wt workflow list`는 full-screen 인터랙티브 브라우저로 진입한다. 비-TTY, 파이프,
+`--json`, `--quiet`는 현행 text/JSON contract를 그대로 유지하며 interactive prompt를
+시도하지 않는 가드 컨벤션을 따른다.
+
+인터랙티브 브라우저의 초기 렌더는 read-only다. Provider 호출 없이 TaskDocument,
+Workflow, origin snapshot 같은 디스크 상태만 읽는다. 액션 메뉴는 `OriginActionMenu`
+모델이 단일 소스이며, 단축키는 액셀러레이터일 뿐이다. 모든 액션은 Enter 메뉴에서
+발견 가능해야 한다.
+
+액션 실행은 브라우저 안의 dispatch 계약을 따른다. Browser action menu의 모든 origin
+변경 액션(diff, fetch, pull, push, publish, attach)은 브라우저 화면을 떠나지 않고
+worker 실행으로 수행된다. 백엔드 command와 같은 함수, 같은 preview, 같은
+confirmation gate를 거치며 prompt는 popup으로, print 출력은 브라우저 하단 output
+panel로 나타난다. 실행은 한 번에 하나다. 실행 중 액션은 status line의 진행 표시(spinner)로
+보이고, 새 액션 시도는 거절 안내를 받는다. popup의 Esc는 CLI prompt 취소와 같은
+의미다(cancelled, no side effects). 로컬에서 즉시 끝나고 결과가 한 줄인 액션 — keep
+local-only, copy reference, open in browser, workflow의 비지원 안내 — 는 기존대로
+status line 한 줄로 끝난다. 분류는 backend별 exhaustive match가 단일 소스라 새 액션은
+분류 없이 컴파일되지 않는다. 외부 쓰기 preview/confirmation 같은 안전 게이트는 백엔드
+플로우가 소유하며, TUI는 게이트를 추가하지도 우회하지도 않는다. popup select는 full
+selector 계약(10-row cap, section row 등)의 단순화 버전이며 selector를 대체하지 않는다.
+Workflow 브라우저의 child origin은 inspection 전용이고 workflow 액션으로 child
+TaskDocument origin을 수정하지 않는다.
+
 `wt workflow show <id>`는 한 Workflow file을 읽는 canonical one-shot observation surface다.
 기본 human 출력은 Workflow meta(path, mode, base, title/body/origin, policy, task count)와
 번호 매긴 task row, task file path, branch, parent를 보여준다. `--json`은 같은 대상에 대해
@@ -1697,13 +1594,12 @@ UI다. 이 명령은 `127.0.0.1`에만 bind하고, port `0`은 available port �
 후 URL을 출력한 뒤 default browser로 그 URL을 연다. `--quiet`에서는 script-friendly stdout
 contract를 위해 URL만 출력하고 browser를 열지 않는다.
 UI 서버는 binary에 embedded된 no-build HTML/CSS/JS asset과 allowlisted route만 제공한다.
-첫 API surface는 `GET /api/snapshot`이며 ideas, TaskDocuments, Workflows, TaskRuns,
-retrospectives, profile summaries, effective config summary/source paths를 한 snapshot으로
-반환한다.
+첫 API surface는 `GET /api/snapshot`이며 execution retrospectives, TaskDocuments, Workflows,
+TaskRuns, profile summaries, effective config summary/source paths를 한 snapshot으로 반환한다.
 
-`wt ui`는 inventory lens이지 새로운 state owner가 아니다. Ideas는
-`<repo-root>/.wt/planning/ideas`, Specs는 `<repo-root>/.wt/planning/specs`, TaskDocument는 계속
-`<repo-root>/.wt/execution/tasks`, Workflow는 `<repo-root>/.wt/execution/workflows`, TaskRun은
+`wt ui`는 inventory lens이지 새로운 state owner가 아니다. Retrospectives는
+`<repo-root>/.wt/execution/retrospectives`, TaskDocument는 `<repo-root>/.wt/execution/tasks`,
+Workflow는 `<repo-root>/.wt/execution/workflows`, TaskRun은
 `<repo-root>/.wt/execution/task-runs`, config/profile layering은 `.wt.toml`,
 `<repo-root>/.wt/config/local.toml`, `<repo-root>/.wt/config/profiles`가 source of truth다. UI
 board group은 linked TaskRun 상태와 runnable metadata에서 파생한 presentation일 뿐이고,

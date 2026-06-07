@@ -84,6 +84,13 @@ The recurring decision test is:
 The seventh principle is the meta-principle. The model is allowed to evolve, but
 only toward greater clarity.
 
+A full-screen terminal UI session stays within the stateless CLI model when it
+lives inside one command invocation: it runs, records durable state, and exits.
+It is not a daemon and must not poll providers in the background. The persona's
+rejection of a heavy GUI means web or desktop GUI surfaces, not terminal UI.
+Interactive terminal surfaces are additive; non-TTY, `--json`, and `--quiet`
+paths keep their text contracts.
+
 ## Direction-Driven Design
 
 `wt` should choose clarity over compatibility while it remains a personal
@@ -161,7 +168,7 @@ The intended config precedence is:
 global < team integration < personal < command-line flags
 ```
 
-`wt config` should show where each effective value came from. Debuggability is
+`wt config show` should show where each effective value came from. Debuggability is
 part of the contract.
 
 All worktrees for one repository should resolve the same personal storage root.
@@ -170,17 +177,16 @@ and a `.wt` symlink from each linked worktree to that directory. `.git/info/excl
 owns the clone-local ignore rule so the team `.gitignore` remains untouched.
 
 This intentionally reverses the earlier Git-common-dir direction. The decision
-source is `<repo-root>/.wt/planning/specs/personal-storage-repo-root/`: `.git/`
-should remain Git's namespace, `.wt/...` is shorter to type and inspect, and
-agent harnesses can read/write repo-root `.wt/` without `.git/` permission
+source is historical `<repo-root>/.wt/planning/specs/personal-storage-repo-root/`:
+`.git/` should remain Git's namespace, `.wt/...` is shorter to type and inspect,
+and agent harnesses can read/write repo-root `.wt/` without `.git/` permission
 friction.
 
-Inside the personal root, the current direction is a four-bucket contract:
+Inside the personal root, the current direction is a three-bucket contract:
 
 ```text
 config/       # local config and profiles
-planning/     # ideas, specs, retrospectives
-execution/    # TaskDocuments, Workflows, TaskRuns, archive
+execution/    # TaskDocuments, Workflows, TaskRuns, archive, retrospectives
 runtime/      # agent-owned inboxes, sessions, supervisors, observations
 ```
 

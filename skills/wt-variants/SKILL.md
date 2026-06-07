@@ -48,8 +48,7 @@ find . -maxdepth 2 -name AGENTS.md -o -name AGENTS.override.md
 sed -n '90,115p' docs/consistency.md 2>/dev/null || true
 repo_root="$(git rev-parse --show-toplevel)"
 find "$repo_root/.wt/execution/tasks" "$repo_root/.wt/execution/workflows" -maxdepth 1 -type f 2>/dev/null | sort
-find "$repo_root/.wt/planning/ideas" "$repo_root/.wt/planning/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
-wt config 2>/dev/null || ./target/debug/wt config 2>/dev/null || true
+wt config show 2>/dev/null || ./target/debug/wt config show 2>/dev/null || true
 ```
 
 ## Preparation
@@ -123,7 +122,7 @@ intended workflow prompt:
 
 ```bash
 for profile in <profiles>; do
-  ./target/debug/wt config --profile "$profile"
+  ./target/debug/wt config show --profile "$profile"
 done
 ```
 

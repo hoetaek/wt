@@ -280,11 +280,13 @@ fn validate_workflow_task_run_group(
     group: &str,
 ) -> Result<()> {
     if run.group.as_deref() != Some(group) {
+        let actual = run.group.as_deref().unwrap_or("none");
         bail!(
-            "Workflow task {} references TaskRun {} outside workflow group {}",
+            "Workflow task {} references TaskRun {} outside workflow group: expected {}, found {}",
             row.task,
             row.run,
-            group
+            group,
+            actual
         );
     }
     Ok(())

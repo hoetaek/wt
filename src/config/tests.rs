@@ -174,6 +174,41 @@ cli = "claude"
 }
 
 #[test]
+fn language_defaults_to_auto_when_absent() {
+    let config: Config = toml::from_str("").unwrap();
+    assert_eq!(config.language, Language::Auto);
+}
+
+#[test]
+fn language_parses_explicit_values() {
+    assert_eq!(
+        toml::from_str::<Config>("language = \"ko\"")
+            .unwrap()
+            .language,
+        Language::Ko
+    );
+    assert_eq!(
+        toml::from_str::<Config>("language = \"en\"")
+            .unwrap()
+            .language,
+        Language::En
+    );
+    assert_eq!(
+        toml::from_str::<Config>("language = \"auto\"")
+            .unwrap()
+            .language,
+        Language::Auto
+    );
+}
+
+#[test]
+fn language_rejects_unsupported_value() {
+    let err = toml::from_str::<Config>("language = \"fr\"").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("language") || msg.contains("fr"), "got: {msg}");
+}
+
+#[test]
 fn rejects_unknown_setup_command_field() {
     let err = toml::from_str::<Config>(
         r#"
@@ -1922,6 +1957,51 @@ provider = "linear"
     let issues = config.issues.unwrap();
     assert_eq!(issues.provider, IssueProviderType::Linear);
     assert!(issues.gh_user.is_none());
+}
+
+#[test]
+fn issues_origin_policy_defaults_to_provider_preferred() {
+    let config: Config = toml::from_str(
+        r#"
+[issues]
+provider = "linear"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        config.issues.unwrap().origin_policy,
+        OriginPolicy::ProviderPreferred
+    );
+}
+
+#[test]
+fn issues_origin_policy_parses_required_and_local_only() {
+    let required: Config = toml::from_str(
+        r#"
+[issues]
+provider = "github"
+origin_policy = "provider-required"
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        required.issues.unwrap().origin_policy,
+        OriginPolicy::ProviderRequired
+    );
+
+    let local_only: Config = toml::from_str(
+        r#"
+[issues]
+provider = "linear"
+origin_policy = "local-only"
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        local_only.issues.unwrap().origin_policy,
+        OriginPolicy::LocalOnly
+    );
 }
 
 #[test]

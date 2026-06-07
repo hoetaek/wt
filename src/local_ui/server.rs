@@ -152,6 +152,7 @@ mod tests {
         );
         assert!(!INDEX_HTML.contains("data-view=\"profiles\""));
         assert!(!INDEX_HTML.contains("data-view=\"tasks\""));
+        assert!(!INDEX_HTML.contains("data-view=\"ideas\""));
         assert!(INDEX_HTML.contains("role=\"tabpanel\""));
         assert!(INDEX_HTML.contains("id=\"language-toggle\""));
         assert!(INDEX_HTML.contains("class=\"language-switch\""));
@@ -240,11 +241,13 @@ mod tests {
         assert!(APP_JS.contains("workflowMasterDetailRecord"));
         assert!(APP_JS.contains("workflowRelationshipSummary"));
         assert!(APP_JS.contains("workflowCanvasSection"));
-        assert!(APP_JS.contains("ideaMasterDetailRecord"));
+        assert!(!APP_JS.contains("ideaMasterDetailRecord"));
         assert!(APP_JS.contains("retrospecMasterDetailRecord"));
-        assert!(APP_JS.contains("invalidPlanningMasterDetailRecord"));
-        assert!(APP_JS.contains("planningMasterDetailRecordId(\"idea\", row)"));
-        assert!(APP_JS.contains("planningMasterDetailRecordId(\"retrospec\", row)"));
+        assert!(APP_JS.contains("invalidStateMasterDetailRecord"));
+        assert!(!APP_JS.contains("stateMasterDetailRecordId(\"idea\", row)"));
+        assert!(APP_JS.contains("stateMasterDetailRecordId(\"retrospec\", row)"));
+        assert!(!APP_JS.contains("renderIdeas"));
+        assert!(!APP_JS.contains("ideasCockpit"));
         assert!(APP_JS.contains("stableRecordToken(row.path || row.key || row.title)"));
         assert!(!APP_JS.contains("id: `idea-${domId(row.key"));
         assert!(!APP_JS.contains("id: `retrospec-${domId(row.key"));

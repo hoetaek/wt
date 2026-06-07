@@ -1259,15 +1259,16 @@ fn run_task_help_explains_task_execution() {
 }
 
 #[test]
-fn task_help_lists_list_import_and_publish() {
+fn task_help_lists_list_origin_and_hides_legacy_import_publish() {
     wt_command()
         .args(["task", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("list"))
-        .stdout(predicate::str::contains("import"))
+        .stdout(predicate::str::contains("origin"))
         .stdout(predicate::str::contains("run").not())
-        .stdout(predicate::str::contains("publish"));
+        .stdout(predicate::str::contains("import").not())
+        .stdout(predicate::str::contains("publish").not());
 }
 
 #[test]
@@ -1404,6 +1405,9 @@ id = "PROJ-123"
     assert_eq!(no_run["publish_state"], "local");
     assert_eq!(no_run["source"], "local");
     assert!(no_run["origin"].is_null());
+    assert_eq!(no_run["origin_health"]["status"], "local");
+    assert_eq!(no_run["origin_health"]["origin_label"], "not published");
+    assert_eq!(no_run["origin_health"]["next_action"], "pub");
 
     let provider = tasks
         .iter()
@@ -1415,6 +1419,9 @@ id = "PROJ-123"
     assert_eq!(provider["source"], "provider-origin");
     assert_eq!(provider["origin"]["provider"], "linear");
     assert_eq!(provider["origin"]["id"], "PROJ-123");
+    assert_eq!(provider["origin_health"]["status"], "stale");
+    assert_eq!(provider["origin_health"]["origin_label"], "Linear PROJ-123");
+    assert_eq!(provider["origin_health"]["next_action"], "fetch");
     assert_eq!(provider["body_summary"], "Imported provider task body");
 
     assert_eq!(invalid[0]["key"], "bad");
@@ -1503,10 +1510,10 @@ id = "PROJ-123"
         .stdout(predicate::str::contains("│ provider-origin"))
         .stdout(predicate::str::contains("│ local"))
         .stdout(predicate::str::contains(
-            "•  local  not published  task local  branch feature/local",
+            "•  local  not published  local  task local  pub  branch feature/local",
         ))
         .stdout(predicate::str::contains(
-            "•  Provider task  Linear PROJ-123  task provider  branch alice/provider-task",
+            "•  stale  Linear PROJ-123  Provider task  task provider  fetch  branch alice/provider-task",
         ))
         .stdout(predicate::str::contains(
             "2 tasks hidden; use wt task list --all to show the full inventory",
@@ -1600,7 +1607,7 @@ id = "PROJ-123"
         .stdout(predicate::str::contains("task running"))
         .stdout(predicate::str::contains("branch feature/running"))
         .stdout(predicate::str::contains(
-            "•  Provider task  Linear PROJ-123  task provider  branch alice/provider-task",
+            "•  stale  Linear PROJ-123  Provider task  task provider  fetch  branch alice/provider-task",
         ))
         .stdout(predicate::str::contains("tasks hidden").not())
         .stderr(predicate::str::contains(
@@ -4528,32 +4535,18 @@ run = "run-archive-unique"
 }
 
 #[test]
-fn scaffold_supports_json_global_flag() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
+fn scaffold_rejects_removed_planning_flags_at_cli_boundary() {
+    for flag in ["--idea", "--spec", "--retrospect"] {
+        let temp = TempDir::new().unwrap();
+        git_init(temp.path());
 
-    let output = wt_command()
-        .current_dir(temp.path())
-        .args(["--json", "scaffold", "demo", "--retrospect"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("JSON output is supported").not())
-        .get_output()
-        .stdout
-        .clone();
-
-    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(value["feature"], "demo");
-    assert_eq!(
-        value["created"][0],
-        "<repo-root>/.wt/planning/specs/demo/04-Feedback/10-retrospect.md"
-    );
-    assert!(value["skipped"].as_array().unwrap().is_empty());
-    assert!(
-        temp.path()
-            .join(".wt/planning/specs/demo/04-Feedback/10-retrospect.md")
-            .is_file()
-    );
+        wt_command()
+            .current_dir(temp.path())
+            .args(["scaffold", "demo", flag])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unexpected argument"));
+    }
 }
 
 #[test]
@@ -5985,13 +5978,11 @@ fn write_repo_agent_config(root: &Path, cli: &str) {
 fn write_wt_core_dirs(root: &Path) {
     for path in [
         root.join(".wt/config/profiles"),
-        root.join(".wt/planning/ideas"),
-        root.join(".wt/planning/specs"),
-        root.join(".wt/planning/retrospectives"),
         root.join(".wt/execution/tasks"),
         root.join(".wt/execution/workflows"),
         root.join(".wt/execution/task-runs"),
         root.join(".wt/execution/archive"),
+        root.join(".wt/execution/retrospectives"),
         root.join(".wt/runtime/agents"),
     ] {
         std::fs::create_dir_all(path).unwrap();
@@ -6323,6 +6314,9 @@ fn ui_help_explains_read_only_local_server_contract() {
         .stdout(predicate::str::contains("--port <PORT>"))
         .stdout(predicate::str::contains("0 selects an available port"))
         .stdout(predicate::str::contains("GET /api/snapshot"))
+        .stdout(predicate::str::contains("execution/retrospectives"))
+        .stdout(predicate::str::contains("ideas").not())
+        .stdout(predicate::str::contains("spec-local").not())
         .stdout(predicate::str::contains("embedded no-build assets"));
 }
 
@@ -6602,7 +6596,6 @@ fn init_yes_bootstraps_only_core_state_dirs() {
         vec![
             "config".to_string(),
             "execution".to_string(),
-            "planning".to_string(),
             "runtime".to_string(),
         ]
     );
@@ -6621,18 +6614,46 @@ fn init_yes_bootstraps_only_core_state_dirs() {
     for canonical in [
         "config/local.toml",
         "config/profiles",
-        "planning/ideas",
-        "planning/specs",
-        "planning/retrospectives",
         "execution/tasks",
         "execution/workflows",
         "execution/task-runs",
         "execution/archive",
+        "execution/retrospectives",
         "runtime/agents",
     ] {
         assert!(temp.path().join(".wt").join(canonical).exists());
     }
     assert!(!temp.path().join(".claude/settings.local.json").exists());
+}
+
+#[test]
+fn init_skips_planning_and_tolerates_leftover_planning_dirs() {
+    let leftover = TempDir::new().unwrap();
+    git_init(leftover.path());
+    std::fs::create_dir_all(leftover.path().join(".wt/planning/ideas/old-idea")).unwrap();
+    std::fs::create_dir_all(leftover.path().join(".wt/planning/specs/old-spec")).unwrap();
+
+    wt_command()
+        .args(["-C", leftover.path().to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success();
+
+    assert!(
+        leftover
+            .path()
+            .join(".wt/execution/retrospectives")
+            .is_dir()
+    );
+
+    let fresh = TempDir::new().unwrap();
+    git_init(fresh.path());
+
+    wt_command()
+        .args(["-C", fresh.path().to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success();
+
+    assert!(!fresh.path().join(".wt/planning").exists());
 }
 
 #[test]
@@ -7183,6 +7204,7 @@ CODEX_MODE = "1"
             "-C",
             temp.path().to_str().unwrap(),
             "config",
+            "show",
             "--profile",
             "codex",
         ])
@@ -7193,7 +7215,7 @@ CODEX_MODE = "1"
         .clone();
 
     let implicit = wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .get_output()
@@ -7264,7 +7286,7 @@ fn config_renders_builtin_workflow_defaults() {
     git_init(temp.path());
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[workflow]"))
@@ -7279,7 +7301,7 @@ fn config_renders_builtin_workspace_color_defaults() {
     write_personal_config(temp.path(), "[workspace]\ntabs = [\"lazygit\"]\n");
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[workspace]"))
@@ -7295,7 +7317,7 @@ fn config_rejects_legacy_new_workspace_color_key() {
     write_personal_config(temp.path(), "[workspace]\ncolors = { new = \"green\" }\n");
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("[workspace].colors.new"))
@@ -7312,7 +7334,7 @@ fn config_renders_workspace_chrome_devtools_browser_policy_defaults() {
     );
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[workspace.browser]"))
@@ -7338,7 +7360,7 @@ fn config_preserves_empty_workspace_color_overrides() {
     );
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -7356,7 +7378,7 @@ fn config_renders_active_site_runtime_defaults() {
     );
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[site]"))
@@ -7380,7 +7402,7 @@ fn config_omits_inactive_site_section() {
     write_personal_config(temp.path(), "[site]\nprovider = \"none\"\n");
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[site]").not());
@@ -7393,7 +7415,7 @@ fn config_renders_editor_placement_default_when_editor_is_active() {
     write_personal_config(temp.path(), "[editor]\ncommand = \"code {{path}}\"\n");
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[editor]"))

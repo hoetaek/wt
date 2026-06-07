@@ -1,24 +1,39 @@
 use crate::context::Ctx;
+use crate::origin_action_menu::{OriginActionMenu, OriginLabel};
+use crate::origin_snapshot::{FieldSnapshot, OriginHealthSummary, read_task_snapshot};
 use crate::task::{self, TaskDocument};
 use crate::task_run;
 use anyhow::{Context, Result};
 use console::measure_text_width;
 use serde::Serialize;
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 const LIST_START: &str = "◆";
 const BAR: &str = "│";
 const FOOTER: &str = "└";
 const BULLET: &str = "•";
+const STATUS_COLUMN_MAX: usize = 10;
 const TITLE_COLUMN_MAX: usize = 56;
 const SOURCE_COLUMN_MAX: usize = 18;
 const TASK_COLUMN_MAX: usize = 34;
+const NEXT_COLUMN_MAX: usize = 8;
 const BRANCH_COLUMN_MAX: usize = 48;
 
 pub(crate) fn run(ctx: &Ctx, all: bool) -> Result<()> {
     let report = collect(ctx, all)?;
+    if should_open_browser(ctx) {
+        if crate::tui::terminal_size_allows_task_browser() {
+            return crate::tui::run_task_browser_with(ctx, browser_app(&report), || {
+                let report = collect(ctx, all)?;
+                Ok((browser_rows(&report), browser_diagnostics(&report)))
+            });
+        }
+        ctx.ui.print_warning(
+            "Terminal is too small for the task browser; falling back to text output",
+        );
+    }
     if ctx.is_json() {
         write_json(&report)?;
     } else {
@@ -28,13 +43,21 @@ pub(crate) fn run(ctx: &Ctx, all: bool) -> Result<()> {
 }
 
 #[derive(Debug, Serialize)]
-struct TaskListReport {
+pub(crate) struct TaskListReport {
     tasks: Vec<TaskListRow>,
     invalid_tasks: Vec<InvalidTaskRow>,
     #[serde(skip_serializing)]
     hidden_task_count: usize,
     #[serde(skip_serializing)]
     full_inventory: bool,
+}
+
+pub(crate) fn browser_rows(report: &TaskListReport) -> Vec<crate::tui::app::BrowserRow> {
+    report.tasks.iter().map(browser_row).collect()
+}
+
+pub(crate) fn browser_app(report: &TaskListReport) -> crate::tui::app::AppState {
+    crate::tui::app::AppState::with_diagnostics(browser_rows(report), browser_diagnostics(report))
 }
 
 #[derive(Debug, Serialize)]
@@ -44,11 +67,27 @@ struct TaskListRow {
     title: String,
     branch: Option<String>,
     origin: Option<TaskOriginSummary>,
+    origin_health: OriginHealthSummary,
     publish_state: String,
     source: String,
     body_summary: Option<String>,
     #[serde(skip_serializing)]
     display: task::TaskDocumentDisplay,
+}
+
+impl TaskListRow {
+    pub(crate) fn origin_action_menu(&self) -> OriginActionMenu {
+        let title = self.display.label();
+        if let Some(origin) = &self.origin {
+            OriginActionMenu::for_origin_task(
+                &self.key,
+                title,
+                OriginLabel::new(&origin.provider, &origin.id),
+            )
+        } else {
+            OriginActionMenu::for_local_task(&self.key, title)
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -103,15 +142,16 @@ fn read_task_row(ctx: &Ctx, path: &Path) -> Result<TaskListRow> {
         .with_context(|| format!("Failed to read task: {relative_path}"))?;
     let document: TaskDocument = toml::from_str(&content)
         .with_context(|| format!("Failed to parse task: {relative_path}"))?;
-    Ok(task_row(key, relative_path, document))
+    Ok(task_row(ctx, key, relative_path, document))
 }
 
-fn task_row(key: String, path: String, document: TaskDocument) -> TaskListRow {
+fn task_row(ctx: &Ctx, key: String, path: String, document: TaskDocument) -> TaskListRow {
     let display = task::TaskDocumentDisplay::for_document(&key, &document);
     let origin = document.origin.as_ref().map(|origin| TaskOriginSummary {
         provider: origin.provider.clone(),
         id: origin.id.clone(),
     });
+    let origin_health = task_origin_health(ctx, &key, &document);
     let publish_state = if origin.is_some() {
         "published"
     } else {
@@ -129,11 +169,90 @@ fn task_row(key: String, path: String, document: TaskDocument) -> TaskListRow {
         title: document.title,
         branch: task::prepared_branch_name(&document.branch).map(str::to_string),
         origin,
+        origin_health,
         publish_state: publish_state.into(),
         source: source.into(),
         body_summary: body_summary(&document.body),
         display,
     }
+}
+
+fn task_origin_health(ctx: &Ctx, key: &str, document: &TaskDocument) -> OriginHealthSummary {
+    let Some(origin) = document.origin.as_ref() else {
+        return OriginHealthSummary::task_without_origin();
+    };
+    let local_fields = FieldSnapshot::new(document.title.clone(), document.body.clone());
+    match read_task_snapshot(&ctx.storage_root, key) {
+        Ok(snapshot) => OriginHealthSummary::from_snapshot(
+            &origin.provider,
+            &origin.id,
+            &local_fields,
+            snapshot.as_ref(),
+            "run",
+        ),
+        Err(err) => OriginHealthSummary::from_snapshot_error(&origin.provider, &origin.id, &err),
+    }
+}
+
+fn should_open_browser(ctx: &Ctx) -> bool {
+    !ctx.is_json() && !ctx.quiet && ctx.ui.can_prompt() && std::io::stdout().is_terminal()
+}
+
+fn browser_row(row: &TaskListRow) -> crate::tui::app::BrowserRow {
+    crate::tui::app::BrowserRow {
+        key: row.key.clone(),
+        title: row.display.label().to_string(),
+        status: row.origin_health.status.clone(),
+        origin_label: row.origin_health.origin_label.clone(),
+        next_action: row.origin_health.next_action.clone(),
+        preview_lines: browser_preview_lines(row),
+        menu: row.origin_action_menu(),
+    }
+}
+
+fn browser_preview_lines(row: &TaskListRow) -> Vec<String> {
+    vec![
+        format!("Local path  {}", row.path),
+        format!(
+            "Branch      {}",
+            row.branch.as_deref().unwrap_or("not prepared")
+        ),
+        format!("Origin      {}", row.origin_health.origin_label),
+        format!(
+            "Fetched     {}",
+            row.origin_health.last_fetched.as_deref().unwrap_or("never")
+        ),
+        format!(
+            "Divergence  {}",
+            row.origin_health.divergence.as_deref().unwrap_or("none")
+        ),
+        format!("Next        {}", row.origin_health.next_action),
+    ]
+}
+
+fn browser_diagnostics(report: &TaskListReport) -> Vec<String> {
+    let mut diagnostics = Vec::new();
+    let invalid_count = report.invalid_tasks.len();
+    if invalid_count > 0 {
+        let noun = if invalid_count == 1 {
+            "task file"
+        } else {
+            "task files"
+        };
+        diagnostics.push(format!("{invalid_count} invalid {noun}"));
+        diagnostics.extend(report.invalid_tasks.iter().map(|invalid| {
+            format!(
+                "invalid task {}  file {}  {}",
+                invalid.key,
+                invalid.path,
+                one_line(&invalid.error)
+            )
+        }));
+    }
+    if report.hidden_task_count > 0 {
+        diagnostics.push(format!("{} hidden - use --all", report.hidden_task_count));
+    }
+    diagnostics
 }
 
 fn task_key_from_path(path: &Path) -> Result<String> {
@@ -243,26 +362,32 @@ fn hidden_task_count_hint(count: usize) -> String {
 
 #[derive(Debug, Clone, Copy)]
 struct TaskListColumnWidths {
+    status: usize,
     title: usize,
     source: usize,
     task: usize,
+    next: usize,
     branch: usize,
 }
 
 fn task_list_column_widths(rows: &[&TaskListRow]) -> TaskListColumnWidths {
     rows.iter().fold(
         TaskListColumnWidths {
+            status: 0,
             title: 0,
             source: 0,
             task: 0,
+            next: 0,
             branch: 0,
         },
         |widths, row| {
             let columns = task_inventory_columns(row);
             TaskListColumnWidths {
+                status: capped_width(widths.status, &columns.status, STATUS_COLUMN_MAX),
                 title: capped_width(widths.title, &columns.title, TITLE_COLUMN_MAX),
                 source: capped_width(widths.source, &columns.source, SOURCE_COLUMN_MAX),
                 task: capped_width(widths.task, &columns.task, TASK_COLUMN_MAX),
+                next: capped_width(widths.next, &columns.next, NEXT_COLUMN_MAX),
                 branch: columns.branch.as_deref().map_or(widths.branch, |branch| {
                     capped_width(widths.branch, branch, BRANCH_COLUMN_MAX)
                 }),
@@ -273,49 +398,33 @@ fn task_list_column_widths(rows: &[&TaskListRow]) -> TaskListColumnWidths {
 
 #[derive(Debug, Clone)]
 struct TaskInventoryColumns {
+    status: String,
     title: String,
     source: String,
     task: String,
+    next: String,
     branch: Option<String>,
 }
 
 fn task_inventory_columns(row: &TaskListRow) -> TaskInventoryColumns {
     TaskInventoryColumns {
+        status: row.origin_health.status.clone(),
         title: row.display.label().to_string(),
-        source: task_inventory_source(row),
+        source: row.origin_health.origin_label.clone(),
         task: format!("task {}", row.key),
+        next: row.origin_health.next_action.clone(),
         branch: row.branch.as_ref().map(|branch| format!("branch {branch}")),
-    }
-}
-
-fn task_inventory_source(row: &TaskListRow) -> String {
-    row.origin
-        .as_ref()
-        .map(|origin| {
-            format!(
-                "{} {}",
-                provider_display_label(&origin.provider),
-                origin.id.trim()
-            )
-        })
-        .unwrap_or_else(|| "not published".into())
-}
-
-fn provider_display_label(provider: &str) -> String {
-    match provider.trim().to_ascii_lowercase().as_str() {
-        "github" => "GitHub".into(),
-        "linear" => "Linear".into(),
-        "" => "external".into(),
-        other => other.to_string(),
     }
 }
 
 fn task_inventory_label(row: &TaskListRow, widths: &TaskListColumnWidths) -> String {
     let columns = task_inventory_columns(row);
     let mut parts = vec![
-        pad_column(&columns.title, widths.title),
+        pad_column(&columns.status, widths.status),
         pad_column(&columns.source, widths.source),
+        pad_column(&columns.title, widths.title),
         pad_column(&columns.task, widths.task),
+        pad_column(&columns.next, widths.next),
     ];
     if let Some(branch) = columns.branch {
         parts.push(truncate_display_width(&branch, widths.branch));
@@ -428,10 +537,204 @@ id = "PROJ-123"
         assert_eq!(report.tasks[0].publish_state, "published");
         assert_eq!(report.tasks[0].source, "provider-origin");
         assert_eq!(report.tasks[0].origin.as_ref().unwrap().provider, "linear");
+        assert_eq!(report.tasks[0].origin_health.status, "stale");
+        assert_eq!(report.tasks[0].origin_health.next_action, "fetch");
+        assert_eq!(
+            report.tasks[0].origin_health.origin_label,
+            "Linear PROJ-123"
+        );
         assert_eq!(report.tasks[1].key, "local");
         assert_eq!(report.tasks[1].publish_state, "local");
         assert_eq!(report.tasks[1].source, "local");
+        assert_eq!(report.tasks[1].origin_health.status, "local");
+        assert_eq!(report.tasks[1].origin_health.next_action, "pub");
+        assert_eq!(report.tasks[1].origin_health.origin_label, "not published");
         assert_eq!(report.invalid_tasks[0].key, "bad");
+    }
+
+    #[test]
+    fn origin_health_uses_snapshot_without_provider_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Local title"
+branch = "origin-sync-tui"
+body = "local body"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+        let snapshot = crate::origin_snapshot::OriginSnapshot::task(
+            "origin-sync-tui",
+            crate::origin_snapshot::OriginRef::new("linear", "WT-142"),
+            crate::origin_snapshot::FieldSnapshot::new("Original title", "local body"),
+            crate::origin_snapshot::FieldSnapshot::new("Remote title", "local body"),
+        );
+        crate::origin_snapshot::write_snapshot(&ctx.storage_root, &snapshot).unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+
+        assert_eq!(report.tasks[0].origin_health.status, "conflict");
+        assert_eq!(report.tasks[0].origin_health.next_action, "diff");
+        assert_eq!(report.tasks[0].origin_health.origin_label, "Linear WT-142");
+    }
+
+    #[test]
+    fn task_row_builds_origin_action_menu() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let row = task_row(
+            &ctx,
+            "scratch-clean".into(),
+            "<repo-root>/.wt/execution/tasks/scratch-clean.toml".into(),
+            TaskDocument {
+                title: "Scratch cleanup".into(),
+                branch: "scratch-clean".into(),
+                body: String::new(),
+                origin: None,
+            },
+        );
+
+        let menu = row.origin_action_menu();
+        assert!(menu.enabled("Publish as issue"));
+        assert_eq!(
+            menu.disabled_reason("Pull from issue").unwrap(),
+            "no origin attached"
+        );
+    }
+
+    #[test]
+    fn browser_rows_project_origin_health_from_task_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Origin sync TUI"
+branch = "origin-sync-tui"
+body = "local body"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+        let rows = browser_rows(&report);
+
+        assert_eq!(rows[0].key, "origin-sync-tui");
+        assert_eq!(rows[0].origin_label, "Linear WT-142");
+        assert!(
+            rows[0]
+                .preview_lines
+                .iter()
+                .any(|line| line.contains("Linear WT-142"))
+        );
+    }
+
+    #[test]
+    fn browser_rows_attach_action_menu_from_row_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("origin-sync-tui.toml"),
+            r#"title = "Origin sync TUI"
+branch = "origin-sync-tui"
+body = "local body"
+
+[origin]
+provider = "linear"
+id = "WT-142"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+        let rows = browser_rows(&report);
+
+        assert!(rows[0].menu.enabled("Diff with issue"));
+        assert!(rows[0].menu.disabled_reason("Publish as issue").is_some());
+    }
+
+    fn browser_report_text(report: &TaskListReport) -> String {
+        let backend = ratatui::backend::TestBackend::new(100, 18);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let app = browser_app(report);
+        terminal
+            .draw(|frame| crate::tui::render::draw(frame, &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..18)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn browser_report_renders_invalid_task_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("valid.toml"),
+            r#"title = "Valid"
+branch = "valid"
+"#,
+        )
+        .unwrap();
+        fs::write(tasks_dir.join("bad.toml"), "unknown = true\n").unwrap();
+
+        let report = collect(&ctx, false).unwrap();
+        let text = browser_report_text(&report);
+
+        assert!(text.contains("1 invalid task file"));
+        assert!(text.contains("<repo-root>/.wt/execution/tasks/bad.toml"));
+        assert!(text.contains("Failed to parse task"));
+    }
+
+    #[test]
+    fn browser_report_renders_hidden_task_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("visible.toml"),
+            r#"title = "Visible"
+branch = "visible"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            tasks_dir.join("hidden.toml"),
+            r#"title = "Hidden"
+branch = "hidden"
+"#,
+        )
+        .unwrap();
+        task_run::create(&ctx, "hidden", "hidden", None, task_run::STATUS_PASSED).unwrap();
+
+        let report = collect(&ctx, false).unwrap();
+        let text = browser_report_text(&report);
+
+        assert!(text.contains("1 hidden"));
+        assert!(text.contains("use --all"));
     }
 
     #[test]

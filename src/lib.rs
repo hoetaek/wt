@@ -6,9 +6,12 @@ pub mod config;
 pub mod config_render;
 pub mod context;
 pub mod error;
+pub mod i18n;
 pub mod local_ui;
 pub mod messages;
 pub mod names;
+pub mod origin_action_menu;
+pub mod origin_snapshot;
 pub(crate) mod parallel;
 pub(crate) mod personal_storage;
 pub mod runner;
@@ -20,6 +23,7 @@ pub mod studio;
 pub mod task;
 pub mod task_run;
 pub mod template;
+pub mod tui;
 pub mod ui;
 pub mod workflow;
 pub mod worktree_naming;
@@ -27,7 +31,7 @@ pub mod worktree_naming;
 use anyhow::{Result, bail};
 use cli::{
     AgentCommand, AgentSupervisorCommand, Commands, ConfigCommand, MsgCommand, RunCommand,
-    SessionCommand, TaskCommand, WorkflowCommand,
+    SessionCommand, TaskCommand, TaskOriginCommand, WorkflowCommand, WorkflowOriginCommand,
 };
 use commands::agent_runtime::KnownAgentCli;
 use context::{Ctx, MachineCtx};
@@ -104,11 +108,22 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         }
         Commands::Task { command } => match command {
             TaskCommand::List { all } => commands::task_list::run(ctx, *all),
-            TaskCommand::Import { issues } => commands::task::import(ctx, issues),
+            TaskCommand::Origin { command } => match command {
+                TaskOriginCommand::Import { issues } => commands::task_origin::import(ctx, issues),
+                TaskOriginCommand::Publish { tasks } => commands::task_origin::publish(ctx, tasks),
+                TaskOriginCommand::Attach { task, issue } => {
+                    commands::task_origin::attach(ctx, task, issue)
+                }
+                TaskOriginCommand::Fetch { tasks } => commands::task_origin::fetch(ctx, tasks),
+                TaskOriginCommand::Diff { tasks } => commands::task_origin::diff(ctx, tasks),
+                TaskOriginCommand::Pull { tasks } => commands::task_origin::pull(ctx, tasks),
+                TaskOriginCommand::Push { tasks } => commands::task_origin::push(ctx, tasks),
+            },
+            TaskCommand::Import { issues } => commands::task_origin::import(ctx, issues),
             TaskCommand::DeprecatedRun { .. } => {
                 deprecated_start_command_error("wt task run", "wt run task")
             }
-            TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
+            TaskCommand::Publish { tasks } => commands::task_origin::publish(ctx, tasks),
             TaskCommand::Report { message } => commands::task_report::run(ctx, message),
             TaskCommand::Review {
                 task_run_id,
@@ -136,6 +151,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 profile,
                 profiles,
                 coordinator,
+                id,
                 title,
                 body,
                 body_file,
@@ -151,6 +167,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     profile: profile.as_deref(),
                     profiles,
                     coordinator: coordinator.as_deref(),
+                    id: id.as_deref(),
                     title: title.as_deref(),
                     body: body.as_deref(),
                     body_file: body_file.as_deref(),
@@ -164,6 +181,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 issues,
                 mode,
                 profile,
+                id,
                 title,
                 body,
                 body_file,
@@ -177,6 +195,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 commands::workflow::IssueOptions {
                     mode: *mode,
                     profile: profile.as_deref(),
+                    id: id.as_deref(),
                     title: title.as_deref(),
                     body: body.as_deref(),
                     body_file: body_file.as_deref(),
@@ -186,6 +205,23 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     pr: *pr,
                 },
             ),
+            WorkflowCommand::Origin { command } => match command {
+                WorkflowOriginCommand::Attach { workflow, issue } => {
+                    commands::workflow::origin_attach(ctx, workflow, issue)
+                }
+                WorkflowOriginCommand::Fetch { workflows } => {
+                    commands::workflow::origin_fetch(ctx, workflows)
+                }
+                WorkflowOriginCommand::Diff { workflows } => {
+                    commands::workflow::origin_diff(ctx, workflows)
+                }
+                WorkflowOriginCommand::Pull { workflows } => {
+                    commands::workflow::origin_pull(ctx, workflows)
+                }
+                WorkflowOriginCommand::Push { workflows } => {
+                    commands::workflow::origin_push(ctx, workflows)
+                }
+            },
             WorkflowCommand::DeprecatedRun { .. } => {
                 deprecated_start_command_error("wt workflow run", "wt run workflow")
             }
@@ -219,22 +255,16 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         },
         Commands::Scaffold {
             feature,
-            idea,
-            spec,
             task,
             workflow,
-            retrospect,
             all,
             force,
         } => commands::scaffold::run(
             ctx,
             feature,
             commands::scaffold::ScaffoldFlags {
-                idea: *idea,
-                spec: *spec,
                 task: *task,
                 workflow: *workflow,
-                retrospect: *retrospect,
                 all: *all,
                 force: *force,
             },
@@ -383,17 +413,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             profile,
             prune_env_anchors,
         } => commands::doctor::run(ctx, profile.as_deref(), prune_env_anchors.as_deref()),
-        Commands::Config { profile, command } => match command {
-            Some(ConfigCommand::Edit { source }) => {
-                commands::config::edit(ctx, profile.as_deref(), source.as_deref())
-            }
-            Some(ConfigCommand::Extract { source }) => {
-                commands::config::extract(ctx, profile.as_deref(), source.as_deref())
-            }
-            Some(ConfigCommand::Inline { source }) => {
-                commands::config::inline(ctx, profile.as_deref(), source.as_deref())
-            }
-            None => commands::config::effective(ctx, profile.as_deref()),
+        Commands::Config { command } => match command {
+            ConfigCommand::Show { profile } => commands::config::effective(ctx, profile.as_deref()),
+            ConfigCommand::Edit { source } => commands::config::edit(ctx, source.as_deref()),
+            ConfigCommand::Extract { source } => commands::config::extract(ctx, source.as_deref()),
+            ConfigCommand::Inline { source } => commands::config::inline(ctx, source.as_deref()),
         },
         Commands::Profile { command } => commands::profile::run(ctx, command.as_ref()),
         Commands::Site { command } => commands::site::run(ctx, command),

@@ -8,18 +8,38 @@ description: "Use when authoring or revising a wt TaskDocument body (execution/t
 Write each TaskDocument body as an implementation-grade plan the launched
 agent can execute without rediscovering the work. The agent starts in a fresh
 worktree with zero conversation context; the body is its only guaranteed
-input. Spec files support the body, they do not replace it.
+input. External notes support the body, they do not replace it.
 
 ## Canonical location
 
 - The TaskDocument body at `<repo-root>/.wt/execution/tasks/<slug>.toml` is
   the canonical home of implementation steps.
-- The spec's `03-Architect/07-tasks.md` keeps the slice graph only: slice
-  titles, dependencies, parallel groups, execution shape, and the path of each
-  TaskDocument. Do not duplicate step detail there.
-- The body may reference `planning/specs/<slug>/` files for rationale and
-  durable contracts, but the agent must be able to execute from the body
-  alone.
+- The slice graph (slice titles, dependencies, parallel groups, execution
+  shape, TaskDocument paths) lives wherever the prep happened — usually the
+  wt-ready handoff report or a leaf workspace. Do not duplicate step detail
+  there.
+- The body may mention external context paths (for example `.leaf/...` files)
+  as human-facing rationale only. wt does not parse or interpret them, and the
+  agent must be able to execute from the body alone.
+
+## Workflow handoff boundary
+
+This skill writes TaskDocument bodies; it does not derive execution shape or
+create saved Workflow TOML. When the slice graph contains parallel groups,
+dependencies, or any slice marked for `batch`, `stack`, `single`, `matrix`, or
+separate workflow execution, the prep pass must return to wt-ready after the
+bodies are written. wt-ready owns:
+
+- deriving direct vs `single` / `batch` / `stack` / `matrix` / wave-shaped
+  orchestration from the slice graph;
+- creating `<repo-root>/.wt/execution/workflows/<id>.toml` with
+  `wt workflow task --mode ...` when a saved workflow is needed;
+- reporting the TaskDocument mapping, linked workflow TOML path, `wt-work`
+  launch target, policy source, and watch cadence in the handoff.
+
+Do not call work launch-ready merely because all TaskDocument bodies are
+authored. If a workflow decision is still missing, report that execution
+handoff remains incomplete.
 
 ## Body structure
 
@@ -33,15 +53,14 @@ end, so constraints come before context, and context before steps.
    human-facing labels with the stable English key in parentheses.
 2. `## 필수 준수 (Hard constraints)` — within the first ~30 lines of the body.
    Design language rules, security envelope, cross-cutting prohibitions, and
-   base-branch restrictions, each with the canonical spec/contract path so the
-   agent can pull detail without scrolling. Background: empirically
-   (`.wt/planning/specs/wt-studio-authoring-surface/04-Feedback/10-retrospect.md`),
-   constraints buried in the lower half of a long body are silently dropped by
-   the first agent turn even when the spec fully states them; top-of-body
-   placement is the cheap structural fix. Omit the section only when the slice
-   genuinely has no such constraint.
+   base-branch restrictions, each with the canonical contract path so the
+   agent can pull detail without scrolling. Background: empirically (2026-05
+   wt-studio retrospective, historical), constraints buried in the lower half
+   of a long body are silently dropped by the first agent turn even when the
+   prep notes fully state them; top-of-body placement is the cheap structural
+   fix. Omit the section only when the slice genuinely has no such constraint.
 3. `## 맥락 (Context)` — one-line goal, verified evidence with `file:line` or
-   command output, and spec references by relative path.
+   command output, and external context references by path.
 4. `## 작업 (Tasks)` — implementation-grade tasks, the core of this skill.
 
 ## Task structure
@@ -133,8 +152,9 @@ These are plan failures; never write them in a body:
 
 Run this checklist on the finished body; fix inline.
 
-1. **Criteria coverage** — when a spec exists, every EARS criterion in
-   `02-Example/03-criteria.md` maps to a task. List gaps.
+1. **Criteria coverage** — when prep notes state acceptance criteria (for
+   example EARS sentences in a leaf workspace), every criterion maps to a
+   task. List gaps.
 2. **Placeholder scan** — search the body for the patterns above.
 3. **Symbol consistency** — every referenced path/symbol verifies against the
    repo (`grep -rn "<symbol>" src/`) or an earlier task; names match across
@@ -143,6 +163,24 @@ Run this checklist on the finished body; fix inline.
 5. **Command check** — every `Run:` line is executable verbatim from the
    worktree root, and the `계획` acceptance checks match commands the steps
    actually run.
+6. **Workflow handoff check** — if the slice graph has dependencies, parallel
+   groups, or any non-direct execution shape, verify that wt-ready will create
+   any required `.wt/execution/workflows/*.toml` and report the launch target
+   before `wt-work`.
+7. **Invariant coverage for load-bearing paths** — when the slice changes a
+   load-bearing path (a status filter, renderer, inventory scan, or any code
+   several call sites depend on), the body must enumerate the invariants that
+   path has to hold *simultaneously*, not just the happy-path change, with one
+   test per invariant. Happy-path tests pass while an adjacent invariant
+   silently breaks. Background: empirically (2026-06 task-triage, historical), a
+   body that specified only the intended change and green tests produced a fix
+   cascade — each narrow fix satisfied its finding but broke a different
+   invariant the contract never named, costing five review rounds. Standard
+   invariant axes to consider naming: malformed/corrupt input resilience,
+   record ordering/precedence (newest vs older), text-vs-TUI rendering parity,
+   single-scan performance (no per-row file reads), and agreement with the
+   canonical command's selector/semantics. Omit the check only when the slice
+   genuinely touches no shared path.
 
 ## Rationalizations
 
