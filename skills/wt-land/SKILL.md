@@ -296,10 +296,10 @@ Minimum rule:
 
 - Write a timing entry for every closed work item, even when no broader
   keep/problem/try lesson emerged.
-- Prefer `<repo-root>/.wt/planning/specs/<slug>/04-Feedback/10-retrospect.md` for
-  spec-backed work.
-- Use `<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` only for
-  cross-work, spec-less, or intentionally split lessons.
+- Write retrospectives directly to
+  `<repo-root>/.wt/execution/retrospectives/YYYY-MM-DD-<slug>.{md,toml}` —
+  the single home for execution retrospectives and the timing baseline
+  (`timing.md`). Do not scaffold them through the wt CLI.
 - Include outcome proof, cleanup proof, expected vs actual duration, watch
   cadence evidence, keep/problem/try items, action candidates, and any harness
   tuning that should permanently change agent behavior.

@@ -11,8 +11,9 @@ description: |
 Use this skill when the user wants one wt work item carried from preparation
 through execution, landing or discard, and harness settlement.
 
-각 단계에서 per-feature 문서(idea / spec / task / workflow / retrospect)
-골격이 필요하면 `wt scaffold <slug> --<kind>` 로 시드한다.
+TaskDocument나 workflow 골격이 필요하면 `wt scaffold <slug> --task` /
+`--workflow`로 시드한다. 탐색·사고 산출물은 wt 밖의 일이다 — `leaf-work`와
+`.leaf/` workspace를 사용한다.
 
 ## Lifecycle Reference
 
@@ -24,10 +25,11 @@ that preparation model.
 
 Apply these skills in order:
 
-1. Prepare unclear work with `wt-ready`. When the user is still exploring,
-   `wt-ready` captures or updates a kill-able idea and stops. When the user is
-   ready to commit, it settles purpose, requirements, examples/wireframes,
-   design, task graph, workflow policy, TaskDocuments, and launch target.
+1. Prepare work with `wt-ready`. It verifies prepared context is executable
+   as wt development work; when intent is still vague or design is open, it
+   routes the thinking to `leaf-work` and stops. When the work is executable,
+   it settles slices, execution shape, workflow policy, TaskDocuments, and the
+   launch target.
 2. Execute and coordinate with `wt-work`: launch the prepared task or workflow,
    capture the inspect target, monitor the run, inspect agent state, review
    code, run checks, sync the living spec, and send focused feedback until the
