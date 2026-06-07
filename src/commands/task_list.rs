@@ -25,7 +25,7 @@ pub(crate) fn run(ctx: &Ctx, all: bool) -> Result<()> {
     let report = collect(ctx, all)?;
     if should_open_browser(ctx) {
         if crate::tui::terminal_size_allows_task_browser() {
-            return crate::tui::run_task_browser_with(browser_rows(&report));
+            return crate::tui::run_task_browser_with(browser_app(&report));
         }
         ctx.ui.print_warning(
             "Terminal is too small for the task browser; falling back to text output",
@@ -51,6 +51,10 @@ pub(crate) struct TaskListReport {
 
 pub(crate) fn browser_rows(report: &TaskListReport) -> Vec<crate::tui::app::BrowserRow> {
     report.tasks.iter().map(browser_row).collect()
+}
+
+pub(crate) fn browser_app(report: &TaskListReport) -> crate::tui::app::AppState {
+    crate::tui::app::AppState::with_diagnostics(browser_rows(report), browser_diagnostics(report))
 }
 
 #[derive(Debug, Serialize)]
@@ -221,6 +225,23 @@ fn browser_preview_lines(row: &TaskListRow) -> Vec<String> {
         ),
         format!("Next        {}", row.origin_health.next_action),
     ]
+}
+
+fn browser_diagnostics(report: &TaskListReport) -> Vec<String> {
+    let mut diagnostics = Vec::new();
+    let invalid_count = report.invalid_tasks.len();
+    if invalid_count > 0 {
+        let noun = if invalid_count == 1 {
+            "task file"
+        } else {
+            "task files"
+        };
+        diagnostics.push(format!("{invalid_count} invalid {noun}"));
+    }
+    if report.hidden_task_count > 0 {
+        diagnostics.push(format!("{} hidden - use --all", report.hidden_task_count));
+    }
+    diagnostics
 }
 
 fn task_key_from_path(path: &Path) -> Result<String> {
@@ -607,6 +628,74 @@ id = "WT-142"
                 .iter()
                 .any(|line| line.contains("Linear WT-142"))
         );
+    }
+
+    fn browser_report_text(report: &TaskListReport) -> String {
+        let backend = ratatui::backend::TestBackend::new(100, 18);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let app = browser_app(report);
+        terminal
+            .draw(|frame| crate::tui::render::draw(frame, &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..18)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn browser_report_renders_invalid_task_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("valid.toml"),
+            r#"title = "Valid"
+branch = "valid"
+"#,
+        )
+        .unwrap();
+        fs::write(tasks_dir.join("bad.toml"), "unknown = true\n").unwrap();
+
+        let report = collect(&ctx, false).unwrap();
+        let text = browser_report_text(&report);
+
+        assert!(text.contains("1 invalid task file"));
+    }
+
+    #[test]
+    fn browser_report_renders_hidden_task_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("visible.toml"),
+            r#"title = "Visible"
+branch = "visible"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            tasks_dir.join("hidden.toml"),
+            r#"title = "Hidden"
+branch = "hidden"
+"#,
+        )
+        .unwrap();
+        task_run::create(&ctx, "hidden", "hidden", None, task_run::STATUS_PASSED).unwrap();
+
+        let report = collect(&ctx, false).unwrap();
+        let text = browser_report_text(&report);
+
+        assert!(text.contains("1 hidden"));
+        assert!(text.contains("use --all"));
     }
 
     #[test]

@@ -32,6 +32,7 @@ pub(crate) enum Outcome {
 #[derive(Debug, Clone)]
 pub(crate) struct AppState {
     rows: Vec<BrowserRow>,
+    diagnostics: Vec<String>,
     filter: String,
     selected_index: usize,
     mode: Mode,
@@ -39,9 +40,15 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
+    #[cfg(test)]
     pub(crate) fn new(rows: Vec<BrowserRow>) -> Self {
+        Self::with_diagnostics(rows, Vec::new())
+    }
+
+    pub(crate) fn with_diagnostics(rows: Vec<BrowserRow>, diagnostics: Vec<String>) -> Self {
         Self {
             rows,
+            diagnostics,
             filter: String::new(),
             selected_index: 0,
             mode: Mode::List,
@@ -74,6 +81,10 @@ impl AppState {
 
     pub(crate) fn row_count(&self) -> usize {
         self.rows.len()
+    }
+
+    pub(crate) fn diagnostics(&self) -> &[String] {
+        &self.diagnostics
     }
 
     #[cfg(test)]

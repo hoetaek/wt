@@ -1,4 +1,4 @@
-use crate::tui::app::{AppState, BrowserRow, KeyInput, Outcome};
+use crate::tui::app::{AppState, KeyInput, Outcome};
 use crate::tui::render::draw;
 use crate::tui::terminal::TerminalSession;
 use anyhow::{Context, Result};
@@ -16,11 +16,10 @@ pub(crate) fn terminal_size_allows_browser() -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn run_browser(rows: Vec<BrowserRow>) -> Result<()> {
+pub(crate) fn run_browser(mut app: AppState) -> Result<()> {
     let _session = TerminalSession::new()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("open task browser terminal")?;
-    let mut app = AppState::new(rows);
 
     loop {
         terminal

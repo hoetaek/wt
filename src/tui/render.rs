@@ -38,7 +38,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &AppState) {
 }
 
 fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
-    let summary = if app.is_empty() {
+    let mut summary = if app.is_empty() {
         "Origin health: no actionable tasks".to_string()
     } else {
         let counts = app
@@ -52,6 +52,10 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
             app.row_count()
         )
     };
+    if !app.diagnostics().is_empty() {
+        summary.push_str("  ");
+        summary.push_str(&app.diagnostics().join("  "));
+    }
     let header = Paragraph::new(summary).block(Block::default().borders(Borders::ALL));
     frame.render_widget(header, area);
 }
@@ -64,10 +68,15 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
         return;
     }
 
-    let rows = app
-        .visible_rows()
+    let visible_rows = app.visible_rows();
+    let selected_index = app.selected_visible_index().unwrap_or(0);
+    let row_capacity = table_row_capacity(area);
+    let offset = row_viewport_offset(selected_index, row_capacity);
+    let rows = visible_rows
         .into_iter()
         .enumerate()
+        .skip(offset)
+        .take(row_capacity)
         .map(|(index, row)| browser_row(row).style(row_style(app, index)));
     let table = Table::new(
         rows,
@@ -83,6 +92,18 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     .column_spacing(1)
     .block(Block::default().title("Tasks").borders(Borders::ALL));
     frame.render_widget(table, area);
+}
+
+fn table_row_capacity(area: Rect) -> usize {
+    area.height.saturating_sub(3) as usize
+}
+
+fn row_viewport_offset(selected_index: usize, row_capacity: usize) -> usize {
+    if row_capacity == 0 {
+        selected_index
+    } else {
+        selected_index.saturating_sub(row_capacity - 1)
+    }
 }
 
 fn browser_row(row: &BrowserRow) -> Row<'_> {
@@ -124,6 +145,8 @@ fn draw_preview(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let line = if app.mode() == Mode::FilterInput {
         format!("filter: {}  Esc clear", app.filter())
+    } else if !app.diagnostics().is_empty() {
+        format!("{}  {}", app.diagnostics().join("  "), app.status_line())
     } else {
         app.status_line().to_string()
     };
@@ -133,7 +156,7 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::app::{AppState, BrowserRow};
+    use crate::tui::app::{AppState, BrowserRow, KeyInput};
     use ratatui::{Terminal, backend::TestBackend};
 
     fn buffer_text(width: u16, height: u16, app: &AppState) -> String {
@@ -188,5 +211,28 @@ mod tests {
         let text = buffer_text(80, 10, &app);
         assert!(!text.contains("PREVIEW-MARKER"));
         assert!(text.contains("Origin sync TUI"));
+    }
+
+    #[test]
+    fn selected_row_remains_visible_when_list_scrolls() {
+        let mut app = AppState::new(
+            (0..30)
+                .map(|idx| BrowserRow {
+                    key: format!("task-{idx}"),
+                    title: format!("Task {idx}"),
+                    status: "stale".into(),
+                    origin_label: format!("Linear WT-{idx}"),
+                    next_action: "fetch".into(),
+                    preview_lines: vec![format!("Origin      Linear WT-{idx}")],
+                })
+                .collect(),
+        );
+        for _ in 0..29 {
+            app.handle(KeyInput::Down);
+        }
+
+        let text = buffer_text(80, 12, &app);
+
+        assert!(text.contains("task-29"));
     }
 }
