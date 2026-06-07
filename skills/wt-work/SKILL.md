@@ -263,10 +263,13 @@ Passing tests and a contract match are not proof of correctness — they only
 confirm the happy path the author chose to cover. For changes to a load-bearing
 path (a status filter, renderer, inventory scan, or any code several call sites
 depend on), do not stop at green tests: first enumerate the invariants that path
-must hold simultaneously, then adversarially try to break each one. Standing
-lenses to apply: malformed/corrupt input, ordering and precedence (newest vs
-older records), text-vs-TUI parity, O(N) re-scans, and selector/semantics
-agreement with the canonical command. Empirically (2026-06 task-triage), a
+must hold simultaneously, then adversarially try to break each one. The lenses
+are general, not CLI/TUI-specific — apply whichever fit the surface (CLI, TUI,
+web/`wt serve`, JSON/API, file artifact): input resilience (malformed, corrupt,
+empty, boundary); ordering, precedence, concurrency (newest-vs-older, TOCTOU);
+cross-representation parity (every rendering of the same value agrees — text,
+TUI, web, JSON); cost/scaling (no redundant N× work); and semantic agreement
+with the canonical source of truth. Empirically (2026-06 task-triage), a
 review that checked only "tests green + matches the contract I wrote" approved
 fixes that an independent base-diff review then found broke an adjacent
 invariant five rounds running — and each narrow fix introduced the next defect.

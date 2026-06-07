@@ -175,12 +175,18 @@ Run this checklist on the finished body; fix inline.
    silently breaks. Background: empirically (2026-06 task-triage, historical), a
    body that specified only the intended change and green tests produced a fix
    cascade — each narrow fix satisfied its finding but broke a different
-   invariant the contract never named, costing five review rounds. Standard
-   invariant axes to consider naming: malformed/corrupt input resilience,
-   record ordering/precedence (newest vs older), text-vs-TUI rendering parity,
-   single-scan performance (no per-row file reads), and agreement with the
-   canonical command's selector/semantics. Omit the check only when the slice
-   genuinely touches no shared path.
+   invariant the contract never named, costing five review rounds. The invariant
+   axes are general, not CLI/TUI-specific; name whichever apply to this surface
+   (a CLI, a TUI, a web/`wt serve` view, a JSON/API response, a file artifact):
+   input resilience (malformed, corrupt, empty, boundary); ordering, precedence,
+   and concurrency (newest-vs-older, two writers, TOCTOU); cross-representation
+   parity (every rendering of the same value agrees — text, TUI, web, JSON);
+   cost/scaling (no redundant N× work such as per-item re-scans or re-fetches);
+   and semantic agreement with the canonical source of truth. The 2026-06 case
+   happened to surface as text-vs-TUI parity and a per-row file scan, but those
+   are instances of cross-representation parity and cost/scaling — treat the
+   general axis as the checklist, the wt instance as one example. Omit the check
+   only when the slice genuinely touches no shared path.
 
 ## Rationalizations
 
