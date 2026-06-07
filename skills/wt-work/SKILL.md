@@ -183,6 +183,13 @@ worker runtime state and `wt msg watch` for report arrival; they answer
 different questions. Use `wt msg list --agent <coordinator-id>` for a snapshot
 instead of a wait.
 
+Known limitation: an already-answered request message that stays `new`
+(unclaimed) in the coordinator inbox makes `wt msg watch` exit immediately on
+every invocation. When such a message lingers, switch report waiting to
+`wt agent watch <target>` (idle transition as the wake signal) until the
+message is consumed. (2026-06-07 wt-leaf-separation 회고 — remove this note if
+wt gains a request ack/claim mechanism.)
+
 If status is `running`, let the agent work unless clearly stuck. If status is
 `needs_input`, Steer. If status is `idle`, inspect the worktree instead of
 polling forever.
