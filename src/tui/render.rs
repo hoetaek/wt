@@ -9,7 +9,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 
 const PREVIEW_MIN_HEIGHT: u16 = 16;
 const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
@@ -291,32 +291,34 @@ fn draw_output_panel(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 
 fn draw_body_view(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let visible_count = area.height.saturating_sub(2) as usize;
+    let content_width = area.width.saturating_sub(2).max(1) as usize;
     let body_lines = app.body_lines();
-    let start = body_viewport_start(body_lines.len(), visible_count, app.body_scroll());
-    let mut rendered_lines = body_lines
+    let mut visual_lines = body_lines
         .iter()
-        .skip(start)
-        .take(visible_count)
-        .map(|(kind, text)| body_line(kind, text))
+        .flat_map(|(kind, text)| body_visual_lines(kind, text, content_width))
         .collect::<Vec<_>>();
-    if rendered_lines.is_empty() {
-        rendered_lines.push(Line::styled("no body", theme::dim_style()));
+    if visual_lines.is_empty() {
+        visual_lines.push(Line::styled("no body", theme::dim_style()));
     }
 
-    let percent = body_scroll_percent(body_lines.len(), visible_count, start);
+    let start = body_viewport_start(visual_lines.len(), visible_count, app.body_scroll());
+    let percent = body_scroll_percent(visual_lines.len(), visible_count, start);
     let title = app
         .selected_row()
         .map(|row| format!("Body {} {percent}%", row.title))
         .unwrap_or_else(|| format!("Body {percent}%"));
-    let body = Paragraph::new(rendered_lines)
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_style(theme::chrome_style())
-                .title_style(theme::chrome_style()),
-        );
+    let rendered_lines = visual_lines
+        .into_iter()
+        .skip(start)
+        .take(visible_count)
+        .collect::<Vec<_>>();
+    let body = Paragraph::new(rendered_lines).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(theme::chrome_style())
+            .title_style(theme::chrome_style()),
+    );
     frame.render_widget(body, area);
 }
 
@@ -335,20 +337,52 @@ fn body_scroll_percent(line_count: usize, visible_count: usize, start: usize) ->
     visible_end.saturating_mul(100) / line_count
 }
 
-fn body_line(kind: &LineKind, text: &str) -> Line<'static> {
+fn body_visual_lines(kind: &LineKind, text: &str, width: usize) -> Vec<Line<'static>> {
+    let (text, style) = body_text_and_style(kind, text);
+    wrap_body_text(&text, width)
+        .into_iter()
+        .map(|line| Line::styled(line, style))
+        .collect()
+}
+
+fn body_text_and_style(kind: &LineKind, text: &str) -> (String, Style) {
     match kind {
-        LineKind::Heading => Line::styled(text.to_string(), body_heading_style()),
-        LineKind::Code => Line::styled(text.to_string(), theme::dim_style()),
+        LineKind::Heading => (text.to_string(), body_heading_style()),
+        LineKind::Code => (text.to_string(), theme::dim_style()),
         LineKind::Checkbox(checked) => {
             let marker = if *checked { "☑ " } else { "☐ " };
-            Line::from(vec![Span::raw(marker), Span::raw(text.to_string())])
+            (format!("{marker}{text}"), Style::default())
         }
-        LineKind::Plain => Line::from(text.to_string()),
+        LineKind::Plain => (text.to_string(), Style::default()),
     }
 }
 
 fn body_heading_style() -> Style {
     Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+}
+
+fn wrap_body_text(text: &str, width: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0;
+
+    for ch in text.chars() {
+        let ch_width = measure_text_width(&ch.to_string());
+        if current_width > 0 && current_width + ch_width > width {
+            lines.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += ch_width;
+    }
+
+    lines.push(current);
+    lines
 }
 
 fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
@@ -923,6 +957,31 @@ mod tests {
         let text = buffer_text(80, 24, &app);
 
         assert!(text.contains("no body"));
+    }
+
+    #[test]
+    fn body_view_scroll_reaches_wrapped_tail_of_long_single_line() {
+        let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
+        let mut words = (0..40)
+            .map(|index| format!("word{index}"))
+            .collect::<Vec<_>>();
+        words.push("tail-marker".into());
+        browser_row.body = words.join(" ");
+        let mut app = AppState::new(vec![browser_row]);
+        app.handle(KeyInput::Char('v'));
+
+        let initial = buffer_text(32, 10, &app);
+        assert!(!initial.contains("tail-marker"));
+
+        for _ in 0..30 {
+            app.handle(KeyInput::Char('j'));
+            let text = buffer_text(32, 10, &app);
+            if text.contains("tail-marker") {
+                return;
+            }
+        }
+
+        panic!("expected body view scroll to reach wrapped tail of a long source line");
     }
 
     #[test]

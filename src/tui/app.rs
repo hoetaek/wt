@@ -641,8 +641,9 @@ impl AppState {
     }
 
     fn scroll_body_down(&mut self, amount: usize) {
-        let max_scroll = self.body_lines().len().saturating_sub(1);
-        self.body_scroll = self.body_scroll.saturating_add(amount).min(max_scroll);
+        if !self.body_lines().is_empty() {
+            self.body_scroll = self.body_scroll.saturating_add(amount);
+        }
     }
 
     fn scroll_body_up(&mut self, amount: usize) {
@@ -650,8 +651,9 @@ impl AppState {
     }
 
     fn clamp_body_scroll(&mut self) {
-        let max_scroll = self.body_lines().len().saturating_sub(1);
-        self.body_scroll = self.body_scroll.min(max_scroll);
+        if self.body_lines().is_empty() {
+            self.body_scroll = 0;
+        }
     }
 
     fn move_down(&mut self) {
