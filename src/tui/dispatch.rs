@@ -4,13 +4,8 @@ use crate::origin_action_menu::OriginAction;
 use crate::origin_snapshot::{read_task_snapshot, read_workflow_snapshot};
 use crate::task;
 use crate::tui::remote_ui::{TuiUi, UiRequest};
-use crate::tui::terminal::{TerminalEffects, TerminalSession};
 use crate::workflow;
 use anyhow::{Context, Result, bail};
-use ratatui::Terminal;
-use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
-use ratatui::crossterm::terminal;
 use std::sync::mpsc;
 
 /// Where an action's result goes. Worker actions run backend flows on a worker
@@ -231,68 +226,6 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             | OriginAction::Push
             | OriginAction::Attach => bail!("{action:?} is a worker action"),
         }
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) trait DispatchLifecycle {
-    fn suspend(&mut self) -> Result<()>;
-    fn announce(&mut self, command_hint: &str);
-    fn wait_for_ack(&mut self);
-    fn resume(&mut self) -> Result<()>;
-}
-
-#[allow(dead_code)]
-pub(crate) struct TerminalDispatchLifecycle<'a, E: TerminalEffects, B: Backend> {
-    session: &'a mut TerminalSession<E>,
-    terminal: &'a mut Terminal<B>,
-}
-
-#[allow(dead_code)]
-impl<'a, E: TerminalEffects, B: Backend> TerminalDispatchLifecycle<'a, E, B> {
-    pub(crate) fn new(session: &'a mut TerminalSession<E>, terminal: &'a mut Terminal<B>) -> Self {
-        Self { session, terminal }
-    }
-}
-
-#[allow(dead_code)]
-impl<E: TerminalEffects, B: Backend> DispatchLifecycle for TerminalDispatchLifecycle<'_, E, B> {
-    fn suspend(&mut self) -> Result<()> {
-        self.session.suspend()
-    }
-
-    fn announce(&mut self, command_hint: &str) {
-        println!("+ {command_hint}");
-        println!();
-    }
-
-    fn wait_for_ack(&mut self) {
-        println!();
-        println!("Press any key to return to the browser...");
-        // The session is suspended here, so the terminal is in cooked mode and
-        // buffers input line by line — a bare event::read() would wait for
-        // Enter. Read the ack in raw mode so any single key returns.
-        let raw_mode_enabled = terminal::enable_raw_mode().is_ok();
-        loop {
-            match event::read() {
-                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => break,
-                Ok(_) => continue,
-                Err(_) => break,
-            }
-        }
-        if raw_mode_enabled {
-            let _ = terminal::disable_raw_mode();
-        }
-    }
-
-    fn resume(&mut self) -> Result<()> {
-        self.session.resume()?;
-        // The alternate screen is fresh after resume while ratatui's back
-        // buffer still holds the pre-suspend frame; clear resets it so the
-        // next draw repaints the full browser instead of a stale diff.
-        self.terminal
-            .clear()
-            .context("clear TUI browser for full redraw after resume")
     }
 }
 
@@ -680,42 +613,6 @@ mod tests {
         assert_eq!(
             message,
             "Publish is not available for workflow 2026-06-06-001; attach an existing workflow origin instead"
-        );
-    }
-
-    struct NoopEffects;
-
-    impl crate::tui::terminal::TerminalEffects for NoopEffects {
-        fn enter(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn leave(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn resume_clears_terminal_to_force_full_redraw() {
-        use crate::tui::terminal::TerminalSession;
-        use ratatui::backend::TestBackend;
-        use ratatui::widgets::Paragraph;
-
-        let mut session = TerminalSession::with_effects(NoopEffects).unwrap();
-        let mut terminal = ratatui::Terminal::new(TestBackend::new(10, 3)).unwrap();
-        terminal
-            .draw(|frame| frame.render_widget(Paragraph::new("browser"), frame.area()))
-            .unwrap();
-        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "b");
-
-        let mut lifecycle = TerminalDispatchLifecycle::new(&mut session, &mut terminal);
-        lifecycle.suspend().unwrap();
-        lifecycle.resume().unwrap();
-
-        assert_eq!(
-            terminal.backend().buffer()[(0, 0)].symbol(),
-            " ",
-            "resume은 back buffer를 리셋해 다음 draw가 full redraw가 되게 한다"
         );
     }
 

@@ -120,22 +120,6 @@ impl<E: TerminalEffects> TerminalSession<E> {
             active: true,
         })
     }
-
-    pub(crate) fn suspend(&mut self) -> Result<()> {
-        if self.active {
-            self.effects.leave()?;
-            self.active = false;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn resume(&mut self) -> Result<()> {
-        if !self.active {
-            self.effects.enter()?;
-            self.active = true;
-        }
-        Ok(())
-    }
 }
 
 impl<E: TerminalEffects> Drop for TerminalSession<E> {
@@ -229,42 +213,6 @@ mod tests {
             let _session = TerminalSession::with_effects(effects).unwrap();
             assert_eq!(*log.lock().unwrap(), vec!["enter"]);
         }
-        assert_eq!(*log.lock().unwrap(), vec!["enter", "leave"]);
-    }
-
-    #[test]
-    fn suspend_resume_pairs_leave_and_enter() {
-        let effects = RecordingEffects::default();
-        let log = Arc::clone(&effects.log);
-        let mut session = TerminalSession::with_effects(effects).unwrap();
-        session.suspend().unwrap();
-        assert_eq!(*log.lock().unwrap(), vec!["enter", "leave"]);
-        session.resume().unwrap();
-        assert_eq!(*log.lock().unwrap(), vec!["enter", "leave", "enter"]);
-        drop(session);
-        assert_eq!(
-            *log.lock().unwrap(),
-            vec!["enter", "leave", "enter", "leave"]
-        );
-    }
-
-    #[test]
-    fn drop_after_suspend_does_not_double_leave() {
-        let effects = RecordingEffects::default();
-        let log = Arc::clone(&effects.log);
-        let mut session = TerminalSession::with_effects(effects).unwrap();
-        session.suspend().unwrap();
-        drop(session);
-        assert_eq!(*log.lock().unwrap(), vec!["enter", "leave"]);
-    }
-
-    #[test]
-    fn suspend_twice_is_idempotent() {
-        let effects = RecordingEffects::default();
-        let log = Arc::clone(&effects.log);
-        let mut session = TerminalSession::with_effects(effects).unwrap();
-        session.suspend().unwrap();
-        session.suspend().unwrap();
         assert_eq!(*log.lock().unwrap(), vec!["enter", "leave"]);
     }
 
