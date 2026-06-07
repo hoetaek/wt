@@ -38,7 +38,7 @@ Run Agents:
 
 Setup:
   init        Start the config recommendation wizard
-  config      Print, edit, or refactor config
+  config      Show, edit, or refactor config
   profile     List or manage named profile configs
   setup       Install or remove per-machine integration
   doctor      Check config and local tools
@@ -344,16 +344,13 @@ pub enum Commands {
         #[arg(long = "prune-env-anchors", value_name = "KEY")]
         prune_env_anchors: Option<String>,
     },
-    /// Print, edit, or refactor wt config files
+    /// Show, edit, or refactor wt config files
     #[command(
-        long_about = "Print, edit, or refactor wt-managed config files. Shared repo config is .wt.toml and SOURCE name `shared`; private repo config is <repo-root>/.wt/config/local.toml and SOURCE name `local`; named profile config is <repo-root>/.wt/config/profiles/<name>/profile.toml and SOURCE name `profiles/<name>`. Config edit, extract, and inline reject files outside that managed namespace."
+        long_about = "Show, edit, or refactor wt-managed config files.\n\n`wt config show` is the canonical display surface for effective config. Shared repo config is .wt.toml and SOURCE name `shared`; private repo config is <repo-root>/.wt/config/local.toml and SOURCE name `local`; named profile config is <repo-root>/.wt/config/profiles/<name>/profile.toml and SOURCE name `profiles/<name>`. Config edit, extract, and inline reject files outside that managed namespace."
     )]
     Config {
-        /// Show effective config using <repo-root>/.wt/config/profiles/<name>
-        #[arg(long)]
-        profile: Option<String>,
         #[command(subcommand)]
-        command: Option<ConfigCommand>,
+        command: ConfigCommand,
     },
     /// List or manage named profile configs
     #[command(
@@ -436,6 +433,15 @@ pub enum ShellInitShell {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum ConfigCommand {
+    /// Show effective config
+    #[command(
+        long_about = "`wt config show` is the canonical display surface for effective config. Omit --profile to show the effective repo config, or pass --profile <PROFILE> to show the config after applying <repo-root>/.wt/config/profiles/<name>/profile.toml."
+    )]
+    Show {
+        /// Show effective config using <repo-root>/.wt/config/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Open a config file in the configured editor
     #[command(
         long_about = "Open a wt-managed config source in the configured editor. SOURCE may be `shared`, `local`, `profiles/<name>`, or a canonical path to one of those managed files. Missing managed files are created by the editor path after parent directories are prepared. Omit SOURCE to select from existing managed config files; non-managed paths are rejected before the editor opens."
@@ -3011,27 +3017,37 @@ mod tests {
     }
 
     #[test]
-    fn config_subcommand() {
-        let cli = parse(&["wt", "config"]);
+    fn config_show_subcommand_parses() {
+        let cli = parse(&["wt", "config", "show"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
-                profile: None,
-                command: None
+                command: ConfigCommand::Show { profile: None }
             })
         ));
     }
 
     #[test]
-    fn config_accepts_profile_flag() {
-        let cli = parse(&["wt", "config", "--profile", "codex"]);
+    fn config_show_accepts_profile_flag() {
+        let cli = parse(&["wt", "config", "show", "--profile", "codex"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
-                profile: Some(ref profile),
-                command: None
+                command: ConfigCommand::Show { profile: Some(ref profile) }
             }) if profile == "codex"
         ));
+    }
+
+    #[test]
+    fn config_show_requires_explicit_subcommand() {
+        let result = Cli::try_parse_from(["wt", "config"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn config_show_rejects_old_top_level_profile_flag() {
+        let result = Cli::try_parse_from(["wt", "config", "--profile", "codex"]);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -3040,8 +3056,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
-                profile: None,
-                command: Some(ConfigCommand::Edit { ref source }),
+                command: ConfigCommand::Edit { ref source },
             }) if source.as_deref() == Some(std::path::Path::new(".wt/config/local.toml"))
         ));
     }
@@ -3052,8 +3067,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
-                profile: None,
-                command: Some(ConfigCommand::Extract { ref source }),
+                command: ConfigCommand::Extract { ref source },
             }) if source.as_deref() == Some(std::path::Path::new(".wt/config/local.toml"))
         ));
     }
@@ -3069,8 +3083,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
-                profile: None,
-                command: Some(ConfigCommand::Inline { ref source }),
+                command: ConfigCommand::Inline { ref source },
             }) if source.as_deref() == Some(std::path::Path::new(".wt/config/profiles/codex/profile.toml"))
         ));
     }
@@ -3320,6 +3333,22 @@ mod tests {
         assert!(help.contains("SOURCE name `local`"));
         assert!(help.contains("SOURCE name `profiles/<name>`"));
         assert!(help.contains("reject files outside that managed namespace"));
+    }
+
+    #[test]
+    fn config_help_describes_show_as_canonical_display() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("config")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("wt config show"), "config help was:\n{help}");
+        assert!(help.contains("show"), "config help was:\n{help}");
+        assert!(help.contains("edit"), "config help was:\n{help}");
+        assert!(help.contains("extract"), "config help was:\n{help}");
+        assert!(help.contains("inline"), "config help was:\n{help}");
     }
 
     #[test]

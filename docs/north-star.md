@@ -168,7 +168,7 @@ The intended config precedence is:
 global < team integration < personal < command-line flags
 ```
 
-`wt config` should show where each effective value came from. Debuggability is
+`wt config show` should show where each effective value came from. Debuggability is
 part of the contract.
 
 All worktrees for one repository should resolve the same personal storage root.

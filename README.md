@@ -439,13 +439,14 @@ threads, comments, and checks. Examples:
 Inspect the effective config:
 
 ```bash
-wt config
-wt config --profile codex
+wt config show
+wt config show --profile codex
 ```
 
-Treat `wt config` output as the source of truth for runtime behavior. Config
-files store user intent and overrides, while `wt config` shows merged profile
-layers plus built-in defaults in the shape users should copy and edit.
+Treat `wt config show` output as the source of truth for runtime behavior.
+Config files store user intent and overrides, while `wt config show` shows
+merged profile layers plus built-in defaults in the shape users should copy and
+edit.
 
 Workflow preparation reads policy from the effective config:
 
@@ -478,28 +479,28 @@ recorded dedicated Codex base review evidence for the TaskRun after the latest
 Agent Completion Report. `wt workflow pass` rejects required-review tasks
 without fresh accepted Codex base review evidence for the current parent.
 
-`wt config` prints the effective `[workflow]` and `[review]` policy, including
-the built-in defaults above. `wt init` writes an explicit starter `[workflow]`
-policy so the PR and landing behavior for newly prepared workflows is visible in
-the generated config. It only writes `[review]` when preserving an existing
-explicit review policy, so local init does not accidentally override a shared
-or root review requirement.
+`wt config show` prints the effective `[workflow]` and `[review]` policy,
+including the built-in defaults above. `wt init` writes an explicit starter
+`[workflow]` policy so the PR and landing behavior for newly prepared workflows
+is visible in the generated config. It only writes `[review]` when preserving an
+existing explicit review policy, so local init does not accidentally override a
+shared or root review requirement.
 
-When `[workspace]` is configured, `wt config` also prints effective workspace
+When `[workspace]` is configured, `wt config show` also prints effective workspace
 colors, including built-in defaults. `wt init` writes the starter color map;
 edit that line to change or disable a color.
 When `[workspace.browser]` is configured with `mode = "system"` or
-`mode = "chrome_devtools"`, `wt config` prints the effective browser launch URL.
-For Chrome DevTools mode, `wt config` also prints the effective Chrome user data
-directory. The port is shown only when it is configured; otherwise setup
+`mode = "chrome_devtools"`, `wt config show` prints the effective browser launch
+URL. For Chrome DevTools mode, `wt config show` also prints the effective Chrome
+user data directory. The port is shown only when it is configured; otherwise setup
 reserves an available localhost port at runtime.
 
-When an active `[site]` provider is configured, `wt config` prints the site
+When an active `[site]` provider is configured, `wt config show` prints the site
 defaults runtime setup uses, such as the generated name template, root,
 security, URL template, and Traefik target. A disabled `provider = "none"` site
 section is omitted from effective output. Browser launch behavior belongs to
 `[workspace.browser]`, not `[site]`.
-When `[editor]` is configured, `wt config` prints the effective editor
+When `[editor]` is configured, `wt config show` prints the effective editor
 placement default, `cmux_surface`, unless it is overridden. In cmux, that
 default opens the editor in a right-side split pane next to the caller surface.
 
@@ -597,8 +598,8 @@ Named profile `profile.toml` is an override layer: omitted `[agent]` fields
 inherit lower-precedence config, present fields override, and `args = []`
 explicitly clears inherited agent args.
 
-Omitting `--profile` means the effective config. `default` is not a profile
-name.
+Omitting `--profile` on `wt config show` means the effective config. `default`
+is not a profile name.
 
 Selected profile subsets for local TaskDocuments belong to saved workflow matrix
 mode:
@@ -640,7 +641,7 @@ there for one named profile.
 | `wt as <agent-id> -- <command...>` | Run any command with an explicit wt agent identity |
 | `wt send` | Send a message to the matching task agent surface |
 | `wt done` | Remove completed or disposable worktrees and branches |
-| `wt config` | Print, edit, extract, or inline config |
+| `wt config show/edit/extract/inline` | Show, edit, extract, or inline config |
 | `wt profile` | List named profiles (omission default for `wt profile list`) or scaffold a new one with `wt profile create <name>` |
 | `wt site` | Inspect and manage local site provider helpers |
 

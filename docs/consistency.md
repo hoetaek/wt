@@ -48,7 +48,7 @@ Config precedence는 다음 순서다.
 global < team integration < personal < command-line flags
 ```
 
-`wt config`는 effective behavior를 판단하는 source of truth이며, 가능한 한 어떤 scope에서
+`wt config show`는 effective behavior를 판단하는 source of truth이며, 가능한 한 어떤 scope에서
 어떤 값이 왔는지 보여줘야 한다.
 
 ### Personal Storage
@@ -758,13 +758,14 @@ Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 �
 생략되면 `wt`가 내장 cmux named-color palette의 다음 색을 고르고 workflow file에
 기록한다. 색상은 mode나 task의 의미가 아니라 workflow-level 표시다.
 
-`wt config` 출력은 runtime behavior를 판단하는 effective source of truth다. `.wt.toml`,
-`<repo-root>/.wt/config/local.toml`, profile file은 사용자 intent와 override를 저장하고, `wt config`는
-merge된 layer, convention file, built-in default를 사용자가 복사해 수정할 수 있는 형태로
-보여준다. 명령 구현은 user-facing default를 각 call site에서 새로 해석하지 말고 config
-모델의 effective accessor나 effective policy snapshot을 거쳐 적용해야 한다.
-활성 section의 runtime default는 `wt config` 출력에 materialize한다. 예를 들어 active
-`[site]` provider는 name/root/secure/url과 Traefik target default까지 보여주고,
+`wt config show` 출력은 runtime behavior를 판단하는 effective source of truth다. `.wt.toml`,
+`<repo-root>/.wt/config/local.toml`, profile file은 사용자 intent와 override를 저장하고,
+`wt config show`는 merge된 layer, convention file, built-in default를 사용자가 복사해
+수정할 수 있는 형태로 보여준다. `config`는 `show/edit/extract/inline`의 action namespace이므로
+bare `wt config`에는 omission-default display action이 없다. 명령 구현은 user-facing default를
+각 call site에서 새로 해석하지 말고 config 모델의 effective accessor나 effective policy snapshot을
+거쳐 적용해야 한다. 활성 section의 runtime default는 `wt config show` 출력에 materialize한다.
+예를 들어 active `[site]` provider는 name/root/secure/url과 Traefik target default까지 보여주고,
 `[workspace.browser]`는 setup/open 때 browser를 띄울지와 어떤 URL을 열지 결정한다.
 `[workspace.browser.chrome_devtools]`는 `mode = "chrome_devtools"`일 때만 쓰는 Chrome
 DevTools launch detail(`port`, `user_data_dir`)을 소유한다. 이 detail은 browser mode의
@@ -811,8 +812,9 @@ setup mode, profile 이름, workflow `mode = "single" | "batch" | "stack" | "mat
 Workflow run은 필요한 경우 TaskDocument setup을 거치더라도 최종 visible grouping color는
 저장된 `workflow.color`를 적용한다. `[workspace].colors` key를 생략하면 내장 기본값
 `task = "blue"`, `issue = "blue"`, `branch = "green"`, `pr = "magenta"`를 쓴다.
-`wt config`는 이 effective 색상값을 출력하므로 사용자가 수정할 기준은 `wt config` 출력이다.
-`wt init`은 generated config의 active `[workspace]`에 이 기본 `colors = { ... }` map을 명시한다.
+`wt config show`는 이 effective 색상값을 출력하므로 사용자가 수정할 기준은 `wt config show`
+출력이다. `wt init`은 generated config의 active `[workspace]`에 이 기본 `colors = { ... }` map을
+명시한다.
 기존 설정을 다시 init할 때는 기존 color override를 effective 값으로 보존한다. 색을 아예 쓰지 않을
 kind는 `task = ""`처럼 빈 문자열로 override한다.
 
@@ -865,7 +867,7 @@ profile이 작업 묶음인지 다시 추론해야 한다. 이런 혼동은 기�
 
 ### Config Merge Semantics
 
-`wt config`는 `.wt.toml` (shared) → `<repo-root>/.wt/config/local.toml` (personal) →
+`wt config show`는 `.wt.toml` (shared) → `<repo-root>/.wt/config/local.toml` (personal) →
 named profile (`<repo-root>/.wt/config/profiles/<name>/`) 순서로 layer를 합쳐
 effective config을 만든다. 같은 코드 경로(`merge_config`)가 모든 layer에 적용되므로
 layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 방식이 다르고, 그 차이를
@@ -1457,9 +1459,9 @@ The built-in config defaults are `pull_request = "none"`, `landing = "manual"`, 
 `review.codex_base = "none"`.
 Explicit workflow preparation flags override the config for one run while keeping the
 same value names and failing early for conflicting forms instead of introducing aliases.
-`wt config` shows the effective `[workflow]` and `[review]` policy, including built-in
-defaults, so scripts and humans can inspect the actual policy that new workflow
-preparation will use.
+`wt config show` shows the effective `[workflow]` and `[review]` policy, including
+built-in defaults, so scripts and humans can inspect the actual policy that new
+workflow preparation will use.
 `wt init` does not write a commented optional `[workflow]` tutorial block; generated config
 writes an explicit starter `[workflow]` policy with `pull_request = "none"` and `landing = "manual"`
 unless it is preserving an existing explicit workflow policy from the target config.

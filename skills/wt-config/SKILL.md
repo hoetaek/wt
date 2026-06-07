@@ -42,7 +42,7 @@ Run these before giving a concrete recommendation:
 git rev-parse --path-format=absolute --show-toplevel
 find . "$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null)/.wt" -maxdepth 3 \
   -name '.wt.toml' -o -name 'config.toml' -o -name 'profile.toml' 2>/dev/null
-wt config
+wt config show
 wt doctor
 rg --files | rg '(^|/)(Cargo.toml|Cargo.lock|package.json|pnpm-lock.yaml|yarn.lock|bun.lockb?|pyproject.toml|uv.lock|composer.json|Gemfile|Makefile|justfile|Justfile|deny.toml|rust-toolchain.toml|\.github/workflows/.*\.ya?ml)$'
 ```
@@ -215,7 +215,7 @@ For `[workspace.browser.chrome_devtools]`, omit it when browser mode is
 ## Diagnose Existing Setup Against Intent
 
 Before recommending changes, reconcile three views: what files declare, what
-`wt config` actually resolves, and what the user intends. Many setups fail
+`wt config show` actually resolves, and what the user intends. Many setups fail
 silently because the resolved effective config diverges from the written intent.
 
 The canonical merge rules per section (REPLACE / extend / dedupe / append /
@@ -232,14 +232,14 @@ Run this triangulation pass:
    the profile expects to inject.
 2. **Read the user's intent.** What did the user just paste, ask for, or
    describe? If unclear, ask one targeted question — do not guess.
-3. **Run `wt config` and compare.** The effective output is the source of truth
+3. **Run `wt config show` and compare.** The effective output is the source of truth
    for what wt will actually apply. Diff it against the user's intent.
 
 For every divergence, propose a concrete fix. Common divergences to check
 explicitly:
 
 - **Profile dormancy.** `<repo-root>/.wt/config/profiles/<name>/` exists
-  (with `profile.toml`, `scaffold/`, or `prompts/`) but `wt config` shows no
+  (with `profile.toml`, `scaffold/`, or `prompts/`) but `wt config show` shows no
   `copy_as` pointing into that scaffold and no prompts from
   `profile.toml`/`prompts/*.md`. Cause: `.wt.toml`/`local.toml` is missing
   `[profile] name = "<name>"`, and no command passes `--profile <name>`. Fix:
@@ -247,14 +247,14 @@ explicitly:
   directory if it is unused.
 - **Named profile + inline `[profile.agent.*]` collision.** When `[profile]` has
   both `name = "<name>"` and inline settings like `[profile.agent.prompt]`,
-  `wt config` fails with a hard parse error (schema validation rejects the
+  `wt config show` fails with a hard parse error (schema validation rejects the
   combination). Fix: pick one — drop `name` to use inline, or move the inline
   prompts into the named profile's `prompts/*.md` (or its own `profile.toml`'s
   `[agent.prompt]`) and delete the inline block.
-- **Scaffold drift.** `[profile] name = "<name>"` is set and `wt config` shows
+- **Scaffold drift.** `[profile] name = "<name>"` is set and `wt config show` shows
   the `copy_as` scaffold entry, but `scaffold/` is empty or missing the files
   the user expects. Fix: populate `<repo-root>/.wt/config/profiles/<name>/scaffold/`
-  with the actual files the worktree should receive, then re-run `wt config`.
+  with the actual files the worktree should receive, then re-run `wt config show`.
 - **Prompt file vs inline collision.** `profile.toml` defines
   `[agent.prompt].<mode>` and the same profile has `prompts/<mode>.md`.
   Behavior: file wins, stderr emits `warning: [agent.prompt].<mode> from
@@ -263,7 +263,7 @@ explicitly:
   override"), the warning is informational and no fix is needed — that pattern
   is supported. `prompts/<mode>.append.md` is not a conflict; it layers on top
   of either source.
-- **Env template no-op or wrong target.** `wt config` shows `[setup.env]`, but
+- **Env template no-op or wrong target.** `wt config show` shows `[setup.env]`, but
   the worktree will not have `.env` after copy/link/copy_as, or the intended
   file is nested/suffixed such as `frontend/.env.development`. Cause:
   `[setup.env]` only updates root `.env` and skips missing targets. Fix: add
@@ -271,7 +271,7 @@ explicitly:
   nested keys under `[setup.env_files."path"]`, or remove the env template if
   no target file should exist.
 - **Effective ≠ files in another way.** Any setting the user clearly intended
-  (a prompt, a tab, a command) is absent from `wt config`. Trace which file
+  (a prompt, a tab, a command) is absent from `wt config show`. Trace which file
   owns it and why the merge dropped it (wrong section, wrong owner file,
   shadowed by profile, etc.).
 
@@ -284,7 +284,7 @@ Use this order:
 
 1. Observed facts: project type, CI checks, detected commands, existing
    effective config, available/missing tools.
-2. Divergences between files, intent, and `wt config` — with concrete fixes
+2. Divergences between files, intent, and `wt config show` — with concrete fixes
    (skip this item only when there is no existing setup).
 3. Recommended owner file.
 4. Recommended active TOML.
@@ -300,15 +300,15 @@ catalog.
 After recommending or editing config, validate through the public interface:
 
 ```bash
-wt config
+wt config show
 wt doctor
 ```
 
 If the recommendation includes named profiles, also run:
 
 ```bash
-wt config --profile <name>
-wt config | grep -E 'copy_as|\[agent' # named profile actually merged into effective?
+wt config show --profile <name>
+wt config show | grep -E 'copy_as|\[agent' # named profile actually merged into effective?
 ```
 
 If this skill file or wt init behavior changes inside the `wt` repo, validate

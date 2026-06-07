@@ -7204,6 +7204,7 @@ CODEX_MODE = "1"
             "-C",
             temp.path().to_str().unwrap(),
             "config",
+            "show",
             "--profile",
             "codex",
         ])
@@ -7214,7 +7215,7 @@ CODEX_MODE = "1"
         .clone();
 
     let implicit = wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .get_output()
@@ -7285,7 +7286,7 @@ fn config_renders_builtin_workflow_defaults() {
     git_init(temp.path());
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[workflow]"))
@@ -7300,7 +7301,7 @@ fn config_renders_builtin_workspace_color_defaults() {
     write_personal_config(temp.path(), "[workspace]\ntabs = [\"lazygit\"]\n");
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[workspace]"))
@@ -7316,7 +7317,7 @@ fn config_rejects_legacy_new_workspace_color_key() {
     write_personal_config(temp.path(), "[workspace]\ncolors = { new = \"green\" }\n");
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("[workspace].colors.new"))
@@ -7333,7 +7334,7 @@ fn config_renders_workspace_chrome_devtools_browser_policy_defaults() {
     );
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[workspace.browser]"))
@@ -7359,7 +7360,7 @@ fn config_preserves_empty_workspace_color_overrides() {
     );
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -7377,7 +7378,7 @@ fn config_renders_active_site_runtime_defaults() {
     );
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[site]"))
@@ -7401,7 +7402,7 @@ fn config_omits_inactive_site_section() {
     write_personal_config(temp.path(), "[site]\nprovider = \"none\"\n");
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[site]").not());
@@ -7414,7 +7415,7 @@ fn config_renders_editor_placement_default_when_editor_is_active() {
     write_personal_config(temp.path(), "[editor]\ncommand = \"code {{path}}\"\n");
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .args(["-C", temp.path().to_str().unwrap(), "config", "show"])
         .assert()
         .success()
         .stdout(predicate::str::contains("[editor]"))

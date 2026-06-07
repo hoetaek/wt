@@ -412,17 +412,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             profile,
             prune_env_anchors,
         } => commands::doctor::run(ctx, profile.as_deref(), prune_env_anchors.as_deref()),
-        Commands::Config { profile, command } => match command {
-            Some(ConfigCommand::Edit { source }) => {
-                commands::config::edit(ctx, profile.as_deref(), source.as_deref())
-            }
-            Some(ConfigCommand::Extract { source }) => {
-                commands::config::extract(ctx, profile.as_deref(), source.as_deref())
-            }
-            Some(ConfigCommand::Inline { source }) => {
-                commands::config::inline(ctx, profile.as_deref(), source.as_deref())
-            }
-            None => commands::config::effective(ctx, profile.as_deref()),
+        Commands::Config { command } => match command {
+            ConfigCommand::Show { profile } => commands::config::effective(ctx, profile.as_deref()),
+            ConfigCommand::Edit { source } => commands::config::edit(ctx, source.as_deref()),
+            ConfigCommand::Extract { source } => commands::config::extract(ctx, source.as_deref()),
+            ConfigCommand::Inline { source } => commands::config::inline(ctx, source.as_deref()),
         },
         Commands::Profile { command } => commands::profile::run(ctx, command.as_ref()),
         Commands::Site { command } => commands::site::run(ctx, command),

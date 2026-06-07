@@ -34,11 +34,7 @@ fn effective_config<'a>(ctx: &'a Ctx, profile: Option<&str>) -> Result<Cow<'a, C
     Ok(Cow::Owned(config))
 }
 
-pub fn extract(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Result<()> {
-    if profile.is_some() {
-        bail!("wt config extract does not accept --profile; pass a source file instead");
-    }
-
+pub fn extract(ctx: &Ctx, source: Option<&Path>) -> Result<()> {
     let summary = match source {
         Some(source) => analyze_source(ctx, &resolve_source_path(ctx, source)?)?,
         None => select_source(ctx)?,
@@ -47,11 +43,7 @@ pub fn extract(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Resul
     extract_from_source(ctx, summary)
 }
 
-pub fn inline(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Result<()> {
-    if profile.is_some() {
-        bail!("wt config inline does not accept --profile; pass a source file instead");
-    }
-
+pub fn inline(ctx: &Ctx, source: Option<&Path>) -> Result<()> {
     let summary = match source {
         Some(source) => analyze_inline_source(ctx, &resolve_source_path(ctx, source)?)?,
         None => select_inline_source(ctx)?,
@@ -60,11 +52,7 @@ pub fn inline(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Result
     inline_from_source(ctx, summary)
 }
 
-pub fn edit(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Result<()> {
-    if profile.is_some() {
-        bail!("wt config edit does not accept --profile; pass a source file instead");
-    }
-
+pub fn edit(ctx: &Ctx, source: Option<&Path>) -> Result<()> {
     let path = match source {
         Some(source) => {
             let path = resolve_edit_source_path(ctx, source)?;
@@ -2186,8 +2174,8 @@ cli = "codex"
         ui.add_confirm(true);
         let ctx = ctx_with_ui(dir.path(), ui);
 
-        extract(&ctx, None, Some(Path::new("shared"))).unwrap();
-        inline(&ctx, None, Some(Path::new("profiles/codex"))).unwrap();
+        extract(&ctx, Some(Path::new("shared"))).unwrap();
+        inline(&ctx, Some(Path::new("profiles/codex"))).unwrap();
 
         let local = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         assert!(local.contains("[editor]"));
@@ -2230,7 +2218,7 @@ issue = ["Handle issue\n"]
         ui.add_confirm(true);
         let ctx = ctx_with_ui(dir.path(), ui);
 
-        extract(&ctx, None, Some(Path::new(".wt/config/local.toml"))).unwrap();
+        extract(&ctx, Some(Path::new(".wt/config/local.toml"))).unwrap();
 
         let local = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         assert!(local.contains("[workspace]"));
@@ -2281,7 +2269,6 @@ branch = ["Handle branch\n"]
 
         extract(
             &ctx,
-            None,
             Some(Path::new(".wt/config/profiles/codex/profile.toml")),
         )
         .unwrap();
@@ -2347,7 +2334,6 @@ tabs = ["pnpm dev"]
 
         inline(
             &ctx,
-            None,
             Some(Path::new(".wt/config/profiles/codex/profile.toml")),
         )
         .unwrap();
@@ -2416,7 +2402,7 @@ tabs = ["pnpm dev"]
         ui.add_confirm(true);
         let ctx = ctx_with_ui(dir.path(), ui);
 
-        inline(&ctx, None, None).unwrap();
+        inline(&ctx, None).unwrap();
 
         assert!(!profile_dir.join("profile.toml").exists());
         let local = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
@@ -2451,7 +2437,7 @@ tabs = ["pnpm dev"]
 
         let ctx = ctx_with_ui(dir.path(), MockUi::new());
 
-        inline(&ctx, None, Some(Path::new(".wt/config/local.toml"))).unwrap();
+        inline(&ctx, Some(Path::new(".wt/config/local.toml"))).unwrap();
 
         assert!(profile_dir.join("profile.toml").exists());
         assert!(prompts_dir.join("issue.md").exists());
@@ -2486,7 +2472,6 @@ issue = ["Existing issue\n"]
 
         let err = inline(
             &ctx,
-            None,
             Some(Path::new(".wt/config/profiles/codex/profile.toml")),
         )
         .unwrap_err();
@@ -2516,7 +2501,6 @@ cli = "codex"
         let ctx = ctx_with_ui(dir.path(), MockUi::new());
         let err = inline(
             &ctx,
-            None,
             Some(Path::new(".wt/config/profiles/codex/prompts/pr.append.md")),
         )
         .unwrap_err();
@@ -2540,7 +2524,6 @@ cli = "codex"
         let ctx = ctx_with_ui(dir.path(), MockUi::new());
         inline(
             &ctx,
-            None,
             Some(Path::new(".wt/config/profiles/codex/profile.toml")),
         )
         .unwrap();
@@ -2567,12 +2550,11 @@ cli = "codex"
         let source = Path::new(".wt/profiles/codex/profile.toml");
 
         for error in [
-            extract(&ctx, None, Some(source)).unwrap_err(),
-            edit(&ctx, None, Some(source)).unwrap_err(),
-            inline(&ctx, None, Some(source)).unwrap_err(),
+            extract(&ctx, Some(source)).unwrap_err(),
+            edit(&ctx, Some(source)).unwrap_err(),
+            inline(&ctx, Some(source)).unwrap_err(),
             edit(
                 &ctx,
-                None,
                 Some(Path::new(".wt/profiles/codex/../new/profile.toml")),
             )
             .unwrap_err(),
@@ -2604,7 +2586,7 @@ cli = "codex"
         ui.add_confirm(true);
         let ctx = ctx_with_ui(dir.path(), ui);
 
-        extract(&ctx, None, Some(Path::new(".wt.toml"))).unwrap();
+        extract(&ctx, Some(Path::new(".wt.toml"))).unwrap();
 
         let shared = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
         assert!(shared.contains("[issues]"));
@@ -2635,7 +2617,7 @@ command = "vi {{path}}"
         ui.add_confirm(true);
         let ctx = ctx_with_ui(dir.path(), ui);
 
-        extract(&ctx, None, Some(Path::new(".wt.toml"))).unwrap();
+        extract(&ctx, Some(Path::new(".wt.toml"))).unwrap();
 
         let shared = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
         assert!(!shared.contains("[editor]"));
@@ -2655,7 +2637,7 @@ command = "vi {{path}}"
         .unwrap();
 
         let ctx = ctx_with_ui(dir.path(), MockUi::new());
-        extract(&ctx, None, Some(Path::new(".wt/config/local.toml"))).unwrap();
+        extract(&ctx, Some(Path::new(".wt/config/local.toml"))).unwrap();
     }
 
     #[test]
