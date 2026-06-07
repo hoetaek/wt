@@ -43,6 +43,40 @@ pub(crate) struct AppState {
     menu_selected_index: usize,
     mode: Mode,
     status_line: String,
+    copy: BrowserCopy,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BrowserCopy {
+    empty_origin_summary: &'static str,
+    origin_count_label: &'static str,
+    inventory_title: &'static str,
+    empty_inventory_message: &'static str,
+    key_column_title: &'static str,
+    no_selection_message: &'static str,
+    no_selection_status: &'static str,
+}
+
+impl BrowserCopy {
+    const TASK: Self = Self {
+        empty_origin_summary: "no actionable tasks",
+        origin_count_label: "actionable tasks",
+        inventory_title: "Tasks",
+        empty_inventory_message: "No actionable tasks",
+        key_column_title: "task",
+        no_selection_message: "No task selected",
+        no_selection_status: "no task selected",
+    };
+
+    const WORKFLOW: Self = Self {
+        empty_origin_summary: "no saved workflows",
+        origin_count_label: "saved workflows",
+        inventory_title: "Workflows",
+        empty_inventory_message: "No saved workflows",
+        key_column_title: "workflow",
+        no_selection_message: "No workflow selected",
+        no_selection_status: "no workflow selected",
+    };
 }
 
 impl AppState {
@@ -52,6 +86,17 @@ impl AppState {
     }
 
     pub(crate) fn with_diagnostics(rows: Vec<BrowserRow>, diagnostics: Vec<String>) -> Self {
+        Self::with_copy(rows, diagnostics, BrowserCopy::TASK)
+    }
+
+    pub(crate) fn workflow_with_diagnostics(
+        rows: Vec<BrowserRow>,
+        diagnostics: Vec<String>,
+    ) -> Self {
+        Self::with_copy(rows, diagnostics, BrowserCopy::WORKFLOW)
+    }
+
+    fn with_copy(rows: Vec<BrowserRow>, diagnostics: Vec<String>, copy: BrowserCopy) -> Self {
         Self {
             rows,
             diagnostics,
@@ -60,6 +105,7 @@ impl AppState {
             menu_selected_index: 0,
             mode: Mode::List,
             status_line: default_status_line(),
+            copy,
         }
     }
 
@@ -93,6 +139,30 @@ impl AppState {
 
     pub(crate) fn diagnostics(&self) -> &[String] {
         &self.diagnostics
+    }
+
+    pub(crate) fn empty_origin_summary(&self) -> &str {
+        self.copy.empty_origin_summary
+    }
+
+    pub(crate) fn origin_count_label(&self) -> &str {
+        self.copy.origin_count_label
+    }
+
+    pub(crate) fn inventory_title(&self) -> &str {
+        self.copy.inventory_title
+    }
+
+    pub(crate) fn empty_inventory_message(&self) -> &str {
+        self.copy.empty_inventory_message
+    }
+
+    pub(crate) fn key_column_title(&self) -> &str {
+        self.copy.key_column_title
+    }
+
+    pub(crate) fn no_selection_message(&self) -> &str {
+        self.copy.no_selection_message
     }
 
     #[cfg(test)]
@@ -256,7 +326,7 @@ impl AppState {
             self.select_first_enabled_menu_item();
             self.status_line = "Enter run  Esc back".into();
         } else {
-            self.status_line = "no task selected".into();
+            self.status_line = self.copy.no_selection_status.into();
         }
     }
 
@@ -287,7 +357,7 @@ impl AppState {
     fn menu_enter(&mut self) -> Outcome {
         let Some(row) = self.selected_row() else {
             self.mode = Mode::List;
-            self.status_line = "no task selected".into();
+            self.status_line = self.copy.no_selection_status.into();
             return Outcome::Continue;
         };
         let key = row.key.clone();

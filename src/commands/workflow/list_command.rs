@@ -211,7 +211,7 @@ pub(crate) fn workflow_browser_rows(
 }
 
 fn workflow_browser_app(report: &WorkflowListReport) -> crate::tui::app::AppState {
-    crate::tui::app::AppState::with_diagnostics(
+    crate::tui::app::AppState::workflow_with_diagnostics(
         workflow_browser_rows(report),
         workflow_browser_diagnostics(report),
     )
@@ -256,16 +256,26 @@ fn workflow_browser_preview_lines(row: &WorkflowListRow) -> Vec<String> {
 }
 
 fn workflow_browser_diagnostics(report: &WorkflowListReport) -> Vec<String> {
+    let mut diagnostics = Vec::new();
     let invalid_count = report.invalid_workflows.len();
     if invalid_count == 0 {
-        return Vec::new();
+        return diagnostics;
     }
     let noun = if invalid_count == 1 {
         "workflow file"
     } else {
         "workflow files"
     };
-    vec![format!("{invalid_count} invalid {noun}")]
+    diagnostics.push(format!("{invalid_count} invalid {noun}"));
+    diagnostics.extend(report.invalid_workflows.iter().map(|invalid| {
+        format!(
+            "invalid workflow {}  file {}  {}",
+            invalid.id,
+            invalid.path,
+            invalid_workflow_error_summary(&invalid.error)
+        )
+    }));
+    diagnostics
 }
 
 fn should_open_browser(ctx: &Ctx) -> bool {
@@ -811,6 +821,24 @@ run = "run-{task}"
         )
     }
 
+    fn workflow_browser_report_text(report: &WorkflowListReport) -> String {
+        let backend = ratatui::backend::TestBackend::new(140, 18);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let app = workflow_browser_app(report);
+        terminal
+            .draw(|frame| crate::tui::render::draw(frame, &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..18)
+            .map(|y| {
+                (0..140)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn collect_lists_valid_workflows_and_reports_invalid_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -965,6 +993,29 @@ id = "WT-142"
                 .render_plain()
                 .contains("Publish workflow as issue")
         );
+    }
+
+    #[test]
+    fn workflow_browser_report_renders_invalid_workflow_details() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            workflows_dir.join("bad.toml"),
+            r#"objective = "Bad workflow"
+mode = "batch"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx).unwrap();
+        let text = workflow_browser_report_text(&report);
+
+        assert!(text.contains("1 invalid workflow file"));
+        assert!(text.contains("bad"));
+        assert!(text.contains("<repo-root>/.wt/execution/workflows/bad.toml"));
+        assert!(text.contains("uses removed `objective`"));
     }
 
     #[test]

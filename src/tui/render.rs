@@ -43,7 +43,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &AppState) {
 
 fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let mut summary = if app.is_empty() {
-        "Origin health: no actionable tasks".to_string()
+        format!("Origin health: {}", app.empty_origin_summary())
     } else {
         let counts = app
             .origin_status_counts()
@@ -52,8 +52,9 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
             .collect::<Vec<_>>()
             .join("  ");
         format!(
-            "Origin health: {} actionable tasks  {counts}",
-            app.row_count()
+            "Origin health: {} {}  {counts}",
+            app.row_count(),
+            app.origin_count_label()
         )
     };
     if !app.diagnostics().is_empty() {
@@ -66,8 +67,11 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 
 fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     if app.is_empty() {
-        let empty = Paragraph::new("No actionable tasks")
-            .block(Block::default().title("Tasks").borders(Borders::ALL));
+        let empty = Paragraph::new(app.empty_inventory_message()).block(
+            Block::default()
+                .title(app.inventory_title())
+                .borders(Borders::ALL),
+        );
         frame.render_widget(empty, area);
         return;
     }
@@ -92,9 +96,19 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
             Constraint::Length(8),
         ],
     )
-    .header(Row::new(["status", "origin", "title", "task", "next"]))
+    .header(Row::new(vec![
+        "status",
+        "origin",
+        "title",
+        app.key_column_title(),
+        "next",
+    ]))
     .column_spacing(1)
-    .block(Block::default().title("Tasks").borders(Borders::ALL));
+    .block(
+        Block::default()
+            .title(app.inventory_title())
+            .borders(Borders::ALL),
+    );
     frame.render_widget(table, area);
 }
 
@@ -129,15 +143,24 @@ fn row_style(app: &AppState, index: usize) -> Style {
 }
 
 fn draw_preview(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
-    let lines = app
-        .selected_row()
-        .map(|row| {
-            row.preview_lines
-                .iter()
-                .map(|line| Line::from(line.as_str()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| vec![Line::from("No task selected")]);
+    let mut lines = app
+        .diagnostics()
+        .iter()
+        .map(|line| Line::from(line.as_str()))
+        .collect::<Vec<_>>();
+    if !lines.is_empty() && app.selected_row().is_some() {
+        lines.push(Line::from(""));
+    }
+    lines.extend(
+        app.selected_row()
+            .map(|row| {
+                row.preview_lines
+                    .iter()
+                    .map(|line| Line::from(line.as_str()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![Line::from(app.no_selection_message())]),
+    );
     let title = app
         .selected_row()
         .map(|row| format!("Preview {}", row.title))
@@ -259,6 +282,34 @@ mod tests {
         let app = AppState::new(vec![]);
         let text = buffer_text(80, 24, &app);
         assert!(text.contains("No actionable tasks"));
+    }
+
+    #[test]
+    fn workflow_browser_uses_workflow_inventory_copy() {
+        let app = AppState::workflow_with_diagnostics(
+            vec![row("2026-06-06-001", "Ship provider-origin UX", "stale")],
+            Vec::new(),
+        );
+
+        let text = buffer_text(100, 24, &app);
+
+        assert!(text.contains("saved workflows"));
+        assert!(text.contains("Workflows"));
+        assert!(text.contains("workflow"));
+        assert!(!text.contains("actionable tasks"));
+        assert!(!text.contains("No task selected"));
+    }
+
+    #[test]
+    fn empty_workflow_browser_uses_workflow_empty_state() {
+        let app = AppState::workflow_with_diagnostics(Vec::new(), Vec::new());
+
+        let text = buffer_text(100, 24, &app);
+
+        assert!(text.contains("No saved workflows"));
+        assert!(text.contains("Workflows"));
+        assert!(!text.contains("No actionable tasks"));
+        assert!(!text.contains("Tasks"));
     }
 
     #[test]

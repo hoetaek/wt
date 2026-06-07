@@ -240,6 +240,14 @@ fn browser_diagnostics(report: &TaskListReport) -> Vec<String> {
             "task files"
         };
         diagnostics.push(format!("{invalid_count} invalid {noun}"));
+        diagnostics.extend(report.invalid_tasks.iter().map(|invalid| {
+            format!(
+                "invalid task {}  file {}  {}",
+                invalid.key,
+                invalid.path,
+                one_line(&invalid.error)
+            )
+        }));
     }
     if report.hidden_task_count > 0 {
         diagnostics.push(format!("{} hidden - use --all", report.hidden_task_count));
@@ -696,6 +704,8 @@ branch = "valid"
         let text = browser_report_text(&report);
 
         assert!(text.contains("1 invalid task file"));
+        assert!(text.contains("<repo-root>/.wt/execution/tasks/bad.toml"));
+        assert!(text.contains("Failed to parse task"));
     }
 
     #[test]
