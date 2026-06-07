@@ -8,7 +8,8 @@ use crate::workflow;
 use anyhow::{Context, Result, bail};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event;
+use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::crossterm::terminal;
 
 pub(crate) trait DispatchBackend {
     fn run(&self, action: OriginAction, key: &str) -> Result<()>;
@@ -108,7 +109,20 @@ impl<E: TerminalEffects, B: Backend> DispatchLifecycle for TerminalDispatchLifec
     fn wait_for_ack(&mut self) {
         println!();
         println!("Press any key to return to the browser...");
-        let _ = event::read();
+        // The session is suspended here, so the terminal is in cooked mode and
+        // buffers input line by line — a bare event::read() would wait for
+        // Enter. Read the ack in raw mode so any single key returns.
+        let raw_mode_enabled = terminal::enable_raw_mode().is_ok();
+        loop {
+            match event::read() {
+                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => break,
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        if raw_mode_enabled {
+            let _ = terminal::disable_raw_mode();
+        }
     }
 
     fn resume(&mut self) -> Result<()> {
