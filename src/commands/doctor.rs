@@ -48,33 +48,39 @@ pub enum DoctorMsg {
 
 impl DoctorMsg {
     pub fn render(&self, lang: Lang) -> String {
-        // English templates (source of truth). Korean arms are added in a later
-        // chunk; until then `Lang::Ko` falls through to the English template.
-        let en = match self {
-            DoctorMsg::SectionDoctor => return "Doctor".to_string(),
-            DoctorMsg::Profile { profile } => {
-                return fill("Profile: {profile}", &[("profile", profile)]);
+        match self {
+            DoctorMsg::SectionDoctor => "Doctor".to_string(),
+            DoctorMsg::Profile { profile } => fill("Profile: {profile}", &[("profile", profile)]),
+            DoctorMsg::WtSetupHint => match lang {
+                Lang::En => "Run wt setup to install per-machine wt integration.",
+                Lang::Ko => "머신별 wt 통합을 설치하려면 `wt setup` 을 실행하세요.",
             }
-            DoctorMsg::WtSetupHint => "Run wt setup to install per-machine wt integration.",
-            DoctorMsg::WtInitHint => "Run wt init to create repo-local wt setup.",
+            .to_string(),
+            DoctorMsg::WtInitHint => "Run wt init to create repo-local wt setup.".to_string(),
             DoctorMsg::CodexHookInstallHint => {
                 "Run cmux hooks codex install --yes to enable reliable Codex status events."
+                    .to_string()
             }
             DoctorMsg::CodexWtHookInstallHint => {
                 "Run wt setup to enable wt inbox delivery through detected agent hook dispatchers."
+                    .to_string()
             }
             DoctorMsg::IdentityAnchorsScanFailed { err } => {
-                return fill("Identity anchors: scan failed ({err})", &[("err", err)]);
+                let template = match lang {
+                    Lang::En => "Identity anchors: scan failed ({err})",
+                    Lang::Ko => "Identity anchors: 스캔 실패 ({err})",
+                };
+                fill(template, &[("err", err)])
             }
             DoctorMsg::SupervisorsScanFailed { err } => {
-                return fill("Supervisors: scan failed ({err})", &[("err", err)]);
+                let template = match lang {
+                    Lang::En => "Supervisors: scan failed ({err})",
+                    Lang::Ko => "Supervisors: 스캔 실패 ({err})",
+                };
+                fill(template, &[("err", err)])
             }
-            DoctorMsg::Raw(text) => return text.clone(),
-        };
-        // `lang` is accepted now so the wiring chunk needs no signature change;
-        // with no Korean arms yet, every language renders the English template.
-        let _ = lang;
-        en.to_string()
+            DoctorMsg::Raw(text) => text.clone(),
+        }
     }
 }
 
@@ -1863,11 +1869,27 @@ mod tests {
     }
 
     #[test]
-    fn doctor_msg_falls_back_to_english_when_korean_absent() {
-        // No Korean arm is defined yet in this chunk, so ko must fall back to en.
+    fn doctor_msg_renders_korean_for_translated_variants() {
         assert_eq!(
             DoctorMsg::WtSetupHint.render(Lang::Ko),
-            DoctorMsg::WtSetupHint.render(Lang::En)
+            "머신별 wt 통합을 설치하려면 `wt setup` 을 실행하세요."
+        );
+        assert_eq!(
+            DoctorMsg::IdentityAnchorsScanFailed { err: "boom".into() }.render(Lang::Ko),
+            "Identity anchors: 스캔 실패 (boom)"
+        );
+        assert_eq!(
+            DoctorMsg::SupervisorsScanFailed { err: "boom".into() }.render(Lang::Ko),
+            "Supervisors: 스캔 실패 (boom)"
+        );
+    }
+
+    #[test]
+    fn doctor_msg_untranslated_variant_falls_back_to_english_under_korean() {
+        // WtInitHint has no Korean arm in this chunk, so ko must fall back to en.
+        assert_eq!(
+            DoctorMsg::WtInitHint.render(Lang::Ko),
+            DoctorMsg::WtInitHint.render(Lang::En)
         );
     }
 
