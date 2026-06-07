@@ -25,8 +25,7 @@ const WT_INIT_HINT: &str = "Run wt init to create repo-local wt setup.";
 
 /// Typed, translatable catalog of doctor's human-facing prose. English is the
 /// source of truth; a missing Korean arm falls back to English. Variants carry
-/// their interpolation slots; slot values are never translated. Defined here
-/// for the i18n mechanism; NOT yet wired into doctor's output path.
+/// their interpolation slots; slot values are never translated.
 pub enum DoctorMsg {
     SectionDoctor,
     Profile {
@@ -42,6 +41,23 @@ pub enum DoctorMsg {
     SupervisorsScanFailed {
         err: String,
     },
+    ShellMissingLineIn {
+        line: String,
+        path: String,
+    },
+    ShellMissingPath {
+        path: String,
+    },
+    ShellCannotRead {
+        path: String,
+        err: String,
+    },
+    InboxHookErr {
+        err: String,
+    },
+    CoreDirsMissing {
+        paths: String,
+    },
     /// Pass-through for arbitrary external text that must never be translated.
     Raw(String),
 }
@@ -56,7 +72,11 @@ impl DoctorMsg {
                 Lang::Ko => "머신별 wt 통합을 설치하려면 `wt setup` 을 실행하세요.",
             }
             .to_string(),
-            DoctorMsg::WtInitHint => "Run wt init to create repo-local wt setup.".to_string(),
+            DoctorMsg::WtInitHint => match lang {
+                Lang::En => "Run wt init to create repo-local wt setup.",
+                Lang::Ko => "repo-local wt 설정을 만들려면 `wt init` 을 실행하세요.",
+            }
+            .to_string(),
             DoctorMsg::CodexHookInstallHint => {
                 "Run cmux hooks codex install --yes to enable reliable Codex status events."
                     .to_string()
@@ -78,6 +98,54 @@ impl DoctorMsg {
                     Lang::Ko => "Supervisors: 스캔 실패 ({err})",
                 };
                 fill(template, &[("err", err)])
+            }
+            DoctorMsg::ShellMissingLineIn { line, path } => {
+                let line = line
+                    .strip_prefix('`')
+                    .and_then(|value| value.strip_suffix('`'))
+                    .unwrap_or(line);
+                let lead = match lang {
+                    Lang::En => fill(
+                        "missing `{line}` in {path}. ",
+                        &[("line", line), ("path", path)],
+                    ),
+                    Lang::Ko => fill(
+                        "`{path}` 에 `{line}` 가 없습니다. ",
+                        &[("line", line), ("path", path)],
+                    ),
+                };
+                lead + &DoctorMsg::WtSetupHint.render(lang)
+            }
+            DoctorMsg::ShellMissingPath { path } => {
+                let lead = match lang {
+                    Lang::En => fill("missing {path}. ", &[("path", path)]),
+                    Lang::Ko => fill("`{path}` 가 없습니다. ", &[("path", path)]),
+                };
+                lead + &DoctorMsg::WtSetupHint.render(lang)
+            }
+            DoctorMsg::ShellCannotRead { path, err } => {
+                let lead = match lang {
+                    Lang::En => fill(
+                        "cannot read {path}: {err}. ",
+                        &[("path", path), ("err", err)],
+                    ),
+                    Lang::Ko => fill(
+                        "`{path}` 를 읽을 수 없습니다: {err}. ",
+                        &[("path", path), ("err", err)],
+                    ),
+                };
+                lead + &DoctorMsg::WtSetupHint.render(lang)
+            }
+            DoctorMsg::InboxHookErr { err } => {
+                let lead = fill("{err}. ", &[("err", err)]);
+                lead + &DoctorMsg::WtSetupHint.render(lang)
+            }
+            DoctorMsg::CoreDirsMissing { paths } => {
+                let lead = match lang {
+                    Lang::En => fill("missing {paths}. ", &[("paths", paths)]),
+                    Lang::Ko => fill("`{paths}` 가 없습니다. ", &[("paths", paths)]),
+                };
+                lead + &DoctorMsg::WtInitHint.render(lang)
             }
             DoctorMsg::Raw(text) => text.clone(),
         }
@@ -1932,11 +2000,70 @@ mod tests {
     }
 
     #[test]
-    fn doctor_msg_untranslated_variant_falls_back_to_english_under_korean() {
-        // WtInitHint has no Korean arm in this chunk, so ko must fall back to en.
+    fn doctor_composite_messages_render_english_identical_to_today() {
         assert_eq!(
-            DoctorMsg::WtInitHint.render(Lang::Ko),
-            DoctorMsg::WtInitHint.render(Lang::En)
+            DoctorMsg::ShellMissingLineIn {
+                line: "`eval`".into(),
+                path: "~/.zshrc".into()
+            }
+            .render(Lang::En),
+            "missing `eval` in ~/.zshrc. Run wt setup to install per-machine wt integration."
+        );
+        assert_eq!(
+            DoctorMsg::ShellMissingPath {
+                path: "~/.zshrc".into()
+            }
+            .render(Lang::En),
+            "missing ~/.zshrc. Run wt setup to install per-machine wt integration."
+        );
+        assert_eq!(
+            DoctorMsg::ShellCannotRead {
+                path: "~/.zshrc".into(),
+                err: "denied".into()
+            }
+            .render(Lang::En),
+            "cannot read ~/.zshrc: denied. Run wt setup to install per-machine wt integration."
+        );
+        assert_eq!(
+            DoctorMsg::InboxHookErr {
+                err: "broken".into()
+            }
+            .render(Lang::En),
+            "broken. Run wt setup to install per-machine wt integration."
+        );
+        assert_eq!(
+            DoctorMsg::CoreDirsMissing {
+                paths: ".wt/runtime".into()
+            }
+            .render(Lang::En),
+            "missing .wt/runtime. Run wt init to create repo-local wt setup."
+        );
+    }
+
+    #[test]
+    fn doctor_composite_messages_render_korean() {
+        assert_eq!(
+            DoctorMsg::CoreDirsMissing {
+                paths: ".wt/runtime".into()
+            }
+            .render(Lang::Ko),
+            "`.wt/runtime` 가 없습니다. repo-local wt 설정을 만들려면 `wt init` 을 실행하세요."
+        );
+        assert_eq!(
+            DoctorMsg::ShellCannotRead {
+                path: "~/.zshrc".into(),
+                err: "denied".into()
+            }
+            .render(Lang::Ko),
+            "`~/.zshrc` 를 읽을 수 없습니다: denied. 머신별 wt 통합을 설치하려면 `wt setup` 을 실행하세요."
+        );
+    }
+
+    #[test]
+    fn doctor_msg_untranslated_variant_falls_back_to_english_under_korean() {
+        assert_eq!(
+            DoctorMsg::CodexHookInstallHint.render(Lang::Ko),
+            DoctorMsg::CodexHookInstallHint.render(Lang::En)
         );
     }
 
