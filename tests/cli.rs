@@ -6314,6 +6314,9 @@ fn ui_help_explains_read_only_local_server_contract() {
         .stdout(predicate::str::contains("--port <PORT>"))
         .stdout(predicate::str::contains("0 selects an available port"))
         .stdout(predicate::str::contains("GET /api/snapshot"))
+        .stdout(predicate::str::contains("execution/retrospectives"))
+        .stdout(predicate::str::contains("ideas").not())
+        .stdout(predicate::str::contains("spec-local").not())
         .stdout(predicate::str::contains("embedded no-build assets"));
 }
 
