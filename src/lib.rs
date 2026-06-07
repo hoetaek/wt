@@ -22,6 +22,7 @@ pub mod studio;
 pub mod task;
 pub mod task_run;
 pub mod template;
+pub mod tui;
 pub mod ui;
 pub mod workflow;
 pub mod worktree_naming;
