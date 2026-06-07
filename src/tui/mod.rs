@@ -3,6 +3,7 @@ pub(crate) mod browser;
 pub(crate) mod dispatch;
 pub(crate) mod render;
 pub(crate) mod terminal;
+pub(crate) mod theme;
 
 pub(crate) fn run_task_browser_with(
     ctx: &crate::context::Ctx,

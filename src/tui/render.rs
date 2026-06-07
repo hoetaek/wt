@@ -1,8 +1,9 @@
 use crate::tui::app::{AppState, BrowserRow, Mode};
+use crate::tui::theme;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 
 const PREVIEW_MIN_HEIGHT: u16 = 16;
@@ -43,25 +44,28 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &AppState) {
 
 fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let mut summary = if app.is_empty() {
-        format!("Origin health: {}", app.empty_origin_summary())
+        vec![Span::raw(format!(
+            "Origin health: {}",
+            app.empty_origin_summary()
+        ))]
     } else {
-        let counts = app
-            .origin_status_counts()
-            .into_iter()
-            .map(|(status, count)| format!("{status} {count}"))
-            .collect::<Vec<_>>()
-            .join("  ");
-        format!(
-            "Origin health: {} {}  {counts}",
+        let mut spans = vec![Span::raw(format!(
+            "Origin health: {} {}",
             app.row_count(),
             app.origin_count_label()
-        )
+        ))];
+        for (status, count) in app.origin_status_counts() {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(status.to_string(), status_style(status)));
+            spans.push(Span::raw(format!(" {count}")));
+        }
+        spans
     };
     if !app.diagnostics().is_empty() {
-        summary.push_str("  ");
-        summary.push_str(&app.diagnostics().join("  "));
+        summary.push(Span::raw("  "));
+        summary.push(Span::raw(app.diagnostics().join("  ")));
     }
-    let header = Paragraph::new(summary).block(Block::default().borders(Borders::ALL));
+    let header = Paragraph::new(Line::from(summary)).block(chrome_block());
     frame.render_widget(header, area);
 }
 
@@ -70,7 +74,9 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
         let empty = Paragraph::new(app.empty_inventory_message()).block(
             Block::default()
                 .title(app.inventory_title())
-                .borders(Borders::ALL),
+                .borders(Borders::ALL)
+                .border_style(theme::chrome_style())
+                .title_style(theme::chrome_style()),
         );
         frame.render_widget(empty, area);
         return;
@@ -96,18 +102,23 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
             Constraint::Length(8),
         ],
     )
-    .header(Row::new(vec![
-        "status",
-        "origin",
-        "title",
-        app.key_column_title(),
-        "next",
-    ]))
+    .header(
+        Row::new(vec![
+            "status",
+            "origin",
+            "title",
+            app.key_column_title(),
+            "next",
+        ])
+        .style(theme::chrome_style()),
+    )
     .column_spacing(1)
     .block(
         Block::default()
             .title(app.inventory_title())
-            .borders(Borders::ALL),
+            .borders(Borders::ALL)
+            .border_style(theme::chrome_style())
+            .title_style(theme::chrome_style()),
     );
     frame.render_widget(table, area);
 }
@@ -126,7 +137,7 @@ fn row_viewport_offset(selected_index: usize, row_capacity: usize) -> usize {
 
 fn browser_row(row: &BrowserRow) -> Row<'_> {
     Row::new(vec![
-        Cell::from(row.status.as_str()),
+        Cell::from(row.status.as_str()).style(status_style(&row.status)),
         Cell::from(row.origin_label.as_str()),
         Cell::from(row.title.as_str()),
         Cell::from(row.key.as_str()),
@@ -136,7 +147,7 @@ fn browser_row(row: &BrowserRow) -> Row<'_> {
 
 fn row_style(app: &AppState, index: usize) -> Style {
     if app.selected_visible_index() == Some(index) {
-        Style::default().add_modifier(Modifier::REVERSED)
+        theme::selected_style()
     } else {
         Style::default()
     }
@@ -165,7 +176,13 @@ fn draw_preview(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
         .selected_row()
         .map(|row| format!("Preview {}", row.title))
         .unwrap_or_else(|| "Preview".into());
-    let preview = Paragraph::new(lines).block(Block::default().title(title).borders(Borders::ALL));
+    let preview = Paragraph::new(lines).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(theme::chrome_style())
+            .title_style(theme::chrome_style()),
+    );
     frame.render_widget(preview, area);
 }
 
@@ -177,7 +194,7 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     } else {
         app.status_line().to_string()
     };
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(Paragraph::new(Line::styled(line, theme::dim_style())), area);
 }
 
 fn centered_rect(area: Rect) -> Rect {
@@ -203,7 +220,7 @@ fn draw_menu(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
             if !lines.is_empty() {
                 lines.push(Line::from(""));
             }
-            lines.push(Line::from("disabled:"));
+            lines.push(Line::styled("disabled:", theme::dim_style()));
             disabled_header_added = true;
         }
         let mut text = item.render_plain();
@@ -215,18 +232,65 @@ fn draw_menu(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
         } else {
             text = format!("  {text}");
         }
-        lines.push(Line::from(text));
+        lines.push(menu_item_line(text, item));
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from("Enter run  Esc back").alignment(Alignment::Center));
+    lines
+        .push(Line::styled("Enter run  Esc back", theme::dim_style()).alignment(Alignment::Center));
     let menu = Paragraph::new(lines).block(
         Block::default()
             .title(row.title.as_str())
-            .borders(Borders::ALL),
+            .borders(Borders::ALL)
+            .border_style(theme::chrome_style())
+            .title_style(theme::chrome_style()),
     );
     frame.render_widget(Clear, area);
     frame.render_widget(menu, area);
+}
+
+fn chrome_block<'a>() -> Block<'a> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::chrome_style())
+        .title_style(theme::chrome_style())
+}
+
+fn status_style(status: &str) -> Style {
+    theme::status_color(status)
+        .map(|color| Style::default().fg(color))
+        .unwrap_or_default()
+}
+
+fn menu_item_line<'a>(
+    text: String,
+    item: &crate::origin_action_menu::OriginActionItem,
+) -> Line<'a> {
+    if !item.is_enabled() {
+        return Line::styled(text, theme::dim_style());
+    }
+
+    if item.is_external_write() {
+        styled_segment_line(
+            text,
+            "External write; confirmation required",
+            theme::external_write_style(),
+        )
+    } else {
+        Line::from(text)
+    }
+}
+
+fn styled_segment_line<'a>(text: String, segment: &str, style: Style) -> Line<'a> {
+    let Some(start) = text.find(segment) else {
+        return Line::from(text);
+    };
+    let end = start + segment.len();
+    Line::from(vec![
+        Span::raw(text[..start].to_string()),
+        Span::styled(text[start..end].to_string(), style),
+        Span::raw(text[end..].to_string()),
+    ])
 }
 
 #[cfg(test)]
@@ -234,13 +298,41 @@ mod tests {
     use super::*;
     use crate::origin_action_menu::{OriginActionMenu, OriginLabel};
     use crate::tui::app::{AppState, BrowserRow, KeyInput};
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Color;
     use ratatui::{Terminal, backend::TestBackend};
 
-    fn buffer_text(width: u16, height: u16, app: &AppState) -> String {
+    struct ColorGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        prev: bool,
+    }
+
+    impl ColorGuard {
+        fn set(enabled: bool) -> Self {
+            let lock = crate::tui::theme::COLOR_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let prev = console::colors_enabled();
+            console::set_colors_enabled(enabled);
+            Self { _lock: lock, prev }
+        }
+    }
+
+    impl Drop for ColorGuard {
+        fn drop(&mut self) {
+            console::set_colors_enabled(self.prev);
+        }
+    }
+
+    fn render_buffer(width: u16, height: u16, app: &AppState) -> Buffer {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, app)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
+        terminal.backend().buffer().clone()
+    }
+
+    fn buffer_text(width: u16, height: u16, app: &AppState) -> String {
+        let buffer = render_buffer(width, height, app);
         (0..height)
             .map(|y| {
                 (0..width)
@@ -267,6 +359,49 @@ mod tests {
         }
     }
 
+    fn line_contains_text(buffer: &Buffer, width: u16, y: u16, text: &str) -> bool {
+        let chars = text.chars().collect::<Vec<_>>();
+        (0..=width.saturating_sub(chars.len() as u16)).any(|x| {
+            chars
+                .iter()
+                .enumerate()
+                .all(|(offset, ch)| buffer[(x + offset as u16, y)].symbol() == ch.to_string())
+        })
+    }
+
+    fn first_cell_of_text_has_fg_on_line_with(
+        buffer: &Buffer,
+        width: u16,
+        height: u16,
+        text: &str,
+        same_line_text: &str,
+        color: Color,
+    ) -> bool {
+        let chars = text.chars().collect::<Vec<_>>();
+        (0..height).any(|y| {
+            line_contains_text(buffer, width, y, same_line_text)
+                && (0..=width.saturating_sub(chars.len() as u16)).any(|x| {
+                    chars.iter().enumerate().all(|(offset, ch)| {
+                        buffer[(x + offset as u16, y)].symbol() == ch.to_string()
+                    }) && buffer[(x, y)].style().fg == Some(color)
+                })
+        })
+    }
+
+    fn has_colored_cell(buffer: &Buffer, width: u16, height: u16) -> bool {
+        (0..height).any(|y| {
+            (0..width).any(|x| {
+                matches!(
+                    buffer[(x, y)].style().fg,
+                    Some(Color::Red)
+                        | Some(Color::Yellow)
+                        | Some(Color::Green)
+                        | Some(Color::Indexed(_))
+                )
+            })
+        })
+    }
+
     #[test]
     fn renders_header_rows_and_preview() {
         let app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
@@ -275,6 +410,37 @@ mod tests {
         assert!(text.contains("Origin sync TUI"));
         assert!(text.contains("Linear WT-142"));
         assert!(text.contains("q quit"));
+    }
+
+    #[test]
+    fn status_cell_uses_semantic_color_when_enabled() {
+        let _guard = ColorGuard::set(true);
+        let app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
+        let buffer = render_buffer(80, 24, &app);
+
+        assert!(
+            first_cell_of_text_has_fg_on_line_with(
+                &buffer,
+                80,
+                24,
+                "conflict",
+                "Linear WT-142",
+                Color::Red
+            ),
+            "conflict status cell should be red"
+        );
+    }
+
+    #[test]
+    fn render_is_colorless_when_colors_disabled() {
+        let _guard = ColorGuard::set(false);
+        let app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
+        let buffer = render_buffer(80, 24, &app);
+
+        assert!(
+            !has_colored_cell(&buffer, 80, 24),
+            "render should not contain semantic or chrome colors when colors are disabled"
+        );
     }
 
     #[test]
