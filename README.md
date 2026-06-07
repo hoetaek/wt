@@ -296,10 +296,10 @@ merge.
 - `TaskRun` files in `<repo-root>/.wt/execution/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
 - `wt ui [--port <port>]` starts a read-only loopback web UI for personal `wt`
-  ideas, TaskDocuments, Workflows, TaskRuns, profile summaries, and effective
-  config source paths. It serves embedded assets, exposes
-  `GET /api/snapshot`, reports invalid TOML records, and does not write state
-  or serve arbitrary repo files.
+  execution retrospectives, TaskDocuments, Workflows, TaskRuns, profile
+  summaries, and effective config source paths. It serves embedded assets,
+  exposes `GET /api/snapshot`, reports invalid TOML records, and does not write
+  state or serve arbitrary repo files.
 - `wt inspect [<target>]` is the read-only work dossier for a branch, worktree,
   or TaskRun. `wt inspect <target> --pr` adds nested pull request review
   evidence without changing lifecycle state or exit-code semantics.

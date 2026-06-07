@@ -53,7 +53,7 @@ global < team integration < personal < command-line flags
 
 ### Personal Storage
 
-Personal storage의 canonical root는 `<repo-root>/.wt/`다. 이 결정의 historical design source는
+Personal storage의 canonical root는 `<repo-root>/.wt/`다. 이 결정의 source는
 historical `<repo-root>/.wt/planning/specs/personal-storage-repo-root/`이며, 목적은 세 가지다.
 
 - `.git/` namespace는 Git 자신의 metadata 자리로 비워 둔다.

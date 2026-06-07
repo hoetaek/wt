@@ -31,17 +31,17 @@ effects.
 
 ## Canonical State
 
-All personal state lives under `<repo-root>/.wt/` in four canonical buckets:
-`config/`, `planning/`, `execution/`, and `runtime/`. Architecture ownership
-should name the domain owner inside those buckets rather than adding new
-top-level roots. Legacy flat roots such as `messages/`, `agent.state/`,
-`sessions/`, and `worktrees/` are not architecture ownership points.
+All personal state lives under `<repo-root>/.wt/` in three canonical buckets:
+`config/`, `execution/`, and `runtime/`. Architecture ownership should name the
+domain owner inside those buckets rather than adding new top-level roots.
+Legacy flat roots such as `messages/`, `agent.state/`, `sessions/`, and
+`worktrees/` are not architecture ownership points.
 
 New code must not read from or write to those legacy flat roots during normal
 operation. The only acceptable access is an explicit migration, import, or
 repair path: read the legacy data, transform it into the bucketed owner
-(`config/`, `planning/`, `execution/`, or `runtime/`), write the canonical
-record, and leave later code paths on canonical bucket readers. This mirrors the
+(`config/`, `execution/`, or `runtime/`), write the canonical record, and leave
+later code paths on canonical bucket readers. This mirrors the
 Personal Storage contract in [docs/consistency.md](consistency.md).
 
 `TaskDocument` is the reusable work definition. Its source-of-truth module is
@@ -158,9 +158,10 @@ identity anchor.
 
 The agent supervisor is a separate layer. It may use the same resolved identity
 model, but supervisor lifecycle, polling, and recovery policy belong to its own
-spec and must not turn identity anchor records into process supervision state.
-Development spec: `<repo-root>/.wt/planning/specs/detached-agent-supervisor/`; runtime contract:
-the Supervisor section below and `docs/consistency.md` Supervisor Lifecycle.
+contract and must not turn identity anchor records into process supervision state.
+Historical development source:
+`<repo-root>/.wt/planning/specs/detached-agent-supervisor/` is historical; runtime
+contract is the Supervisor section below and `docs/consistency.md` Supervisor Lifecycle.
 
 ## Supervisor
 

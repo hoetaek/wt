@@ -177,17 +177,16 @@ and a `.wt` symlink from each linked worktree to that directory. `.git/info/excl
 owns the clone-local ignore rule so the team `.gitignore` remains untouched.
 
 This intentionally reverses the earlier Git-common-dir direction. The decision
-source is `<repo-root>/.wt/planning/specs/personal-storage-repo-root/`: `.git/`
-should remain Git's namespace, `.wt/...` is shorter to type and inspect, and
-agent harnesses can read/write repo-root `.wt/` without `.git/` permission
+source is historical `<repo-root>/.wt/planning/specs/personal-storage-repo-root/`:
+`.git/` should remain Git's namespace, `.wt/...` is shorter to type and inspect,
+and agent harnesses can read/write repo-root `.wt/` without `.git/` permission
 friction.
 
-Inside the personal root, the current direction is a four-bucket contract:
+Inside the personal root, the current direction is a three-bucket contract:
 
 ```text
 config/       # local config and profiles
-planning/     # ideas, specs, retrospectives
-execution/    # TaskDocuments, Workflows, TaskRuns, archive
+execution/    # TaskDocuments, Workflows, TaskRuns, archive, retrospectives
 runtime/      # agent-owned inboxes, sessions, supervisors, observations
 ```
 
