@@ -119,12 +119,20 @@ pub fn run(ctx: &Ctx, profile: Option<&str>, prune_env_anchors: Option<&str>) ->
     check_codex_hook_readiness(ctx, config);
     check_active_workflow_inventory(ctx);
     if let Err(err) = check_identity_anchors(ctx) {
-        ctx.ui
-            .print_warning(&format!("Identity anchors: scan failed ({err})"));
+        ctx.ui.print_warning(
+            &DoctorMsg::IdentityAnchorsScanFailed {
+                err: err.to_string(),
+            }
+            .render(ctx.lang()),
+        );
     }
     if let Err(err) = check_supervisors(ctx) {
-        ctx.ui
-            .print_warning(&format!("Supervisors: scan failed ({err})"));
+        ctx.ui.print_warning(
+            &DoctorMsg::SupervisorsScanFailed {
+                err: err.to_string(),
+            }
+            .render(ctx.lang()),
+        );
     }
     Ok(())
 }
@@ -307,7 +315,6 @@ impl DoctorCheck {
         }
     }
 
-    #[allow(dead_code)]
     fn warning_msg(name: impl Into<String>, msg: DoctorMsg) -> Self {
         Self {
             name: name.into(),
@@ -560,7 +567,10 @@ fn collect_shell_integration_check(config: &Config, checks: &mut Vec<DoctorCheck
     }
 
     let Some((path, line)) = shell_integration_target() else {
-        checks.push(DoctorCheck::warning("shell_integration", WT_SETUP_HINT));
+        checks.push(DoctorCheck::warning_msg(
+            "shell_integration",
+            DoctorMsg::WtSetupHint,
+        ));
         return;
     };
     match fs::read_to_string(&path) {
@@ -616,7 +626,10 @@ fn collect_claude_hook_readiness_checks(ctx: &Ctx, config: &Config, checks: &mut
             "claude_wt_inbox_hook",
             Some("wt-managed inbox hooks installed".into()),
         )),
-        Ok(false) => checks.push(DoctorCheck::warning("claude_wt_inbox_hook", WT_SETUP_HINT)),
+        Ok(false) => checks.push(DoctorCheck::warning_msg(
+            "claude_wt_inbox_hook",
+            DoctorMsg::WtSetupHint,
+        )),
         Err(err) => checks.push(DoctorCheck::warning(
             "claude_wt_inbox_hook",
             format!("{err:#}. {WT_SETUP_HINT}"),
