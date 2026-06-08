@@ -63,17 +63,54 @@ fn checkbox_text(line: &str) -> Option<(bool, &str)> {
 
 fn strip_inline_marks(text: &str) -> String {
     let mut stripped = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
+    let mut index = 0;
 
-    while let Some(ch) = chars.next() {
-        if ch == '*' && chars.peek() == Some(&'*') {
-            chars.next();
-        } else if ch != '`' {
+    while index < text.len() {
+        let rest = &text[index..];
+        if let Some(code) = code_span(rest) {
+            stripped.push_str(code.text);
+            index += code.consumed;
+        } else if rest.starts_with("**") {
+            let content_start = index + 2;
+            if let Some(content_end) = closing_bold_marker(text, content_start) {
+                stripped.push_str(&strip_inline_marks(&text[content_start..content_end]));
+                index = content_end + 2;
+            } else {
+                stripped.push_str("**");
+                index += 2;
+            }
+        } else {
+            let ch = rest
+                .chars()
+                .next()
+                .expect("non-empty slice should have a char");
             stripped.push(ch);
+            index += ch.len_utf8();
         }
     }
 
     stripped
+}
+
+struct CodeSpan<'a> {
+    text: &'a str,
+    consumed: usize,
+}
+
+fn code_span(text: &str) -> Option<CodeSpan<'_>> {
+    let rest = text.strip_prefix('`')?;
+    let close = rest.find('`')?;
+    Some(CodeSpan {
+        text: &rest[..close],
+        consumed: close + 2,
+    })
+}
+
+fn closing_bold_marker(text: &str, content_start: usize) -> Option<usize> {
+    text[content_start..]
+        .match_indices("**")
+        .map(|(offset, _)| content_start + offset)
+        .find(|content_end| *content_end > content_start)
 }
 
 #[cfg(test)]
@@ -109,6 +146,19 @@ mod tests {
     fn inline_bold_and_code_marks_are_stripped() {
         let lines = markup_body("**중요** 그리고 `코드`");
         assert_eq!(lines[0].1, "중요 그리고 코드");
+    }
+
+    #[test]
+    fn non_bold_double_asterisks_are_preserved() {
+        let lines = markup_body("src/**/*.rs\na ** b");
+        assert_eq!(lines[0].1, "src/**/*.rs");
+        assert_eq!(lines[1].1, "a ** b");
+    }
+
+    #[test]
+    fn double_asterisks_inside_code_spans_are_preserved() {
+        let lines = markup_body("`src/**/*.rs` and `**literal**`");
+        assert_eq!(lines[0].1, "src/**/*.rs and **literal**");
     }
 
     #[test]
