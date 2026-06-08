@@ -174,6 +174,41 @@ cli = "claude"
 }
 
 #[test]
+fn language_defaults_to_auto_when_absent() {
+    let config: Config = toml::from_str("").unwrap();
+    assert_eq!(config.language, Language::Auto);
+}
+
+#[test]
+fn language_parses_explicit_values() {
+    assert_eq!(
+        toml::from_str::<Config>("language = \"ko\"")
+            .unwrap()
+            .language,
+        Language::Ko
+    );
+    assert_eq!(
+        toml::from_str::<Config>("language = \"en\"")
+            .unwrap()
+            .language,
+        Language::En
+    );
+    assert_eq!(
+        toml::from_str::<Config>("language = \"auto\"")
+            .unwrap()
+            .language,
+        Language::Auto
+    );
+}
+
+#[test]
+fn language_rejects_unsupported_value() {
+    let err = toml::from_str::<Config>("language = \"fr\"").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("language") || msg.contains("fr"), "got: {msg}");
+}
+
+#[test]
 fn rejects_unknown_setup_command_field() {
     let err = toml::from_str::<Config>(
         r#"
