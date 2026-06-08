@@ -167,6 +167,26 @@ Run this checklist on the finished body; fix inline.
    groups, or any non-direct execution shape, verify that wt-ready will create
    any required `.wt/execution/workflows/*.toml` and report the launch target
    before `wt-work`.
+7. **Invariant coverage for load-bearing paths** — when the slice changes a
+   load-bearing path (a status filter, renderer, inventory scan, or any code
+   several call sites depend on), the body must enumerate the invariants that
+   path has to hold *simultaneously*, not just the happy-path change, with one
+   test per invariant. Happy-path tests pass while an adjacent invariant
+   silently breaks. Background: empirically (2026-06 task-triage, historical), a
+   body that specified only the intended change and green tests produced a fix
+   cascade — each narrow fix satisfied its finding but broke a different
+   invariant the contract never named, costing five review rounds. The invariant
+   axes are general, not CLI/TUI-specific; name whichever apply to this surface
+   (a CLI, a TUI, a web/`wt serve` view, a JSON/API response, a file artifact):
+   input resilience (malformed, corrupt, empty, boundary); ordering, precedence,
+   and concurrency (newest-vs-older, two writers, TOCTOU); cross-representation
+   parity (every rendering of the same value agrees — text, TUI, web, JSON);
+   cost/scaling (no redundant N× work such as per-item re-scans or re-fetches);
+   and semantic agreement with the canonical source of truth. The 2026-06 case
+   happened to surface as text-vs-TUI parity and a per-row file scan, but those
+   are instances of cross-representation parity and cost/scaling — treat the
+   general axis as the checklist, the wt instance as one example. Omit the check
+   only when the slice genuinely touches no shared path.
 
 ## Rationalizations
 

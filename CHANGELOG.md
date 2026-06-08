@@ -8,6 +8,33 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.46.0 - 2026-06-08
+
+- Added provider-origin command surfaces and state for task and workflow
+  synchronization: origin policy config, origin snapshots, issue capability
+  plumbing, task origin fetch/diff/apply/push actions, workflow origin commands,
+  and inventory health reporting.
+
+- Added full-screen terminal inventory browsers for tasks and workflows, with
+  read-only browsing, nested origin inspection, popup action dispatch, output
+  panels, semantic status colors, redraw fixes, and guarded nested TUI sessions.
+
+- Changed personal state documentation and skills toward the three-bucket
+  `.wt/{config,execution,runtime}` model, removing planning/ideas surfaces from
+  wt-owned local UI and skill flows after the wt/leaf separation.
+
+- Changed `wt config` to require the explicit `show` subcommand, keeping config
+  display separate from other config source operations.
+
+- Added language configuration groundwork with `language = "auto" | "en" |
+  "ko"`, locale resolution, and the first doctor message catalog scaffolding.
+
+- Fixed several TUI and workflow coordination issues: raw-mode dispatch
+  acknowledgements now accept a single key, vim `j`/`k` movement works in select
+  popups, browser redraws are forced after dispatch, status colors render
+  consistently, and Codex base-review guidance points through the task agent
+  surface.
+
 ## 0.45.0 - 2026-06-06
 
 - Changed spec and idea scaffolding to share the ten-gate LEAF layout, adding
