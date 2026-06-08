@@ -386,7 +386,7 @@ impl AppState {
 
     pub(crate) fn body_lines(&self) -> Vec<(LineKind, String)> {
         self.selected_row()
-            .map(|row| body_markup::markup_body(&strip_terminal_sequences(&row.body)))
+            .map(|row| body_markup::markup_body(&sanitize_body_for_markup(&row.body)))
             .unwrap_or_default()
     }
 
@@ -824,6 +824,10 @@ fn handle_input_popup_key(buffer: &mut String, key: KeyInput) -> Option<PopupOut
 
 fn default_status_line() -> String {
     "j/k move  / filter  v body  Enter actions  q quit".into()
+}
+
+fn sanitize_body_for_markup(body: &str) -> String {
+    strip_terminal_sequences(body).replace('\t', " ")
 }
 
 fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {

@@ -1030,6 +1030,24 @@ mod tests {
     }
 
     #[test]
+    fn body_view_normalizes_tabs_from_untrusted_body() {
+        let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
+        browser_row.body = "alpha\tbeta\n- [ ] gamma\tdelta".into();
+        let mut app = AppState::new(vec![browser_row]);
+        app.handle(KeyInput::Char('v'));
+
+        let buffer = render_buffer(80, 24, &app);
+        let text = buffer_text(80, 24, &app);
+
+        assert!(text.contains("alpha beta"));
+        assert!(text.contains("☐ gamma delta"));
+        assert!(
+            !has_terminal_control_cell(&buffer, 80, 24),
+            "body view should render imported tab characters as inert spacing"
+        );
+    }
+
+    #[test]
     fn body_view_scroll_up_moves_immediately_after_bottom_overscroll() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body = (0..20)
