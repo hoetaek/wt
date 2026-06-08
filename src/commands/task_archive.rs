@@ -1,10 +1,12 @@
 use crate::context::Ctx;
 use crate::task;
 use crate::task_run::{self, TaskRunRecord};
+use crate::workflow::{self as workflow_store, WorkflowMetadata};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::ErrorKind;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -92,9 +94,13 @@ fn plan_archive(ctx: &Ctx, keys: &[String]) -> Result<ArchivePlan> {
     if keys.is_empty() {
         bail!("wt task archive requires at least one task key");
     }
+    if let Some(legacy) = ctx.storage_root.detect_legacy_archive(&ctx.repo_root) {
+        bail!("{}", legacy.error_message_for("Task archive storage"));
+    }
     task::ensure_task_document_store_available(&ctx.storage_root, &ctx.repo_root)?;
 
     let inventory = task_run::list_lossy(ctx)?;
+    let workflow_refs = active_workflow_task_refs(ctx)?;
     let mut candidates = Vec::new();
     let mut rejected = Vec::new();
     let mut not_found = Vec::new();
@@ -109,6 +115,14 @@ fn plan_archive(ctx: &Ctx, keys: &[String]) -> Result<ArchivePlan> {
         let source_path = ctx.storage_root.tasks_dir().join(format!("{key}.toml"));
         if !source_path.exists() {
             not_found.push(key);
+            continue;
+        }
+
+        if let Some(workflows) = workflow_refs.get(&key) {
+            rejected.push(RejectedTask {
+                key,
+                reason: format!("referenced by active workflow {}", workflows.join(", ")),
+            });
             continue;
         }
 
@@ -159,6 +173,33 @@ fn latest_valid_task_run_for<'a>(
         .max_by(|left, right| task_run::compare_task_run_records(left, right))
 }
 
+fn active_workflow_task_refs(ctx: &Ctx) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut refs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for path in workflow_store::workflow_paths(ctx)? {
+        let workflow_id = workflow_store::id_from_path(&path)?;
+        let workflow = workflow_store::read(&path).with_context(|| {
+            format!(
+                "Cannot determine active Workflow TaskDocument references because workflow {} could not be read",
+                ctx.storage_root.display_path(&path)
+            )
+        })?;
+        for key in workflow_task_keys(&workflow) {
+            refs.entry(key).or_default().push(workflow_id.clone());
+        }
+    }
+    Ok(refs)
+}
+
+fn workflow_task_keys(metadata: &WorkflowMetadata) -> Vec<String> {
+    metadata
+        .tasks
+        .iter()
+        .map(|row| task::safe_task_key(&row.task))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 fn should_confirm(ctx: &Ctx) -> bool {
     !ctx.is_json() && !ctx.quiet && ctx.ui.can_prompt()
 }
@@ -171,9 +212,9 @@ fn move_task_to_archive(ctx: &Ctx, candidate: &ArchiveCandidate) -> Result<Archi
         )
     })?;
 
-    fs::rename(&candidate.source_path, &candidate.archive_path).with_context(|| {
+    fs::copy(&candidate.source_path, &candidate.archive_path).with_context(|| {
         format!(
-            "Failed to move TaskDocument into archive: {} -> {}",
+            "Failed to copy TaskDocument into archive: {} -> {}",
             ctx.storage_root.display_path(&candidate.source_path),
             ctx.storage_root.display_path(&candidate.archive_path)
         )
@@ -187,10 +228,20 @@ fn move_task_to_archive(ctx: &Ctx, candidate: &ArchiveCandidate) -> Result<Archi
         archive_path: wt_relative_path(ctx, &candidate.archive_path),
     };
     let manifest_content = toml::to_string_pretty(&manifest)?;
-    fs::write(&candidate.manifest_path, manifest_content).with_context(|| {
+    if let Err(err) = fs::write(&candidate.manifest_path, manifest_content).with_context(|| {
         format!(
             "Failed to write task archive manifest: {}",
             ctx.storage_root.display_path(&candidate.manifest_path)
+        )
+    }) {
+        let _ = fs::remove_file(&candidate.archive_path);
+        return Err(err);
+    }
+
+    remove_file_if_present(&candidate.source_path).with_context(|| {
+        format!(
+            "Failed to remove archived TaskDocument from active storage: {}",
+            ctx.storage_root.display_path(&candidate.source_path)
         )
     })?;
 
@@ -200,6 +251,14 @@ fn move_task_to_archive(ctx: &Ctx, candidate: &ArchiveCandidate) -> Result<Archi
         archive_path: manifest.archive_path,
         manifest_path: wt_relative_path(ctx, &candidate.manifest_path),
     })
+}
+
+fn remove_file_if_present(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn wt_relative_path(ctx: &Ctx, path: &Path) -> String {
@@ -300,6 +359,7 @@ mod tests {
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::task_run;
+    use crate::workflow::{self as workflow_store, WorkflowMetadata, WorkflowMode, WorkflowTask};
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -346,6 +406,16 @@ body = "Task body"
             ),
         )
         .unwrap();
+    }
+
+    fn write_workflow(root: &Path, id: &str, tasks: Vec<WorkflowTask>) {
+        let (ctx, _) = test_ctx(root);
+        let path = root
+            .join(".wt/execution/workflows")
+            .join(format!("{id}.toml"));
+        let mut workflow =
+            WorkflowMetadata::new(WorkflowMode::Batch, "explicit", Some("main".into()), tasks);
+        workflow_store::write(&ctx, &path, &mut workflow).unwrap();
     }
 
     #[test]
@@ -397,6 +467,58 @@ body = "Task body"
 
         assert!(format!("{err:#}").contains("running"));
         assert!(ctx.storage_root.tasks_dir().join("busy.toml").exists());
+    }
+
+    #[test]
+    fn archive_rejects_task_referenced_by_active_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, _) = test_ctx(dir.path());
+        write_task(dir.path(), "workflow-task");
+        let run = task_run::create(
+            &ctx,
+            "workflow-task",
+            "workflow-task",
+            Some("active-wf"),
+            task_run::STATUS_PREPARED,
+        )
+        .unwrap();
+        write_workflow(
+            dir.path(),
+            "active-wf",
+            vec![WorkflowTask::new("workflow-task", run.id)],
+        );
+
+        let err = archive(&ctx, &["workflow-task".to_string()]).unwrap_err();
+
+        let report = format!("{err:#}");
+        assert!(report.contains("referenced by active workflow active-wf"));
+        assert!(
+            ctx.storage_root
+                .tasks_dir()
+                .join("workflow-task.toml")
+                .exists()
+        );
+        assert!(
+            !ctx.storage_root
+                .task_archive_dir("workflow-task")
+                .join("workflow-task.toml")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn archive_rejects_legacy_archive_storage() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, _) = test_ctx_with_confirm(dir.path(), true);
+        write_task(dir.path(), "demo");
+        fs::create_dir_all(dir.path().join(".wt/archive")).unwrap();
+
+        let err = archive(&ctx, &["demo".to_string()]).unwrap_err();
+
+        let report = format!("{err:#}");
+        assert!(report.contains("legacy"));
+        assert!(report.contains("archive"));
+        assert!(ctx.storage_root.tasks_dir().join("demo.toml").exists());
     }
 
     #[test]
@@ -523,6 +645,30 @@ body = "Task body"
                 .join("demo.toml")
                 .exists()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_preserves_active_task_when_manifest_write_fails() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, _) = test_ctx_with_confirm(dir.path(), true);
+        write_task(dir.path(), "demo");
+        let archive_dir = ctx.storage_root.task_archive_dir("demo");
+        fs::create_dir_all(&archive_dir).unwrap();
+        symlink(
+            archive_dir.join("missing-parent").join("archive.toml"),
+            archive_dir.join("archive.toml"),
+        )
+        .unwrap();
+
+        let err = archive(&ctx, &["demo".to_string()]).unwrap_err();
+
+        let report = format!("{err:#}");
+        assert!(report.contains("Failed to write task archive manifest"));
+        assert!(ctx.storage_root.tasks_dir().join("demo.toml").exists());
+        assert!(!archive_dir.join("demo.toml").exists());
     }
 
     #[test]
