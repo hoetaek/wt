@@ -6,6 +6,7 @@ pub mod config;
 pub mod config_render;
 pub mod context;
 pub mod error;
+pub mod i18n;
 pub mod local_ui;
 pub mod messages;
 pub mod names;

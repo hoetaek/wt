@@ -507,6 +507,21 @@ impl Ctx {
         self.output_mode == OutputMode::Json
     }
 
+    /// The effective language for human-facing output.
+    ///
+    /// Machine-readable output (`--json`) always renders English so it stays
+    /// reproducible across locales; only the human TTY path honors the
+    /// configured/detected language.
+    pub fn lang(&self) -> crate::i18n::Lang {
+        if self.is_json() {
+            return crate::i18n::Lang::En;
+        }
+        crate::i18n::Lang::resolve(
+            self.config.language,
+            crate::i18n::Lang::detect_locale().as_deref(),
+        )
+    }
+
     pub fn machine_ctx(&self) -> MachineCtx<'_> {
         MachineCtx::new_with_options(
             self.runner.as_ref(),
@@ -796,6 +811,7 @@ pub mod mock {
 mod tests {
     use super::mock::*;
     use super::*;
+    use crate::config::Language;
     use assert_fs::TempDir;
     use std::fs;
 
@@ -885,6 +901,33 @@ mod tests {
         assert_eq!(ctx.invocation_root, invocation_root);
         assert_eq!(ctx.repo_name, "sample-app");
         assert_eq!(ctx.parent_dir, temp.path());
+    }
+
+    #[test]
+    fn ctx_lang_forces_english_for_json_output() {
+        let temp = TempDir::new().unwrap();
+        let repo_root = temp.path().join("sample-app");
+        fs::create_dir(&repo_root).unwrap();
+
+        let config = Config {
+            language: Language::Ko,
+            ..Config::default()
+        };
+        let options = CtxOptions {
+            output_mode: OutputMode::Json,
+            ..CtxOptions::default()
+        };
+        let ctx = Ctx::new_with_options(
+            repo_root.clone(),
+            repo_root.clone(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+            options,
+        );
+
+        // Machine-readable output is locale-independent: ko config + json ⇒ English.
+        assert_eq!(ctx.lang(), crate::i18n::Lang::En);
     }
 
     #[test]
