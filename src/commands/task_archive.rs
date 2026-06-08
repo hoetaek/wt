@@ -1,6 +1,6 @@
 use crate::context::Ctx;
 use crate::task;
-use crate::task_run::{self, TaskRunRecord};
+use crate::task_run::{self, TaskRunContext, TaskRunRecord};
 use crate::workflow::{self as workflow_store, WorkflowMetadata};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,21 @@ struct ArchiveCandidate {
     archive_dir: PathBuf,
     archive_path: PathBuf,
     manifest_path: PathBuf,
+    task_run_moves: Vec<TaskRunArchiveMove>,
+}
+
+#[derive(Debug)]
+struct TaskRunArchiveMove {
+    id: String,
+    status: String,
+    source_path: PathBuf,
+    archive_path: PathBuf,
+}
+
+#[derive(Debug)]
+struct FileRestore {
+    source: PathBuf,
+    archive: PathBuf,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -65,6 +80,15 @@ struct ArchivedTask {
     source_path: String,
     archive_path: String,
     manifest_path: String,
+    task_runs: Vec<ArchivedTaskRun>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+struct ArchivedTaskRun {
+    id: String,
+    status: String,
+    source_path: String,
+    archive_path: String,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -86,6 +110,16 @@ struct ArchiveManifest {
     task_key: String,
     archived_at: u64,
     wt_version: String,
+    source_path: String,
+    archive_path: String,
+    task_runs: Vec<TaskRunManifestEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct TaskRunManifestEntry {
+    id: String,
+    status: String,
+    result: String,
     source_path: String,
     archive_path: String,
 }
@@ -139,7 +173,14 @@ fn plan_archive(ctx: &Ctx, keys: &[String]) -> Result<ArchivePlan> {
         let archive_dir = ctx.storage_root.task_archive_dir(&key);
         let archive_path = archive_dir.join(format!("{key}.toml"));
         let manifest_path = archive_dir.join("archive.toml");
-        if archive_path.exists() || manifest_path.exists() {
+        let task_run_moves =
+            direct_task_run_moves_for(ctx, &inventory.records, &key, &archive_dir)?;
+        if archive_path.exists()
+            || manifest_path.exists()
+            || task_run_moves
+                .iter()
+                .any(|move_file| move_file.archive_path.exists())
+        {
             rejected.push(RejectedTask {
                 key,
                 reason: "archive already exists".to_string(),
@@ -153,6 +194,7 @@ fn plan_archive(ctx: &Ctx, keys: &[String]) -> Result<ArchivePlan> {
             archive_dir,
             archive_path,
             manifest_path,
+            task_run_moves,
         });
     }
 
@@ -171,6 +213,32 @@ fn latest_valid_task_run_for<'a>(
         .iter()
         .filter(|record| record.run.task == key)
         .max_by(|left, right| task_run::compare_task_run_records(left, right))
+}
+
+fn direct_task_run_moves_for(
+    ctx: &Ctx,
+    records: &[TaskRunRecord],
+    key: &str,
+    archive_dir: &Path,
+) -> Result<Vec<TaskRunArchiveMove>> {
+    let mut moves = Vec::new();
+    for record in records.iter().filter(|record| record.run.task == key) {
+        if matches!(
+            task_run::resolve_context(ctx, record)?,
+            TaskRunContext::Direct
+        ) {
+            moves.push(TaskRunArchiveMove {
+                id: record.id.clone(),
+                status: record.run.status.as_str().to_string(),
+                source_path: record.path.clone(),
+                archive_path: archive_dir
+                    .join("task-runs")
+                    .join(format!("{}.toml", record.id)),
+            });
+        }
+    }
+    moves.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(moves)
 }
 
 fn active_workflow_task_refs(ctx: &Ctx) -> Result<BTreeMap<String, Vec<String>>> {
@@ -212,13 +280,38 @@ fn move_task_to_archive(ctx: &Ctx, candidate: &ArchiveCandidate) -> Result<Archi
         )
     })?;
 
-    fs::copy(&candidate.source_path, &candidate.archive_path).with_context(|| {
-        format!(
-            "Failed to copy TaskDocument into archive: {} -> {}",
-            ctx.storage_root.display_path(&candidate.source_path),
-            ctx.storage_root.display_path(&candidate.archive_path)
-        )
-    })?;
+    if let Err(err) = copy_archive_file(
+        ctx,
+        &candidate.source_path,
+        &candidate.archive_path,
+        "TaskDocument",
+    ) {
+        rollback_archive_artifacts(candidate);
+        return Err(err);
+    }
+    for task_run_move in &candidate.task_run_moves {
+        if let Err(err) = copy_archive_file(
+            ctx,
+            &task_run_move.source_path,
+            &task_run_move.archive_path,
+            "TaskRun",
+        ) {
+            rollback_archive_artifacts(candidate);
+            return Err(err);
+        }
+    }
+
+    let task_runs = candidate
+        .task_run_moves
+        .iter()
+        .map(|task_run_move| TaskRunManifestEntry {
+            id: task_run_move.id.clone(),
+            status: task_run_move.status.clone(),
+            result: "moved".to_string(),
+            source_path: wt_relative_path(ctx, &task_run_move.source_path),
+            archive_path: wt_relative_path(ctx, &task_run_move.archive_path),
+        })
+        .collect::<Vec<_>>();
 
     let manifest = ArchiveManifest {
         task_key: candidate.key.clone(),
@@ -226,6 +319,7 @@ fn move_task_to_archive(ctx: &Ctx, candidate: &ArchiveCandidate) -> Result<Archi
         wt_version: env!("CARGO_PKG_VERSION").to_string(),
         source_path: wt_relative_path(ctx, &candidate.source_path),
         archive_path: wt_relative_path(ctx, &candidate.archive_path),
+        task_runs,
     };
     let manifest_content = toml::to_string_pretty(&manifest)?;
     if let Err(err) = fs::write(&candidate.manifest_path, manifest_content).with_context(|| {
@@ -234,8 +328,26 @@ fn move_task_to_archive(ctx: &Ctx, candidate: &ArchiveCandidate) -> Result<Archi
             ctx.storage_root.display_path(&candidate.manifest_path)
         )
     }) {
-        let _ = fs::remove_file(&candidate.archive_path);
+        rollback_archive_artifacts(candidate);
         return Err(err);
+    }
+
+    let mut removed_sources = Vec::new();
+    for task_run_move in &candidate.task_run_moves {
+        if let Err(err) = remove_file_if_present(&task_run_move.source_path).with_context(|| {
+            format!(
+                "Failed to remove archived TaskRun from active storage: {}",
+                ctx.storage_root.display_path(&task_run_move.source_path)
+            )
+        }) {
+            restore_removed_sources(&removed_sources);
+            rollback_archive_artifacts(candidate);
+            return Err(err);
+        }
+        removed_sources.push(FileRestore {
+            source: task_run_move.source_path.clone(),
+            archive: task_run_move.archive_path.clone(),
+        });
     }
 
     if let Err(err) = remove_file_if_present(&candidate.source_path).with_context(|| {
@@ -244,6 +356,7 @@ fn move_task_to_archive(ctx: &Ctx, candidate: &ArchiveCandidate) -> Result<Archi
             ctx.storage_root.display_path(&candidate.source_path)
         )
     }) {
+        restore_removed_sources(&removed_sources);
         rollback_archive_artifacts(candidate);
         return Err(err);
     }
@@ -253,7 +366,36 @@ fn move_task_to_archive(ctx: &Ctx, candidate: &ArchiveCandidate) -> Result<Archi
         source_path: manifest.source_path,
         archive_path: manifest.archive_path,
         manifest_path: wt_relative_path(ctx, &candidate.manifest_path),
+        task_runs: manifest
+            .task_runs
+            .into_iter()
+            .map(|entry| ArchivedTaskRun {
+                id: entry.id,
+                status: entry.status,
+                source_path: entry.source_path,
+                archive_path: entry.archive_path,
+            })
+            .collect(),
     })
+}
+
+fn copy_archive_file(ctx: &Ctx, source: &Path, archive: &Path, label: &str) -> Result<()> {
+    if let Some(parent) = archive.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create archive directory: {}",
+                ctx.storage_root.display_path(parent)
+            )
+        })?;
+    }
+    fs::copy(source, archive).with_context(|| {
+        format!(
+            "Failed to copy {label} into archive: {} -> {}",
+            ctx.storage_root.display_path(source),
+            ctx.storage_root.display_path(archive)
+        )
+    })?;
+    Ok(())
 }
 
 fn remove_file_if_present(path: &Path) -> Result<()> {
@@ -264,9 +406,25 @@ fn remove_file_if_present(path: &Path) -> Result<()> {
     }
 }
 
+fn restore_removed_sources(removed_sources: &[FileRestore]) {
+    for removed in removed_sources.iter().rev() {
+        if removed.source.exists() {
+            continue;
+        }
+        if let Some(parent) = removed.source.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::copy(&removed.archive, &removed.source);
+    }
+}
+
 fn rollback_archive_artifacts(candidate: &ArchiveCandidate) {
     let _ = fs::remove_file(&candidate.manifest_path);
     let _ = fs::remove_file(&candidate.archive_path);
+    for task_run_move in &candidate.task_run_moves {
+        let _ = fs::remove_file(&task_run_move.archive_path);
+    }
+    let _ = fs::remove_dir(candidate.archive_dir.join("task-runs"));
     let _ = fs::remove_dir(&candidate.archive_dir);
 }
 
@@ -513,6 +671,7 @@ body = "Task body"
                 .join("workflow-task.toml")
                 .exists()
         );
+        assert!(run.path.exists());
     }
 
     #[test]
@@ -577,6 +736,69 @@ body = "Task body"
                 .join("demo.toml")
                 .exists()
         );
+    }
+
+    #[test]
+    fn archive_moves_direct_taskruns_and_records_them_in_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, _) = test_ctx_with_confirm(dir.path(), true);
+        write_task(dir.path(), "demo");
+        let passed = task_run::create(&ctx, "demo", "demo", None, task_run::STATUS_PASSED).unwrap();
+        let failed = task_run::create(&ctx, "demo", "demo", None, task_run::STATUS_FAILED).unwrap();
+
+        archive(&ctx, &["demo".to_string()]).unwrap();
+
+        let archive_dir = ctx.storage_root.task_archive_dir("demo");
+        assert!(!passed.path.exists());
+        assert!(!failed.path.exists());
+        assert!(
+            archive_dir
+                .join("task-runs")
+                .join(format!("{}.toml", passed.id))
+                .exists()
+        );
+        assert!(
+            archive_dir
+                .join("task-runs")
+                .join(format!("{}.toml", failed.id))
+                .exists()
+        );
+        let active_runs = task_run::list_lossy(&ctx).unwrap();
+        assert!(
+            active_runs
+                .records
+                .iter()
+                .all(|record| record.run.task != "demo")
+        );
+
+        let manifest: toml::Value =
+            toml::from_str(&fs::read_to_string(archive_dir.join("archive.toml")).unwrap()).unwrap();
+        let task_runs = manifest["task_runs"].as_array().unwrap();
+        assert_eq!(task_runs.len(), 2);
+        for (record, status) in [
+            (&passed, task_run::STATUS_PASSED),
+            (&failed, task_run::STATUS_FAILED),
+        ] {
+            let entry = task_runs
+                .iter()
+                .find(|entry| entry["id"].as_str() == Some(record.id.as_str()))
+                .unwrap();
+            assert_eq!(entry["status"].as_str(), Some(status.as_str()));
+            assert_eq!(entry["result"].as_str(), Some("moved"));
+            assert_eq!(
+                entry["source_path"].as_str(),
+                Some(format!("execution/task-runs/{}.toml", record.id).as_str())
+            );
+            assert_eq!(
+                entry["archive_path"].as_str(),
+                Some(format!("execution/archive/tasks/demo/task-runs/{}.toml", record.id).as_str())
+            );
+        }
+
+        let (list_ctx, list_ui) = test_ctx(dir.path());
+        crate::commands::task_list::run(&list_ctx, true).unwrap();
+        let output = list_ui.steps.lock().unwrap().join("\n");
+        assert!(!output.contains("demo"));
     }
 
     #[test]
@@ -711,6 +933,50 @@ body = "Task body"
                 .storage_root
                 .task_archive_dir("demo")
                 .join("demo.toml")
+                .exists()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_rolls_back_task_and_taskrun_artifacts_when_taskrun_remove_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, _) = test_ctx_with_confirm(dir.path(), true);
+        write_task(dir.path(), "demo");
+        let run = task_run::create(&ctx, "demo", "demo", None, task_run::STATUS_PASSED).unwrap();
+        let task_runs_dir = ctx.storage_root.task_runs_dir();
+        let archive_dir = ctx.storage_root.task_archive_dir("demo");
+        let original_permissions = fs::metadata(&task_runs_dir).unwrap().permissions();
+        fs::set_permissions(&task_runs_dir, fs::Permissions::from_mode(0o500)).unwrap();
+
+        let result = archive(&ctx, &["demo".to_string()]);
+        fs::set_permissions(&task_runs_dir, original_permissions).unwrap();
+        let err = result.unwrap_err();
+
+        let report = format!("{err:#}");
+        assert!(report.contains("Failed to remove archived TaskRun"));
+        assert!(ctx.storage_root.tasks_dir().join("demo.toml").exists());
+        assert!(run.path.exists());
+        assert!(!archive_dir.join("demo.toml").exists());
+        assert!(
+            !archive_dir
+                .join("task-runs")
+                .join(format!("{}.toml", run.id))
+                .exists()
+        );
+        assert!(!archive_dir.join("archive.toml").exists());
+        assert!(!archive_dir.exists());
+
+        let (retry_ctx, _) = test_ctx_with_confirm(dir.path(), true);
+        archive(&retry_ctx, &["demo".to_string()]).unwrap();
+        assert!(
+            retry_ctx
+                .storage_root
+                .task_archive_dir("demo")
+                .join("task-runs")
+                .join(format!("{}.toml", run.id))
                 .exists()
         );
     }

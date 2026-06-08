@@ -814,9 +814,9 @@ pub enum TaskCommand {
         #[arg(long)]
         all: bool,
     },
-    /// Move local TaskDocuments into the task archive
+    /// Move local TaskDocuments and linked direct TaskRuns into the task archive
     #[command(
-        long_about = "Move TaskDocument(s) into <repo-root>/.wt/execution/archive/tasks/<key>/.\n\nVisibility/retention action: archived tasks disappear from wt task list. Recover by manually moving the file back. Rejects tasks whose latest TaskRun is running."
+        long_about = "Move TaskDocument(s) and linked direct TaskRuns into <repo-root>/.wt/execution/archive/tasks/<key>/.\n\nVisibility/retention action: archived tasks disappear from wt task list, and their direct TaskRuns leave the active TaskRun inventory. Recover by manually moving the files back. Rejects tasks whose latest TaskRun is running."
     )]
     Archive {
         /// Local task keys from <repo-root>/.wt/execution/tasks/<task>.toml
@@ -2069,6 +2069,7 @@ mod tests {
             .to_string();
 
         assert!(help.contains("<TASK>..."));
+        assert!(help.contains("linked direct TaskRuns"));
         assert!(!help.contains("[TASK]"));
     }
 
