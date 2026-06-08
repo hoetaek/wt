@@ -80,6 +80,39 @@ pub(crate) enum KeyInput {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceView {
+    All,
+    LocalOnly,
+    OriginOnly,
+}
+
+impl SourceView {
+    fn next(self) -> Self {
+        match self {
+            Self::All => Self::LocalOnly,
+            Self::LocalOnly => Self::OriginOnly,
+            Self::OriginOnly => Self::All,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::All => Self::OriginOnly,
+            Self::OriginOnly => Self::LocalOnly,
+            Self::LocalOnly => Self::All,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::LocalOnly => "local-only",
+            Self::OriginOnly => "origin-only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     List,
     FilterInput,
@@ -175,6 +208,7 @@ pub(crate) struct AppState {
     rows: Vec<BrowserRow>,
     diagnostics: Vec<String>,
     filter: String,
+    source_view: SourceView,
     selected_index: usize,
     menu_selected_index: usize,
     mode: Mode,
@@ -197,6 +231,7 @@ struct BrowserCopy {
     no_selection_message: &'static str,
     no_selection_status: &'static str,
     default_status_line: &'static str,
+    source_view_enabled: bool,
 }
 
 impl BrowserCopy {
@@ -208,6 +243,7 @@ impl BrowserCopy {
         no_selection_message: "No task selected",
         no_selection_status: "no task selected",
         default_status_line: "j/k move  / filter  v body  a archive  Enter actions  q quit",
+        source_view_enabled: true,
     };
 
     const WORKFLOW: Self = Self {
@@ -218,6 +254,7 @@ impl BrowserCopy {
         no_selection_message: "No workflow selected",
         no_selection_status: "no workflow selected",
         default_status_line: "j/k move  / filter  v body  Enter actions  q quit",
+        source_view_enabled: false,
     };
 }
 
@@ -253,14 +290,15 @@ impl AppState {
         copy: BrowserCopy,
         columns: Vec<BrowserColumn>,
     ) -> Self {
-        Self {
+        let mut state = Self {
             rows,
             diagnostics,
             filter: String::new(),
+            source_view: SourceView::All,
             selected_index: 0,
             menu_selected_index: 0,
             mode: Mode::List,
-            status_line: copy.default_status_line.into(),
+            status_line: String::new(),
             copy,
             popup: None,
             output: OutputPanel::default(),
@@ -268,7 +306,9 @@ impl AppState {
             columns,
             body_view_open: false,
             body_scroll: 0,
-        }
+        };
+        state.status_line = state.list_status_line();
+        state
     }
 
     pub(crate) fn handle(&mut self, key: KeyInput) -> Outcome {
@@ -436,6 +476,16 @@ impl AppState {
         &self.filter
     }
 
+    pub(crate) fn source_view(&self) -> SourceView {
+        self.source_view
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_source_view_for_test(&mut self, view: SourceView) {
+        self.source_view = view;
+        self.clamp_selection();
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
@@ -488,7 +538,10 @@ impl AppState {
     pub(crate) fn visible_rows(&self) -> Vec<&BrowserRow> {
         self.rows
             .iter()
-            .filter(|row| row_matches_filter(row, &self.filter))
+            .filter(|row| {
+                row_matches_filter(row, &self.filter)
+                    && row_matches_source_view(row, self.source_view)
+            })
             .collect()
     }
 
@@ -531,7 +584,7 @@ impl AppState {
         self.rows = rows;
         self.diagnostics = diagnostics;
         self.mode = Mode::List;
-        self.status_line = self.copy.default_status_line.into();
+        self.status_line = self.list_status_line();
         self.selected_index = self
             .visible_rows()
             .iter()
@@ -570,6 +623,8 @@ impl AppState {
                 self.open_menu();
             }
             KeyInput::Char('q') => return Outcome::Quit,
+            KeyInput::Char('l') if self.copy.source_view_enabled => self.rotate_source_view(true),
+            KeyInput::Char('h') if self.copy.source_view_enabled => self.rotate_source_view(false),
             KeyInput::Char(ch) => {
                 if let Some((key, action)) = self.shortcut_dispatch(ch) {
                     return Outcome::Dispatch { key, action };
@@ -585,12 +640,12 @@ impl AppState {
             KeyInput::Esc => {
                 self.filter.clear();
                 self.mode = Mode::List;
-                self.status_line = self.copy.default_status_line.into();
+                self.status_line = self.list_status_line();
                 self.clamp_selection();
             }
             KeyInput::Enter => {
                 self.mode = Mode::List;
-                self.status_line = self.copy.default_status_line.into();
+                self.status_line = self.list_status_line();
             }
             KeyInput::Down => self.move_down(),
             KeyInput::Up => self.move_up(),
@@ -611,7 +666,7 @@ impl AppState {
         match key {
             KeyInput::Esc => {
                 self.mode = Mode::List;
-                self.status_line = self.copy.default_status_line.into();
+                self.status_line = self.list_status_line();
             }
             KeyInput::Down | KeyInput::Char('j') => self.move_menu_down(),
             KeyInput::Up | KeyInput::Char('k') => self.move_menu_up(),
@@ -642,7 +697,30 @@ impl AppState {
 
     fn close_body_view(&mut self) {
         self.body_view_open = false;
-        self.status_line = self.copy.default_status_line.into();
+        self.status_line = self.list_status_line();
+    }
+
+    fn rotate_source_view(&mut self, forward: bool) {
+        self.source_view = if forward {
+            self.source_view.next()
+        } else {
+            self.source_view.prev()
+        };
+        self.selected_index = 0;
+        self.clamp_selection();
+        self.status_line = self.list_status_line();
+    }
+
+    fn list_status_line(&self) -> String {
+        if self.copy.source_view_enabled {
+            format!(
+                "{}  [view: {}]",
+                self.copy.default_status_line,
+                self.source_view().label()
+            )
+        } else {
+            self.copy.default_status_line.to_string()
+        }
     }
 
     fn scroll_body_down(&mut self, amount: usize) {
@@ -862,6 +940,14 @@ fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
             .is_some_and(|branch| branch.to_lowercase().contains(&needle))
 }
 
+fn row_matches_source_view(row: &BrowserRow, view: SourceView) -> bool {
+    match view {
+        SourceView::All => true,
+        SourceView::LocalOnly => row.source == "local",
+        SourceView::OriginOnly => row.source == "provider-origin",
+    }
+}
+
 #[cfg(test)]
 fn default_task_columns() -> Vec<BrowserColumn> {
     vec![
@@ -909,6 +995,12 @@ mod tests {
             preview_lines: vec![format!("Origin      Linear WT-142")],
             menu,
         }
+    }
+
+    fn source_row(key: &str, source: &str) -> BrowserRow {
+        let mut r = row(key, key, "stale");
+        r.source = source.into();
+        r
     }
 
     fn app() -> AppState {
@@ -1152,6 +1244,120 @@ mod tests {
         assert_eq!(app.visible_keys().len(), 3);
         app.handle(KeyInput::Backspace);
         assert_eq!(app.filter(), "", "빈 filter에서 backspace는 no-op");
+    }
+
+    #[test]
+    fn source_view_default_is_all_shows_every_row() {
+        let app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        assert_eq!(app.source_view(), SourceView::All);
+        assert_eq!(app.visible_keys(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn local_only_view_hides_provider_origin_rows() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::LocalOnly);
+        assert_eq!(app.visible_keys(), vec!["a"]);
+    }
+
+    #[test]
+    fn origin_only_view_hides_local_rows() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        assert_eq!(app.visible_keys(), vec!["b"]);
+    }
+
+    #[test]
+    fn source_view_next_prev_wrap() {
+        assert_eq!(SourceView::All.next(), SourceView::LocalOnly);
+        assert_eq!(SourceView::LocalOnly.next(), SourceView::OriginOnly);
+        assert_eq!(SourceView::OriginOnly.next(), SourceView::All);
+        assert_eq!(SourceView::All.prev(), SourceView::OriginOnly);
+        assert_eq!(SourceView::OriginOnly.prev(), SourceView::LocalOnly);
+        assert_eq!(SourceView::LocalOnly.prev(), SourceView::All);
+    }
+
+    #[test]
+    fn l_rotates_source_view_forward_wrapping() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('l'));
+        assert_eq!(app.source_view(), SourceView::LocalOnly);
+        app.handle(KeyInput::Char('l'));
+        assert_eq!(app.source_view(), SourceView::OriginOnly);
+        app.handle(KeyInput::Char('l'));
+        assert_eq!(app.source_view(), SourceView::All);
+    }
+
+    #[test]
+    fn h_rotates_source_view_backward_wrapping() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('h'));
+        assert_eq!(app.source_view(), SourceView::OriginOnly);
+        app.handle(KeyInput::Char('h'));
+        assert_eq!(app.source_view(), SourceView::LocalOnly);
+    }
+
+    #[test]
+    fn status_line_shows_active_source_view() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('l'));
+        assert!(app.status_line().contains("local-only"));
+    }
+
+    #[test]
+    fn source_view_and_text_filter_compose_as_and() {
+        let mut app = AppState::new(vec![
+            source_row("alpha", "local"),
+            source_row("beta", "local"),
+            source_row("alpine", "provider-origin"),
+        ]);
+        app.handle(KeyInput::Char('l'));
+        app.handle(KeyInput::Char('/'));
+        for ch in "alp".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+        assert_eq!(app.visible_keys(), vec!["alpha"]);
+    }
+
+    #[test]
+    fn filter_input_mode_hl_are_filter_text_not_rotation() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('/'));
+        app.handle(KeyInput::Char('h'));
+        app.handle(KeyInput::Char('l'));
+        assert_eq!(app.filter(), "hl");
+        assert_eq!(app.source_view(), SourceView::All);
+    }
+
+    #[test]
+    fn empty_source_view_does_not_crash_and_nav_is_noop() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('l'));
+        app.handle(KeyInput::Char('l'));
+        assert!(app.visible_keys().is_empty());
+        assert!(app.selected_row().is_none());
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('k'));
+        assert!(app.selected_row().is_none());
+    }
+
+    #[test]
+    fn workflow_browser_hl_does_not_rotate_source_view() {
+        let mut app =
+            AppState::workflow_with_diagnostics(vec![source_row("wf", "local")], Vec::new());
+        app.handle(KeyInput::Char('l'));
+        app.handle(KeyInput::Char('h'));
+        assert_eq!(app.source_view(), SourceView::All);
+        assert!(!app.status_line().contains("view:"));
     }
 
     #[test]
