@@ -20,9 +20,9 @@ pub(super) fn validate_required_codex_base_review(
     let status = codex_base_review_status(state, &parent);
     let accept_command = codex_base_review_accept_command(&state.run_id, &parent);
     bail!(
-        "Workflow task {} requires Codex base review evidence before pass; {status}. Open a Codex surface and run `{}` against this task. For non-interactive runs, use `{}`. Then record acceptance with `{accept_command}` before running `wt workflow pass`.",
+        "Workflow task {} requires Codex base review evidence before pass; {status}. Send the review to the task agent's Codex surface with `{}`. For non-interactive runs, use `{}`. Then record acceptance with `{accept_command}` before running `wt workflow pass`.",
         workflow_task_label(&state.row),
-        codex_surface_review_command(&parent),
+        codex_surface_review_command(&state.run_id, &parent),
         codex_cli_review_command(&parent)
     )
 }
@@ -96,8 +96,8 @@ fn codex_review_parent(metadata: &WorkflowMetadata, row: &WorkflowTask) -> Resul
     }
 }
 
-fn codex_surface_review_command(parent: &str) -> String {
-    format!("/review --base {}", shell_arg(parent))
+fn codex_surface_review_command(run_id: &str, parent: &str) -> String {
+    format!("wt send {} /review --base {}", run_id, shell_arg(parent))
 }
 
 fn codex_cli_review_command(parent: &str) -> String {

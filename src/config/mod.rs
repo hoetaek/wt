@@ -8,7 +8,7 @@ pub use loader::{ConfigSource, InvalidProfileRecord, ProfileInventory, ProfileRe
 pub use schema::{
     AGENT_PROMPT_WORKFLOW_SCOPE, AgentCli, AgentConfig, AgentConfigPresence, ColumnConfig, Config,
     CopyAsEntry, DepCommand, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
-    OriginPolicy, ProfileConfig, RESERVED_PROFILE_NAME, ReadyMode, ReviewCodexBasePolicy,
+    Language, OriginPolicy, ProfileConfig, RESERVED_PROFILE_NAME, ReadyMode, ReviewCodexBasePolicy,
     ReviewConfig, ReviewDefaultPolicy, SetupConfig, SiteConfig, SiteProvider, SubmitMode,
     TaskListColumns, TaskListConfig, WORKSPACE_COLOR_KIND_BRANCH, WORKSPACE_COLOR_KIND_ISSUE,
     WORKSPACE_COLOR_KIND_PR, WORKSPACE_COLOR_KIND_TASK, WORKSPACE_DEFAULT_COLORS, WorkflowConfig,

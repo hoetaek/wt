@@ -46,6 +46,18 @@ pub struct Config {
     pub workspace: Option<WorkspaceConfig>,
     pub agent: Option<AgentConfig>,
     pub issues: Option<IssuesConfig>,
+    pub language: Language,
+}
+
+/// Configured language for human-facing `wt` output. `Auto` resolves from the
+/// OS locale; an unsupported explicit value is rejected at config load.
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Language {
+    #[default]
+    Auto,
+    En,
+    Ko,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -944,18 +956,13 @@ pub struct IssuesConfig {
     pub origin_policy: OriginPolicy,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum OriginPolicy {
+    #[default]
     ProviderPreferred,
     ProviderRequired,
     LocalOnly,
-}
-
-impl Default for OriginPolicy {
-    fn default() -> Self {
-        Self::ProviderPreferred
-    }
 }
 
 impl OriginPolicy {
