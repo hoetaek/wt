@@ -293,27 +293,10 @@ invariant five rounds running — and each narrow fix introduced the next defect
 Enumerating invariants up front and grilling against them catches most of that
 before the gate. An independent review gate still has irreducible value: a
 coordinator who co-authored the task contract is blind to gaps in their own
-spec, so the gate is not redundant with a rigorous self-review.
-
-When `review.codex_base` is configured (or you want independent base-diff
-evidence), satisfy it by running the review yourself — do not delegate `/review`
-to the task agent's own surface. Delegation makes the agent review its own work
-(less independent, the whole point of the gate), and the codex slash command
-swallows the submit key so completion is hard to detect. Instead run
-`codex review --base <parent>` from the coordinator shell against the task
-worktree, in the background, and let the completion notification wake you — no
-screen polling, idle-watching, or marker-grepping (those signals are unreliable
-for a codex surface). Read only the verdict: the `codex` conclusion after
-`<< Code review finished >>` plus any `[P1]/[P2]/[P3]` comments; the
-multi-thousand-line exploration log above it is noise. Judge accept/reject
-yourself with task context — a finding that belongs to a later slice can be
-deferred-accepted with a note — then record it with `wt task review <run>
---accept|--reject --codex-base <parent> '<evidence>'`. If `codex` is not
-installed, skip gracefully and record evidence manually; wt does not force a
-codex dependency. If codex is present but unauthenticated or erroring, that is a
-fixable or transient state — surface it, do not silently skip. This stays
-guidance, not a wt subcommand: wt backs the work, the coordinator runs and
-judges the review.
+spec, so the gate is not redundant with a rigorous self-review. When a
+`review.codex_base` gate blocks `wt workflow pass`, the failure message itself
+tells you how to satisfy it (run `codex review --base <parent>` yourself and
+record with `wt task review --codex-base`); follow that in-band guidance.
 
 Accumulate findings across one inspection pass and send one consolidated
 message. Do not drip one message per finding.
