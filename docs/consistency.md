@@ -1165,13 +1165,16 @@ selector의 10-row visible cap을 적용하지 않는다. TTY에서 `--json`/`--
 보여준다. Browser의 initial render는 read-only이고, interactive action menu를 통한 변경은
 대응하는 `wt task origin diff|fetch|pull|push|publish|attach` backend command와 같은 동작,
 preview, confirmation gate를 따른다. Pipe, redirect, CI, `--quiet`, `--json`은 interactive
-browser를 시도하지 않고 기존 text/JSON contract를 유지한다. Text output과 TUI browser는
-selector와 같은 TaskDocument display order를 유지하되 bounded columns로 보여준다. 기본
-visible column은 latest TaskRun에서 파생한 `run` status(`new`, `prepared`, `running`,
+browser를 시도하지 않고 기존 text/JSON contract를 유지한다. Human surfaces는 같은 bounded
+column model을 쓰지만 row ordering contract는 표면별로 다르다. Text output은
+`provider-origin`, `local` source group 순서로 보여주고 각 group 안에서는 collected row order를
+유지한다. TUI browser는 source group을 만들지 않고 collected TaskDocument row order를 그대로
+보여준다. 기본 visible column은 latest TaskRun에서 파생한 `run` status(`new`, `prepared`, `running`,
 `passed`, `failed`, `skipped`, `unknown`), origin health의 `next` action, `dur` expected duration,
 grow하는 `task` title/key, `branch`다. `dur`는 TaskDocument body의 `계획 (Planning)` section에서
 `예상 소요 (expected duration)` 값을 읽으며 값이 없으면 표시 전용 fallback을 쓴다.
-`.wt.toml`의 `[task_list.columns.<column>]`에서 각 column의 `hidden`과 `width`를 설정한다.
+Effective managed config(`.wt.toml`, `<repo-root>/.wt/config/local.toml`, selected profile config
+merge)의 `[task_list.columns.<column>]`에서 각 column의 `hidden`과 `width`를 설정한다.
 `task` column은 남는 폭을 받는 grow column이고, 모든 column을 숨긴 설정은 빈 human row model을
 만들지 않도록 task column을 다시 보여준다. `source`, `origin_status`, `size`는 같은 column
 모델의 optional field이며, `size` class는 리뷰/회고용 Planning metadata라 기본 hidden이다.
