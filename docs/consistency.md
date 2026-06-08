@@ -1210,9 +1210,9 @@ dispatch, archive 같은 row action 진입은 막히고, `v` 또는 Esc로 닫�
 TaskDocument `<key>.toml`, `archive.toml` manifest, 그리고 해당 task의 linked direct TaskRun이
 있으면 `task-runs/<id>.toml`을 둔다. 복구는 사용자가 파일을 active directory로 직접 옮기는
 manual repair이며, 별도 restore command를 제공하지 않는다. Safety gate는 backend command가
-소유한다. Latest TaskRun이 `running`인 task, active(unarchived) Workflow가 참조하는 task,
-legacy archive storage가 감지된 repository는 archive 전에 거부해야 하며 TUI는 이 gate를 우회하지
-않는다.
+소유한다. Latest valid TaskRun이 `running`인 task, active(unarchived) Workflow가 참조하는
+task, legacy archive storage가 감지된 repository는 archive 전에 거부해야 하며 TUI는 이 gate를
+우회하지 않는다. Malformed/invalid latest TaskRun record는 running 판정에서 제외한다.
 
 TaskDocument origin은 runnable slice 하나가 provider issue 하나와 연결되는 durable link다.
 Workflow origin은 saved Workflow의 title/body/context가 provider issue 하나와 연결되는
