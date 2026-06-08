@@ -242,7 +242,7 @@ impl BrowserCopy {
         empty_inventory_message: "No actionable tasks",
         no_selection_message: "No task selected",
         no_selection_status: "no task selected",
-        default_status_line: "j/k move  / filter  v body  a archive  Enter actions  q quit",
+        default_status_line: "j/k move  / filter  h/l view  v body  a archive  Enter actions  q quit",
         source_view_enabled: true,
     };
 
@@ -1179,10 +1179,18 @@ mod tests {
     }
 
     #[test]
+    fn task_status_line_mentions_source_view_shortcut() {
+        let app = app();
+
+        assert!(app.status_line().contains("h/l view"));
+    }
+
+    #[test]
     fn workflow_status_line_omits_archive_shortcut() {
         let app = AppState::workflow_with_diagnostics(Vec::new(), Vec::new());
 
         assert!(!app.status_line().contains("a archive"));
+        assert!(!app.status_line().contains("h/l view"));
     }
 
     #[test]
