@@ -1156,10 +1156,13 @@ actionable working set을 보여주는 canonical read-only list다. Bare `wt tas
 valid latest TaskRun에 대해서만 `wt run task`의 selectable task semantics를 따른다. TaskRun이
 없거나 latest TaskRun status가 `prepared`, `failed`, `skipped`인 TaskDocument를 보여주고,
 latest status가 `passed` 또는 `running`인 TaskDocument는 숨긴다. Malformed TaskRun이나
-unrecognized status는 `wt task list` 전용 lossy inventory behavior다. 이 경우 run status는
-`unknown`으로 표시하되 bare `wt task list`에서는 숨기고 `--all`에서만 보여준다. `wt run task`는
-strict TaskRun inventory를 읽으므로 malformed TaskRun file이 있으면 `unknown` row로 낮추지 않고
-task selector를 열기 전에 실패한다. 숨겨진 TaskDocument가 있으면 text output은 count와
+unrecognized status는 `wt task list` 전용 lossy inventory behavior다. Parseable invalid TaskRun
+TOML that still has a `task` field can be connected to that TaskDocument; if its status is
+unrecognized, the row status is `unknown`, bare `wt task list` hides it, and `--all` shows it.
+Syntactically broken TaskRun TOML cannot be connected to a task and is not an `unknown` row source, so
+it does not hide that TaskDocument from bare `wt task list`. `wt run task`는 strict TaskRun
+inventory를 읽으므로 malformed TaskRun file이 있으면 `unknown` row로 낮추지 않고 task selector를
+열기 전에 실패한다. 숨겨진 TaskDocument가 있으면 text output은 count와
 `wt task list --all` 안내를 보여주되 TaskDocument row를 dump하지 않는다. `wt task list --all`은
 full TaskDocument inventory mode이며 passed/running TaskDocument까지 포함한다. 두 mode 모두
 selector의 10-row visible cap을 적용하지 않는다. TTY에서 `--json`/`--quiet` 없이 실행되는
