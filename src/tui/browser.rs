@@ -54,7 +54,7 @@ fn run_browser_with_backend(
 
     loop {
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .context("draw TUI browser")?;
 
         if let Some((key, verb, result)) =

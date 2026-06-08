@@ -1224,13 +1224,16 @@ fn sanitize_selector_text(value: &str) -> String {
     collapse_selector_whitespace(&strip_terminal_sequences(value))
 }
 
-fn strip_terminal_sequences(value: &str) -> String {
+pub(crate) fn strip_terminal_sequences(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut chars = value.chars().peekable();
 
     while let Some(ch) = chars.next() {
         match ch {
             '\x1b' => skip_escape_sequence(&mut chars),
+            '\u{009b}' => skip_csi_sequence(&mut chars),
+            '\u{009d}' => skip_control_string(&mut chars),
+            '\u{0090}' | '\u{0098}' | '\u{009e}' | '\u{009f}' => skip_control_string(&mut chars),
             '\u{0080}'..='\u{009f}' => {}
             ch if is_unsafe_control(ch) => {}
             ch => output.push(ch),

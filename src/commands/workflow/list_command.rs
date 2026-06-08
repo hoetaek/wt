@@ -830,9 +830,9 @@ run = "run-{task}"
     fn workflow_browser_report_text(report: &WorkflowListReport) -> String {
         let backend = ratatui::backend::TestBackend::new(140, 18);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let app = workflow_browser_app(report);
+        let mut app = workflow_browser_app(report);
         terminal
-            .draw(|frame| crate::tui::render::draw(frame, &app))
+            .draw(|frame| crate::tui::render::draw(frame, &mut app))
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..18)

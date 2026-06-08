@@ -1,6 +1,7 @@
 use crate::origin_action_menu::{OriginAction, OriginActionMenu};
 use crate::tui::body_markup::{self, LineKind};
 use crate::tui::remote_ui::PrintKind;
+use crate::ui::selector::strip_terminal_sequences;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserRow {
@@ -385,7 +386,7 @@ impl AppState {
 
     pub(crate) fn body_lines(&self) -> Vec<(LineKind, String)> {
         self.selected_row()
-            .map(|row| body_markup::markup_body(&row.body))
+            .map(|row| body_markup::markup_body(&strip_terminal_sequences(&row.body)))
             .unwrap_or_default()
     }
 
@@ -654,6 +655,10 @@ impl AppState {
         if self.body_lines().is_empty() {
             self.body_scroll = 0;
         }
+    }
+
+    pub(crate) fn clamp_body_scroll_to(&mut self, max_scroll: usize) {
+        self.body_scroll = self.body_scroll.min(max_scroll);
     }
 
     fn move_down(&mut self) {

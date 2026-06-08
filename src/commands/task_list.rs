@@ -1423,9 +1423,9 @@ id = "WT-142"
     ) -> String {
         let backend = ratatui::backend::TestBackend::new(width, height);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let app = browser_app(ctx, report);
+        let mut app = browser_app(ctx, report);
         terminal
-            .draw(|frame| crate::tui::render::draw(frame, &app))
+            .draw(|frame| crate::tui::render::draw(frame, &mut app))
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height)

@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 const PREVIEW_MIN_HEIGHT: u16 = 16;
 const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
 
-pub(crate) fn draw(frame: &mut Frame<'_>, app: &AppState) {
+pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
     let area = frame.area();
     let show_body = app.body_view_open();
     let show_output = !app.output_lines().is_empty();
@@ -289,7 +289,7 @@ fn draw_output_panel(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     frame.render_widget(output, area);
 }
 
-fn draw_body_view(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
+fn draw_body_view(frame: &mut Frame<'_>, area: Rect, app: &mut AppState) {
     let visible_count = area.height.saturating_sub(2) as usize;
     let content_width = area.width.saturating_sub(2).max(1) as usize;
     let body_lines = app.body_lines();
@@ -301,7 +301,9 @@ fn draw_body_view(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
         visual_lines.push(Line::styled("no body", theme::dim_style()));
     }
 
-    let start = body_viewport_start(visual_lines.len(), visible_count, app.body_scroll());
+    let max_start = body_viewport_max_start(visual_lines.len(), visible_count);
+    app.clamp_body_scroll_to(max_start);
+    let start = app.body_scroll();
     let percent = body_scroll_percent(visual_lines.len(), visible_count, start);
     let title = app
         .selected_row()
@@ -322,11 +324,11 @@ fn draw_body_view(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     frame.render_widget(body, area);
 }
 
-fn body_viewport_start(line_count: usize, visible_count: usize, scroll: usize) -> usize {
+fn body_viewport_max_start(line_count: usize, visible_count: usize) -> usize {
     if visible_count == 0 || line_count <= visible_count {
         return 0;
     }
-    scroll.min(line_count - visible_count)
+    line_count - visible_count
 }
 
 fn body_scroll_percent(line_count: usize, visible_count: usize, start: usize) -> usize {
@@ -712,6 +714,11 @@ mod tests {
     }
 
     fn render_buffer(width: u16, height: u16, app: &AppState) -> Buffer {
+        let mut app = app.clone();
+        render_buffer_mut(width, height, &mut app)
+    }
+
+    fn render_buffer_mut(width: u16, height: u16, app: &mut AppState) -> Buffer {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, app)).unwrap();
@@ -720,6 +727,15 @@ mod tests {
 
     fn buffer_text(width: u16, height: u16, app: &AppState) -> String {
         let buffer = render_buffer(width, height, app);
+        buffer_to_text(width, height, &buffer)
+    }
+
+    fn buffer_text_mut(width: u16, height: u16, app: &mut AppState) -> String {
+        let buffer = render_buffer_mut(width, height, app);
+        buffer_to_text(width, height, &buffer)
+    }
+
+    fn buffer_to_text(width: u16, height: u16, buffer: &Buffer) -> String {
         (0..height)
             .map(|y| {
                 (0..width)
@@ -793,6 +809,15 @@ mod tests {
                 )
             })
         })
+    }
+
+    fn has_terminal_control_cell(buffer: &Buffer, width: u16, height: u16) -> bool {
+        (0..height)
+            .any(|y| (0..width).any(|x| buffer[(x, y)].symbol().chars().any(is_terminal_control)))
+    }
+
+    fn is_terminal_control(ch: char) -> bool {
+        ch == '\x1b' || ('\u{0080}'..='\u{009f}').contains(&ch) || ch.is_control()
     }
 
     #[test]
@@ -982,6 +1007,51 @@ mod tests {
         }
 
         panic!("expected body view scroll to reach wrapped tail of a long source line");
+    }
+
+    #[test]
+    fn body_view_strips_terminal_control_sequences_from_untrusted_body() {
+        let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
+        browser_row.body =
+            "plain\x1b[31mred\x1b[0m\nosc\x1b]0;title\x07done\nc1\u{009b}31mred".into();
+        let mut app = AppState::new(vec![browser_row]);
+        app.handle(KeyInput::Char('v'));
+
+        let buffer = render_buffer(80, 24, &app);
+        let text = buffer_text(80, 24, &app);
+
+        assert!(text.contains("plainred"));
+        assert!(text.contains("oscdone"));
+        assert!(text.contains("c1red"));
+        assert!(
+            !has_terminal_control_cell(&buffer, 80, 24),
+            "body view should not render terminal control characters from imported body text"
+        );
+    }
+
+    #[test]
+    fn body_view_scroll_up_moves_immediately_after_bottom_overscroll() {
+        let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
+        browser_row.body = (0..20)
+            .map(|index| format!("line-{index:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = AppState::new(vec![browser_row]);
+        app.handle(KeyInput::Char('v'));
+
+        for _ in 0..30 {
+            app.handle(KeyInput::Char('j'));
+        }
+        let bottom = buffer_text_mut(80, 10, &mut app);
+        assert!(bottom.contains("line-19"));
+
+        app.handle(KeyInput::Char('k'));
+        let after_one_up = buffer_text_mut(80, 10, &mut app);
+
+        assert!(
+            !after_one_up.contains("line-19"),
+            "first scroll-up after bottom overscroll should move the body view"
+        );
     }
 
     #[test]
