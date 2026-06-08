@@ -166,7 +166,7 @@ struct OutputPanel {
 #[derive(Debug, Clone)]
 struct RunningAction {
     key: String,
-    verb: String,
+    progress_label: String,
     spinner_frame: usize,
 }
 
@@ -196,6 +196,7 @@ struct BrowserCopy {
     empty_inventory_message: &'static str,
     no_selection_message: &'static str,
     no_selection_status: &'static str,
+    default_status_line: &'static str,
 }
 
 impl BrowserCopy {
@@ -206,6 +207,7 @@ impl BrowserCopy {
         empty_inventory_message: "No actionable tasks",
         no_selection_message: "No task selected",
         no_selection_status: "no task selected",
+        default_status_line: "j/k move  / filter  v body  a archive  Enter actions  q quit",
     };
 
     const WORKFLOW: Self = Self {
@@ -215,6 +217,7 @@ impl BrowserCopy {
         empty_inventory_message: "No saved workflows",
         no_selection_message: "No workflow selected",
         no_selection_status: "no workflow selected",
+        default_status_line: "j/k move  / filter  v body  Enter actions  q quit",
     };
 }
 
@@ -257,7 +260,7 @@ impl AppState {
             selected_index: 0,
             menu_selected_index: 0,
             mode: Mode::List,
-            status_line: default_status_line(),
+            status_line: copy.default_status_line.into(),
             copy,
             popup: None,
             output: OutputPanel::default(),
@@ -394,12 +397,13 @@ impl AppState {
         if self.running.is_some() {
             return;
         }
+        let progress_label = progress_label_for(verb);
         self.running = Some(RunningAction {
             key: key.to_string(),
-            verb: verb.to_string(),
+            progress_label: progress_label.clone(),
             spinner_frame: 0,
         });
-        self.status_line = format!("{verb}ing {key}...");
+        self.status_line = format!("{progress_label} {key}...");
     }
 
     pub(crate) fn action_in_flight(&self) -> bool {
@@ -413,7 +417,7 @@ impl AppState {
     pub(crate) fn running_status_line(&self) -> Option<String> {
         self.running
             .as_ref()
-            .map(|running| format!("{}ing {}...", running.verb, running.key))
+            .map(|running| format!("{} {}...", running.progress_label, running.key))
     }
 
     pub(crate) fn tick_spinner(&mut self) {
@@ -527,7 +531,7 @@ impl AppState {
         self.rows = rows;
         self.diagnostics = diagnostics;
         self.mode = Mode::List;
-        self.status_line = default_status_line();
+        self.status_line = self.copy.default_status_line.into();
         self.selected_index = self
             .visible_rows()
             .iter()
@@ -581,12 +585,12 @@ impl AppState {
             KeyInput::Esc => {
                 self.filter.clear();
                 self.mode = Mode::List;
-                self.status_line = default_status_line();
+                self.status_line = self.copy.default_status_line.into();
                 self.clamp_selection();
             }
             KeyInput::Enter => {
                 self.mode = Mode::List;
-                self.status_line = default_status_line();
+                self.status_line = self.copy.default_status_line.into();
             }
             KeyInput::Down => self.move_down(),
             KeyInput::Up => self.move_up(),
@@ -607,7 +611,7 @@ impl AppState {
         match key {
             KeyInput::Esc => {
                 self.mode = Mode::List;
-                self.status_line = default_status_line();
+                self.status_line = self.copy.default_status_line.into();
             }
             KeyInput::Down | KeyInput::Char('j') => self.move_menu_down(),
             KeyInput::Up | KeyInput::Char('k') => self.move_menu_up(),
@@ -638,7 +642,7 @@ impl AppState {
 
     fn close_body_view(&mut self) {
         self.body_view_open = false;
-        self.status_line = default_status_line();
+        self.status_line = self.copy.default_status_line.into();
     }
 
     fn scroll_body_down(&mut self, amount: usize) {
@@ -822,8 +826,11 @@ fn handle_input_popup_key(buffer: &mut String, key: KeyInput) -> Option<PopupOut
     }
 }
 
-fn default_status_line() -> String {
-    "j/k move  / filter  v body  a archive  Enter actions  q quit".into()
+fn progress_label_for(verb: &str) -> String {
+    match verb {
+        "archive" => "archiving".into(),
+        _ => format!("{verb}ing"),
+    }
 }
 
 fn sanitize_body_for_markup(body: &str) -> String {
@@ -1015,6 +1022,20 @@ mod tests {
     }
 
     #[test]
+    fn archive_running_action_uses_archiving_label() {
+        let mut app = app();
+
+        app.begin_action("origin-sync-tui", "archive");
+
+        assert_eq!(app.status_line(), "archiving origin-sync-tui...");
+        assert_eq!(
+            app.running_status_line(),
+            Some("archiving origin-sync-tui...".into())
+        );
+        assert!(!app.status_line().contains("archiveing"));
+    }
+
+    #[test]
     fn v_key_toggles_body_view_and_esc_closes() {
         let mut app = app();
         assert!(!app.body_view_open());
@@ -1059,10 +1080,17 @@ mod tests {
     }
 
     #[test]
-    fn default_status_line_mentions_archive_shortcut() {
+    fn task_status_line_mentions_archive_shortcut() {
         let app = app();
 
         assert!(app.status_line().contains("a archive"));
+    }
+
+    #[test]
+    fn workflow_status_line_omits_archive_shortcut() {
+        let app = AppState::workflow_with_diagnostics(Vec::new(), Vec::new());
+
+        assert!(!app.status_line().contains("a archive"));
     }
 
     #[test]

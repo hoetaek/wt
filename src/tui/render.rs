@@ -935,6 +935,18 @@ mod tests {
     }
 
     #[test]
+    fn workflow_browser_footer_omits_archive_shortcut() {
+        let app = AppState::workflow_with_diagnostics(
+            vec![row("2026-06-06-001", "Ship provider-origin UX", "stale")],
+            Vec::new(),
+        );
+
+        let text = buffer_text(100, 24, &app);
+
+        assert!(!text.contains("a archive"));
+    }
+
+    #[test]
     fn empty_workflow_browser_uses_workflow_empty_state() {
         let app = AppState::workflow_with_diagnostics(Vec::new(), Vec::new());
 
