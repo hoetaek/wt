@@ -238,12 +238,15 @@ fn move_task_to_archive(ctx: &Ctx, candidate: &ArchiveCandidate) -> Result<Archi
         return Err(err);
     }
 
-    remove_file_if_present(&candidate.source_path).with_context(|| {
+    if let Err(err) = remove_file_if_present(&candidate.source_path).with_context(|| {
         format!(
             "Failed to remove archived TaskDocument from active storage: {}",
             ctx.storage_root.display_path(&candidate.source_path)
         )
-    })?;
+    }) {
+        rollback_archive_artifacts(candidate);
+        return Err(err);
+    }
 
     Ok(ArchivedTask {
         key: candidate.key.clone(),
@@ -259,6 +262,12 @@ fn remove_file_if_present(path: &Path) -> Result<()> {
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err.into()),
     }
+}
+
+fn rollback_archive_artifacts(candidate: &ArchiveCandidate) {
+    let _ = fs::remove_file(&candidate.manifest_path);
+    let _ = fs::remove_file(&candidate.archive_path);
+    let _ = fs::remove_dir(&candidate.archive_dir);
 }
 
 fn wt_relative_path(ctx: &Ctx, path: &Path) -> String {
@@ -669,6 +678,41 @@ body = "Task body"
         assert!(report.contains("Failed to write task archive manifest"));
         assert!(ctx.storage_root.tasks_dir().join("demo.toml").exists());
         assert!(!archive_dir.join("demo.toml").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_rolls_back_archive_artifacts_when_active_remove_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, _) = test_ctx_with_confirm(dir.path(), true);
+        write_task(dir.path(), "demo");
+        let tasks_dir = ctx.storage_root.tasks_dir();
+        let archive_dir = ctx.storage_root.task_archive_dir("demo");
+        let original_permissions = fs::metadata(&tasks_dir).unwrap().permissions();
+        fs::set_permissions(&tasks_dir, fs::Permissions::from_mode(0o500)).unwrap();
+
+        let result = archive(&ctx, &["demo".to_string()]);
+        fs::set_permissions(&tasks_dir, original_permissions).unwrap();
+        let err = result.unwrap_err();
+
+        let report = format!("{err:#}");
+        assert!(report.contains("Failed to remove archived TaskDocument"));
+        assert!(ctx.storage_root.tasks_dir().join("demo.toml").exists());
+        assert!(!archive_dir.join("demo.toml").exists());
+        assert!(!archive_dir.join("archive.toml").exists());
+        assert!(!archive_dir.exists());
+
+        let (retry_ctx, _) = test_ctx_with_confirm(dir.path(), true);
+        archive(&retry_ctx, &["demo".to_string()]).unwrap();
+        assert!(
+            retry_ctx
+                .storage_root
+                .task_archive_dir("demo")
+                .join("demo.toml")
+                .exists()
+        );
     }
 
     #[test]
