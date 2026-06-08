@@ -820,7 +820,7 @@ pub enum TaskCommand {
     )]
     Archive {
         /// Local task keys from <repo-root>/.wt/execution/tasks/<task>.toml
-        #[arg(value_name = "TASK", num_args = 1..)]
+        #[arg(value_name = "TASK", num_args = 1.., required = true)]
         tasks: Vec<String>,
     },
     /// Manage provider issue origin links for local TaskDocuments
@@ -2047,6 +2047,29 @@ mod tests {
                 command: TaskCommand::Archive { ref tasks }
             }) if tasks == &vec!["a".to_string(), "b".to_string()]
         ));
+    }
+
+    #[test]
+    fn task_archive_rejects_missing_task_key_at_cli_boundary() {
+        let err = Cli::try_parse_from(["wt", "task", "archive"]).unwrap_err();
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert!(err.to_string().contains("<TASK>"));
+    }
+
+    #[test]
+    fn task_archive_help_renders_required_task_key() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("archive")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("<TASK>..."));
+        assert!(!help.contains("[TASK]"));
     }
 
     #[test]
