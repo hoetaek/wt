@@ -83,7 +83,12 @@ Canonical personal storage layout:
 │   ├── task-runs/
 │   │   └── <id>.toml
 │   ├── archive/
-│   │   └── workflows/<id>/
+│   │   ├── workflows/<id>/
+│   │   └── tasks/<key>/
+│   │       ├── <key>.toml
+│   │       ├── archive.toml
+│   │       └── task-runs/
+│   │           └── <id>.toml
 │   └── retrospectives/
 │       └── <slug>.md
 └── runtime/
@@ -1158,19 +1163,47 @@ selector의 10-row visible cap을 적용하지 않는다. TTY에서 `--json`/`--
 보여준다. Browser의 initial render는 read-only이고, interactive action menu를 통한 변경은
 대응하는 `wt task origin diff|fetch|pull|push|publish|attach` backend command와 같은 동작,
 preview, confirmation gate를 따른다. Pipe, redirect, CI, `--quiet`, `--json`은 interactive
-browser를 시도하지 않고 기존 text/JSON contract를 유지한다. Text output은 selector와 같은
-TaskDocument display order인 title, origin/publish state, task key, branch를 bounded column으로
-나눠 보여주고, `provider-origin`과 `local` source group 아래에 둔다. Inventory-only field인
-source는 group으로 표현하고, path, raw origin, 짧은 body summary는 text에서 반복하지 않고 JSON
-output에 둔다. JSON output은 두 mode 모두 `{ "tasks": [...], "invalid_tasks": [...] }`
-top-level shape를 유지하며, TaskDocument의 key, path, title, branch, origin/publish state,
-local-vs-provider-origin source, 짧은 body summary를 stable shape로 보여준다. Bare JSON은
-actionable working set만 담고, `--all --json`은 full inventory를 담는다.
+browser를 시도하지 않고 기존 text/JSON contract를 유지한다. Text output과 TUI browser는
+selector와 같은 TaskDocument display order를 유지하되 bounded columns로 보여준다. 기본
+visible column은 latest TaskRun에서 파생한 `run` status(`new`, `prepared`, `running`,
+`passed`, `failed`, `skipped`), origin health의 `next` action, `dur` expected duration,
+grow하는 `task` title/key, `branch`다. `dur`는 TaskDocument body의 `계획 (Planning)` section에서
+`예상 소요 (expected duration)` 값을 읽으며 값이 없으면 표시 전용 fallback을 쓴다.
+`.wt.toml`의 `[task_list.columns.<column>]`에서 각 column의 `hidden`과 `width`를 설정한다.
+`task` column은 남는 폭을 받는 grow column이고, 모든 column을 숨긴 설정은 빈 human row model을
+만들지 않도록 task column을 다시 보여준다. `source`, `origin_status`, `size`는 같은 column
+모델의 optional field이며, `size` class는 리뷰/회고용 Planning metadata라 기본 hidden이다.
+Inventory-only field인 source는 기본 text에서 group으로 표현하고, path, raw origin, 짧은 body
+summary는 text에서 반복하지 않고 JSON output에 둔다. JSON output은 두 mode 모두
+`{ "tasks": [...], "invalid_tasks": [...] }` top-level shape와 기존 row field를 유지한다.
+Duration이 human column으로 승격되어도 새 JSON top-level을 만들지 않고, full body 읽기는 TUI
+body 뷰가 소유한다. Bare JSON은 actionable working set만 담고, `--all --json`은 full
+inventory를 담는다.
 TaskDocument TOML parse/validation failure는 조용히 숨기지 않고 text warning 또는 JSON
 `invalid_tasks`로 보고한다. Non-interactive text/JSON output과 browser initial render는
 worktree, local branch, TaskRun, Workflow, provider issue, pull request, agent setup을 만들거나
 수정하지 않는다. Workflow inventory는 계속 `wt workflow list`, worktree/branch/site state는
 계속 `wt list`가 맡는다.
+
+Task list TUI에서 `v`는 선택된 TaskDocument body 전문을 browser를 떠나지 않고 읽는 body 뷰를
+연다. Body 뷰는 같은 terminal surface 안의 vertical band layout이며, 선택 task title과 scroll
+percent indicator를 함께 보여주고 `j`/`k`, PageUp/PageDown으로 스크롤한다. Body는
+`wt scaffold --task`와 TaskDocument import가 만드는 알려진 template 성격의 text이므로 범용
+Markdown renderer를 붙이지 않는다. 대신 heading, checkbox, fenced code, inline code/강조 표식
+같은 알려진 line pattern만 경량 styling/sanitizing으로 렌더한다. Body 뷰가 열려 있는 동안 Enter
+action menu, origin shortcut dispatch, archive 같은 row action 진입은 막히고, `v` 또는 Esc로
+닫은 뒤에만 다시 list action을 수행한다.
+
+`wt task archive <key...>`는 active TaskDocument를 `<repo-root>/.wt/execution/archive/tasks/<key>/`
+아래로 옮겨 active task inventory에서 감추는 visibility/retention command다. Workflow archive와
+같은 active-directory visibility pattern을 따르지만, command와 state directory는
+`wt workflow archive` / `archive/workflows/<id>/`와 분리한다. Archive directory에는 archived
+TaskDocument `<key>.toml`, `archive.toml` manifest, 그리고 해당 task의 linked direct TaskRun이
+있으면 `task-runs/<id>.toml`을 둔다. 복구는 사용자가 파일을 active directory로 직접 옮기는
+manual repair이며, 별도 restore command를 제공하지 않는다. Safety gate는 backend command가
+소유한다. Latest TaskRun이 `running`인 task, active(unarchived) Workflow가 참조하는 task,
+legacy archive storage가 감지된 repository는 archive 전에 거부해야 하며 TUI는 이 gate를 우회하지
+않는다.
 
 TaskDocument origin은 runnable slice 하나가 provider issue 하나와 연결되는 durable link다.
 Workflow origin은 saved Workflow의 title/body/context가 provider issue 하나와 연결되는
