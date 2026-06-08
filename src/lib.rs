@@ -107,6 +107,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         }
         Commands::Task { command } => match command {
             TaskCommand::List { all } => commands::task_list::run(ctx, *all),
+            TaskCommand::Archive { tasks } => commands::task_archive::archive(ctx, tasks),
             TaskCommand::Origin { command } => match command {
                 TaskOriginCommand::Import { issues } => commands::task_origin::import(ctx, issues),
                 TaskOriginCommand::Publish { tasks } => commands::task_origin::publish(ctx, tasks),

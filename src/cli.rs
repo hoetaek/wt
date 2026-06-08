@@ -814,6 +814,15 @@ pub enum TaskCommand {
         #[arg(long)]
         all: bool,
     },
+    /// Move local TaskDocuments into the task archive
+    #[command(
+        long_about = "Move TaskDocument(s) into <repo-root>/.wt/execution/archive/tasks/<key>/.\n\nVisibility/retention action: archived tasks disappear from wt task list. Recover by manually moving the file back. Rejects tasks whose latest TaskRun is running."
+    )]
+    Archive {
+        /// Local task keys from <repo-root>/.wt/execution/tasks/<task>.toml
+        #[arg(value_name = "TASK", num_args = 1..)]
+        tasks: Vec<String>,
+    },
     /// Manage provider issue origin links for local TaskDocuments
     #[command(
         long_about = "Manage provider issue origin links for local <repo-root>/.wt/execution/tasks/<task>.toml TaskDocuments.\n\nImport creates local TaskDocuments from provider issues, publish creates provider issues from local TaskDocuments, attach links an existing TaskDocument to a provider issue, fetch refreshes provider issue evidence without changing TaskDocuments, diff compares local title/body with fetched provider evidence, pull applies selected provider title/body fields locally after preview, and push appends provider comments or selected title/body overwrites after preview."
@@ -2026,6 +2035,17 @@ mod tests {
             Some(Commands::Task {
                 command: TaskCommand::Publish { ref tasks }
             }) if tasks == &vec!["add-profile-docs".to_string()]
+        ));
+    }
+
+    #[test]
+    fn task_archive_parses_multiple_keys() {
+        let cli = parse(&["wt", "task", "archive", "a", "b"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Archive { ref tasks }
+            }) if tasks == &vec!["a".to_string(), "b".to_string()]
         ));
     }
 
