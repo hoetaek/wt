@@ -51,7 +51,8 @@ impl DispatchBackend for CtxBackend<'_> {
             | OriginAction::Pull
             | OriginAction::Push
             | OriginAction::Publish
-            | OriginAction::Attach => OutputSink::Worker,
+            | OriginAction::Attach
+            | OriginAction::Archive => OutputSink::Worker,
             OriginAction::KeepLocal | OriginAction::OpenInBrowser | OriginAction::CopyReference => {
                 OutputSink::StatusLine
             }
@@ -66,6 +67,7 @@ impl DispatchBackend for CtxBackend<'_> {
             OriginAction::Push => "push",
             OriginAction::Publish => "publish",
             OriginAction::Attach => "attach",
+            OriginAction::Archive => "archive",
             OriginAction::KeepLocal | OriginAction::OpenInBrowser | OriginAction::CopyReference => {
                 "run"
             }
@@ -83,6 +85,9 @@ impl DispatchBackend for CtxBackend<'_> {
                 Box::new(move |ctx| commands::task_origin::publish(ctx, &[key]))
             }
             OriginAction::Attach => Box::new(move |ctx| attach_origin(ctx, &key)),
+            OriginAction::Archive => {
+                Box::new(move |ctx| commands::task_archive::archive(ctx, &[key]))
+            }
             OriginAction::KeepLocal | OriginAction::OpenInBrowser | OriginAction::CopyReference => {
                 Box::new(move |_| bail!("{action:?} is a status-line action"))
             }
@@ -120,7 +125,8 @@ impl DispatchBackend for CtxBackend<'_> {
             | OriginAction::Pull
             | OriginAction::Push
             | OriginAction::Publish
-            | OriginAction::Attach => bail!("{action:?} is a worker action"),
+            | OriginAction::Attach
+            | OriginAction::Archive => bail!("{action:?} is a worker action"),
         }
     }
 }
@@ -143,10 +149,11 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             | OriginAction::Pull
             | OriginAction::Push
             | OriginAction::Attach => OutputSink::Worker,
-            // Publish and KeepLocal answer with a one-line unsupported notice
-            // for workflows, so they stay in the browser.
+            // Publish, KeepLocal, and Archive answer with a one-line
+            // unsupported notice for workflows, so they stay in the browser.
             OriginAction::Publish
             | OriginAction::KeepLocal
+            | OriginAction::Archive
             | OriginAction::OpenInBrowser
             | OriginAction::CopyReference => OutputSink::StatusLine,
         }
@@ -161,6 +168,7 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             OriginAction::Attach => "attach",
             OriginAction::Publish
             | OriginAction::KeepLocal
+            | OriginAction::Archive
             | OriginAction::OpenInBrowser
             | OriginAction::CopyReference => "run",
         }
@@ -184,6 +192,7 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             OriginAction::Attach => Box::new(move |ctx| attach_workflow_origin(ctx, &key)),
             OriginAction::Publish
             | OriginAction::KeepLocal
+            | OriginAction::Archive
             | OriginAction::OpenInBrowser
             | OriginAction::CopyReference => {
                 Box::new(move |_| bail!("{action:?} is a status-line action"))
@@ -217,6 +226,9 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             )),
             OriginAction::KeepLocal => Ok(format!(
                 "Keep local-only is not available for workflow {key}; workflow origins are optional by omission"
+            )),
+            OriginAction::Archive => Ok(format!(
+                "Archive is not available for workflow {key}; archive tasks from the task browser"
             )),
             OriginAction::OpenInBrowser => open_workflow_origin_url(self.ctx, key),
             OriginAction::CopyReference => copy_workflow_reference(self.ctx, key),
@@ -492,6 +504,12 @@ mod tests {
         test_ctx_at(dir, Box::new(Arc::new(MockUi::new())))
     }
 
+    fn test_ctx_with_confirm(dir: &std::path::Path, confirmed: bool) -> Ctx {
+        let mut ui = MockUi::new();
+        ui.add_confirm(confirmed);
+        test_ctx_at(dir, Box::new(Arc::new(ui)))
+    }
+
     fn test_ctx_at(dir: &std::path::Path, ui: Box<dyn UserInterface>) -> Ctx {
         Ctx::new_with_options(
             dir.to_path_buf(),
@@ -504,6 +522,52 @@ mod tests {
                 ..CtxOptions::default()
             },
         )
+    }
+
+    fn write_task(root: &std::path::Path, key: &str) {
+        let tasks_dir = root.join(".wt/execution/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join(format!("{key}.toml")),
+            format!(
+                r#"title = "{key}"
+branch = "{key}"
+body = "Task body"
+"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn archive_is_a_worker_action_with_verb() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let backend = CtxBackend::new(&ctx);
+
+        assert_eq!(
+            backend.output_sink(OriginAction::Archive),
+            OutputSink::Worker
+        );
+        assert_eq!(backend.verb(OriginAction::Archive), "archive");
+    }
+
+    #[test]
+    fn archive_worker_job_calls_task_archive_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx_with_confirm(dir.path(), true);
+        write_task(dir.path(), "demo");
+        let backend = CtxBackend::new(&ctx);
+
+        let job = backend.worker_job(OriginAction::Archive, "demo");
+        job(&ctx).unwrap();
+
+        assert!(
+            ctx.storage_root
+                .task_archive_dir("demo")
+                .join("demo.toml")
+                .exists()
+        );
     }
 
     #[test]
@@ -519,6 +583,7 @@ mod tests {
             OriginAction::Push,
             OriginAction::Publish,
             OriginAction::Attach,
+            OriginAction::Archive,
         ] {
             assert_eq!(
                 backend.output_sink(action),
@@ -561,6 +626,7 @@ mod tests {
         for action in [
             OriginAction::Publish,
             OriginAction::KeepLocal,
+            OriginAction::Archive,
             OriginAction::OpenInBrowser,
             OriginAction::CopyReference,
         ] {
@@ -613,6 +679,22 @@ mod tests {
         assert_eq!(
             message,
             "Publish is not available for workflow 2026-06-06-001; attach an existing workflow origin instead"
+        );
+    }
+
+    #[test]
+    fn workflow_archive_returns_unsupported_status_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let backend = WorkflowCtxBackend::new(&ctx);
+
+        let message = backend
+            .run_status_line(OriginAction::Archive, "2026-06-06-001")
+            .unwrap();
+
+        assert_eq!(
+            message,
+            "Archive is not available for workflow 2026-06-06-001; archive tasks from the task browser"
         );
     }
 

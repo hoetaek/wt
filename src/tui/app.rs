@@ -823,7 +823,7 @@ fn handle_input_popup_key(buffer: &mut String, key: KeyInput) -> Option<PopupOut
 }
 
 fn default_status_line() -> String {
-    "j/k move  / filter  v body  Enter actions  q quit".into()
+    "j/k move  / filter  v body  a archive  Enter actions  q quit".into()
 }
 
 fn sanitize_body_for_markup(body: &str) -> String {
@@ -1038,6 +1038,34 @@ mod tests {
     }
 
     #[test]
+    fn a_key_requests_archive_dispatch_for_selected() {
+        let mut app = app();
+
+        assert_eq!(
+            app.handle(KeyInput::Char('a')),
+            Outcome::Dispatch {
+                key: "origin-sync-tui".into(),
+                action: OriginAction::Archive
+            }
+        );
+    }
+
+    #[test]
+    fn a_key_ignored_during_body_view() {
+        let mut app = app();
+        app.handle(KeyInput::Char('v'));
+
+        assert_eq!(app.handle(KeyInput::Char('a')), Outcome::Continue);
+    }
+
+    #[test]
+    fn default_status_line_mentions_archive_shortcut() {
+        let app = app();
+
+        assert!(app.status_line().contains("a archive"));
+    }
+
+    #[test]
     fn body_view_page_keys_scroll_by_larger_steps() {
         let body = (0..20)
             .map(|index| format!("line {index}"))
@@ -1150,10 +1178,37 @@ mod tests {
     }
 
     #[test]
+    fn menu_enter_on_archive_item_requests_dispatch() {
+        let mut app = app();
+        app.handle(KeyInput::Enter);
+        let item_count = app.selected_row().unwrap().menu.items().len();
+
+        for _ in 0..item_count {
+            if app
+                .selected_menu_item()
+                .is_some_and(|item| item.action() == OriginAction::Archive)
+            {
+                assert_eq!(
+                    app.handle(KeyInput::Enter),
+                    Outcome::Dispatch {
+                        key: "origin-sync-tui".into(),
+                        action: OriginAction::Archive
+                    }
+                );
+                return;
+            }
+            app.handle(KeyInput::Down);
+        }
+
+        panic!("archive item not found");
+    }
+
+    #[test]
     fn menu_enter_on_disabled_item_shows_reason_and_stays() {
         let mut app = app();
         app.handle(KeyInput::Enter);
-        for _ in 0..8 {
+        let item_count = app.selected_row().unwrap().menu.items().len();
+        for _ in 0..item_count {
             if app.menu_selection_is_disabled() {
                 app.handle(KeyInput::Enter);
                 if app.status_line().contains("already has origin") {

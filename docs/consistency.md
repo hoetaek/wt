@@ -1169,8 +1169,10 @@ selector의 10-row visible cap을 적용하지 않는다. TTY에서 `--json`/`--
 `wt task list`는 단명 full-screen browser로 같은 TaskDocument rows와 origin health preview를
 보여준다. Browser의 initial render는 read-only이고, interactive action menu를 통한 변경은
 대응하는 `wt task origin diff|fetch|pull|push|publish|attach` backend command와 같은 동작,
-preview, confirmation gate를 따른다. Pipe, redirect, CI, `--quiet`, `--json`은 interactive
-browser를 시도하지 않고 기존 text/JSON contract를 유지한다. Human surfaces는 같은 bounded
+preview, confirmation gate를 따른다. Task browser archive action은 `wt task archive <key>`
+backend command와 같은 confirmation/safety gate를 따르며, TUI가 별도 archive gate를 소유하지
+않는다. Pipe, redirect, CI, `--quiet`, `--json`은 interactive browser를 시도하지 않고 기존
+text/JSON contract를 유지한다. Human surfaces는 같은 bounded
 column model을 쓰지만 row ordering contract는 표면별로 다르다. Text output은
 `provider-origin`, `local` source group 순서로 보여주고 각 group 안에서는 collected row order를
 유지한다. TUI browser는 source group을 만들지 않고 collected TaskDocument row order를 그대로
@@ -1602,10 +1604,10 @@ Workflow, origin snapshot 같은 디스크 상태만 읽는다. 액션 메뉴는
 발견 가능해야 한다.
 
 액션 실행은 브라우저 안의 dispatch 계약을 따른다. Browser action menu의 모든 origin
-변경 액션(diff, fetch, pull, push, publish, attach)은 브라우저 화면을 떠나지 않고
-worker 실행으로 수행된다. 백엔드 command와 같은 함수, 같은 preview, 같은
-confirmation gate를 거치며 prompt는 popup으로, print 출력은 브라우저 하단 output
-panel로 나타난다. 실행은 한 번에 하나다. 실행 중 액션은 status line의 진행 표시(spinner)로
+변경 액션(diff, fetch, pull, push, publish, attach)과 task browser archive action은
+브라우저 화면을 떠나지 않고 worker 실행으로 수행된다. 백엔드 command와 같은 함수,
+같은 preview/confirmation/safety gate를 거치며 prompt는 popup으로, print 출력은 브라우저
+하단 output panel로 나타난다. 실행은 한 번에 하나다. 실행 중 액션은 status line의 진행 표시(spinner)로
 보이고, 새 액션 시도는 거절 안내를 받는다. popup의 Esc는 CLI prompt 취소와 같은
 의미다(cancelled, no side effects). 로컬에서 즉시 끝나고 결과가 한 줄인 액션 — keep
 local-only, copy reference, open in browser, workflow의 비지원 안내 — 는 기존대로
@@ -1614,7 +1616,8 @@ status line 한 줄로 끝난다. 분류는 backend별 exhaustive match가 단�
 플로우가 소유하며, TUI는 게이트를 추가하지도 우회하지도 않는다. popup select는 full
 selector 계약(10-row cap, section row 등)의 단순화 버전이며 selector를 대체하지 않는다.
 Workflow 브라우저의 child origin은 inspection 전용이고 workflow 액션으로 child
-TaskDocument origin을 수정하지 않는다.
+TaskDocument origin을 수정하지 않는다. Task archive는 task browser 전용 액션이며 workflow
+browser backend에서는 status-line 비지원 안내로 분류한다.
 
 `wt workflow show <id>`는 한 Workflow file을 읽는 canonical one-shot observation surface다.
 기본 human 출력은 Workflow meta(path, mode, base, title/body/origin, policy, task count)와

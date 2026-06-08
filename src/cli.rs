@@ -807,7 +807,7 @@ pub enum InitSiteProvider {
 pub enum TaskCommand {
     /// List actionable local TaskDocument files
     #[command(
-        long_about = "List actionable <repo-root>/.wt/execution/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is passed or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nIn a TTY without --json or --quiet, opens the full-screen interactive browser. The initial browser render is read-only; choosing items from its interactive action menu can run task origin diff, fetch, pull, push, publish, and attach flows with the same previews and confirmation gates as the backend commands; pipes and --json keep the text/JSON output.\n\nThe passive text/JSON and initial-render surface reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
+        long_about = "List actionable <repo-root>/.wt/execution/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is passed or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nIn a TTY without --json or --quiet, opens the full-screen interactive browser. The initial browser render is read-only; choosing items from its interactive action menu can run task origin diff, fetch, pull, push, publish, and attach flows with the same previews and confirmation gates as the backend commands. The archive action runs wt task archive through the same backend-owned confirmation and safety gates; pipes and --json keep the text/JSON output.\n\nThe passive text/JSON and initial-render surface reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
     )]
     List {
         /// Show the full TaskDocument inventory, including passed and running tasks
@@ -1952,6 +1952,7 @@ mod tests {
         assert!(help.contains("full-screen interactive browser"));
         assert!(help.contains("pipes and --json keep the text/JSON output"));
         assert!(help.contains("interactive action menu"));
+        assert!(help.contains("wt task archive"));
     }
 
     #[test]

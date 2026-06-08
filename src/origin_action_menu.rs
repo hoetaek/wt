@@ -9,6 +9,7 @@ pub enum OriginAction {
     Publish,
     Attach,
     KeepLocal,
+    Archive,
     OpenInBrowser,
     CopyReference,
 }
@@ -34,6 +35,7 @@ impl OriginActionMenu {
                     "Keep local-only for this task",
                     "L",
                 ),
+                OriginActionItem::enabled(OriginAction::Archive, "Archive task", "a"),
                 OriginActionItem::enabled(OriginAction::CopyReference, "Copy task key", "y"),
                 OriginActionItem::disabled(
                     OriginAction::Diff,
@@ -89,6 +91,7 @@ impl OriginActionMenu {
                     "Copy origin reference",
                     "y",
                 ),
+                OriginActionItem::enabled(OriginAction::Archive, "Archive task", "a"),
                 OriginActionItem::disabled(
                     OriginAction::Attach,
                     "Attach different origin",
@@ -630,6 +633,10 @@ mod tests {
             Some(OriginAction::KeepLocal)
         );
         assert_eq!(
+            local.action_for("Archive task"),
+            Some(OriginAction::Archive)
+        );
+        assert_eq!(
             local.action_for("Copy task key"),
             Some(OriginAction::CopyReference)
         );
@@ -652,6 +659,10 @@ mod tests {
         assert_eq!(
             origin.action_for("Open issue in browser"),
             Some(OriginAction::OpenInBrowser)
+        );
+        assert_eq!(
+            origin.action_for("Archive task"),
+            Some(OriginAction::Archive)
         );
     }
 
@@ -676,7 +687,9 @@ mod tests {
             OriginLabel::new("linear", "WT-142"),
         );
         assert_eq!(origin.action_for_shortcut("P"), Some(OriginAction::Push));
+        assert_eq!(origin.action_for_shortcut("a"), Some(OriginAction::Archive));
         let local = OriginActionMenu::for_local_task("scratch-clean", "Scratch cleanup");
+        assert_eq!(local.action_for_shortcut("a"), Some(OriginAction::Archive));
         assert_eq!(local.action_for_shortcut("P"), None);
     }
 
