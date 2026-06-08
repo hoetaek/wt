@@ -85,6 +85,15 @@ branches, `stack` for dependent branch order, and `matrix` for one local
 TaskDocument across explicit profiles. For provider issues, use
 `wt workflow issue --mode <single|batch|stack> ...`.
 
+If `wt run` fails with an agent ready-marker timeout, do not immediately retry:
+a failed start leaves a partial worktree and a broken cmux workspace, and
+retrying on top of them makes every later start fail (`Worktree already exists`,
+then unreadable surfaces). First clean up — `git worktree remove <path>` and
+`git branch -D <branch>` for the partial branch, and `cmux workspace close` for
+the broken workspace(s) — then rerun. Empirically (2026-06 tui-in-app-dispatch /
+task-triage) three back-to-back launches failed purely from accumulated broken
+workspaces; the next attempt succeeded once they were closed.
+
 ### Capture Target
 
 After launch or when resuming an existing run, capture the inspect target:
@@ -268,8 +277,16 @@ are general, not CLI/TUI-specific — apply whichever fit the surface (CLI, TUI,
 web/`wt serve`, JSON/API, file artifact): input resilience (malformed, corrupt,
 empty, boundary); ordering, precedence, concurrency (newest-vs-older, TOCTOU);
 cross-representation parity (every rendering of the same value agrees — text,
-TUI, web, JSON); cost/scaling (no redundant N× work); and semantic agreement
-with the canonical source of truth. Empirically (2026-06 task-triage), a
+TUI, web, JSON); cost/scaling (no redundant N× work); semantic agreement
+with the canonical source of truth; and reference integrity (who else
+references, resolves, or shares this object or state — another command, a
+reader, a shared UI string, a workflow→task or run→task link — and whether this
+change orphans or contradicts that relationship). The reference-integrity lens
+is the one a contract author most reliably misses: 2026-06 task-triage shipped a
+trust-boundary hole (untrusted provider body rendered raw), a workflow-owned-task
+archive that broke `wt run workflow`, and a TaskRun orphan — all past green tests
+and coordinator self-review, all caught only by the independent base-diff gate.
+Empirically (2026-06 task-triage), a
 review that checked only "tests green + matches the contract I wrote" approved
 fixes that an independent base-diff review then found broke an adjacent
 invariant five rounds running — and each narrow fix introduced the next defect.
@@ -277,6 +294,26 @@ Enumerating invariants up front and grilling against them catches most of that
 before the gate. An independent review gate still has irreducible value: a
 coordinator who co-authored the task contract is blind to gaps in their own
 spec, so the gate is not redundant with a rigorous self-review.
+
+When `review.codex_base` is configured (or you want independent base-diff
+evidence), satisfy it by running the review yourself — do not delegate `/review`
+to the task agent's own surface. Delegation makes the agent review its own work
+(less independent, the whole point of the gate), and the codex slash command
+swallows the submit key so completion is hard to detect. Instead run
+`codex review --base <parent>` from the coordinator shell against the task
+worktree, in the background, and let the completion notification wake you — no
+screen polling, idle-watching, or marker-grepping (those signals are unreliable
+for a codex surface). Read only the verdict: the `codex` conclusion after
+`<< Code review finished >>` plus any `[P1]/[P2]/[P3]` comments; the
+multi-thousand-line exploration log above it is noise. Judge accept/reject
+yourself with task context — a finding that belongs to a later slice can be
+deferred-accepted with a note — then record it with `wt task review <run>
+--accept|--reject --codex-base <parent> '<evidence>'`. If `codex` is not
+installed, skip gracefully and record evidence manually; wt does not force a
+codex dependency. If codex is present but unauthenticated or erroring, that is a
+fixable or transient state — surface it, do not silently skip. This stays
+guidance, not a wt subcommand: wt backs the work, the coordinator runs and
+judges the review.
 
 Accumulate findings across one inspection pass and send one consolidated
 message. Do not drip one message per finding.
