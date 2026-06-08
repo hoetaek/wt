@@ -1155,7 +1155,9 @@ execution shape, size class, acceptance checks를 적는다. Provider issue impo
 actionable working set을 보여주는 canonical read-only list다. Bare `wt task list`는
 `wt run task`의 selectable task semantics를 따른다. TaskRun이 없거나 latest TaskRun status가
 `prepared`, `failed`, `skipped`인 TaskDocument를 보여주고, latest status가 `passed` 또는
-`running`인 TaskDocument는 숨긴다. 숨겨진 TaskDocument가 있으면 text output은 count와
+`running`인 TaskDocument는 숨긴다. Latest TaskRun file이 malformed거나 status를 인식할 수
+없으면 run status는 `unknown`으로 표시하되 selectable하지 않으므로 bare mode에서는 숨기고
+`--all`에서만 보여준다. 숨겨진 TaskDocument가 있으면 text output은 count와
 `wt task list --all` 안내를 보여주되 TaskDocument row를 dump하지 않는다. `wt task list --all`은
 full TaskDocument inventory mode이며 passed/running TaskDocument까지 포함한다. 두 mode 모두
 selector의 10-row visible cap을 적용하지 않는다. TTY에서 `--json`/`--quiet` 없이 실행되는
@@ -1166,7 +1168,7 @@ preview, confirmation gate를 따른다. Pipe, redirect, CI, `--quiet`, `--json`
 browser를 시도하지 않고 기존 text/JSON contract를 유지한다. Text output과 TUI browser는
 selector와 같은 TaskDocument display order를 유지하되 bounded columns로 보여준다. 기본
 visible column은 latest TaskRun에서 파생한 `run` status(`new`, `prepared`, `running`,
-`passed`, `failed`, `skipped`), origin health의 `next` action, `dur` expected duration,
+`passed`, `failed`, `skipped`, `unknown`), origin health의 `next` action, `dur` expected duration,
 grow하는 `task` title/key, `branch`다. `dur`는 TaskDocument body의 `계획 (Planning)` section에서
 `예상 소요 (expected duration)` 값을 읽으며 값이 없으면 표시 전용 fallback을 쓴다.
 `.wt.toml`의 `[task_list.columns.<column>]`에서 각 column의 `hidden`과 `width`를 설정한다.
@@ -1187,12 +1189,14 @@ worktree, local branch, TaskRun, Workflow, provider issue, pull request, agent s
 
 Task list TUI에서 `v`는 선택된 TaskDocument body 전문을 browser를 떠나지 않고 읽는 body 뷰를
 연다. Body 뷰는 같은 terminal surface 안의 vertical band layout이며, 선택 task title과 scroll
-percent indicator를 함께 보여주고 `j`/`k`, PageUp/PageDown으로 스크롤한다. Body는
-`wt scaffold --task`와 TaskDocument import가 만드는 알려진 template 성격의 text이므로 범용
-Markdown renderer를 붙이지 않는다. 대신 heading, checkbox, fenced code, inline code/강조 표식
-같은 알려진 line pattern만 경량 styling/sanitizing으로 렌더한다. Body 뷰가 열려 있는 동안 Enter
-action menu, origin shortcut dispatch, archive 같은 row action 진입은 막히고, `v` 또는 Esc로
-닫은 뒤에만 다시 list action을 수행한다.
+percent indicator를 함께 보여주고 `j`/`k`, PageUp/PageDown으로 스크롤한다. Local scaffold body는
+알려진 Planning template을 따를 수 있지만 provider issue import body는 외부 본문을 verbatim으로
+보존하므로 untrusted display input이다. Body 뷰는 terminal control sequence와 tab을 먼저
+sanitize해야 한다. 범용 Markdown renderer를 붙이지 않는 것은 trust boundary가 아니라 simplicity
+선택이며, heading, checkbox, fenced code, inline code/강조 표식 같은 알려진 line pattern만
+경량 styling으로 렌더한다. Body 뷰가 열려 있는 동안 Enter action menu, origin shortcut
+dispatch, archive 같은 row action 진입은 막히고, `v` 또는 Esc로 닫은 뒤에만 다시 list action을
+수행한다.
 
 `wt task archive <key...>`는 active TaskDocument를 `<repo-root>/.wt/execution/archive/tasks/<key>/`
 아래로 옮겨 active task inventory에서 감추는 visibility/retention command다. Workflow archive와
