@@ -51,14 +51,14 @@ fn checkbox_text(line: &str) -> Option<(bool, &str)> {
     let rest = trimmed.strip_prefix("- [")?;
     let mut chars = rest.chars();
     let marker = chars.next()?;
-    if !matches!(marker, ' ' | 'x') {
+    if !matches!(marker, ' ' | 'x' | 'X') {
         return None;
     }
     let rest = chars.as_str().strip_prefix(']')?;
     if !rest.chars().next().is_some_and(char::is_whitespace) {
         return None;
     }
-    Some((marker == 'x', rest.trim_start()))
+    Some((matches!(marker, 'x' | 'X'), rest.trim_start()))
 }
 
 fn strip_inline_marks(text: &str) -> String {
@@ -113,6 +113,12 @@ mod tests {
         let lines = markup_body("- [ ] Step 1\n- [x] Step 2");
         assert_eq!(lines[0], (LineKind::Checkbox(false), "Step 1".to_string()));
         assert_eq!(lines[1], (LineKind::Checkbox(true), "Step 2".to_string()));
+    }
+
+    #[test]
+    fn uppercase_checked_marker_is_recognized() {
+        let lines = markup_body("- [X] Step 1");
+        assert_eq!(lines[0], (LineKind::Checkbox(true), "Step 1".to_string()));
     }
 
     #[test]
