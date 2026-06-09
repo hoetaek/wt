@@ -1531,6 +1531,11 @@ selecting `none` writes nothing, so local init never materializes
 `required`/`advisory` requirement. It also writes `[review]` when preserving an
 existing explicit review policy. `wt init --yes` does not prompt, preserves any
 existing policy, and adds no init CLI flag for this.
+Rerunning init over a file that already declares `[review]` preserves that
+explicit policy — including explicit `codex_base = "none"` accepted as the
+shown default — for both interactive accept and `--yes`; the omit-on-`none`
+rule applies only when `none` is a fresh selection (no existing `[review]`)
+or an interactive downgrade away from `advisory`/`required`.
 `wt workflow show` displays the prepared policy snapshot from the workflow file, not the
 current `.wt.toml` value.
 
