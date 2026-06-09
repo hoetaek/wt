@@ -3371,6 +3371,7 @@ origin_policy = "local-only"
         .unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // keep Linear issue provider
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // keep existing common config defaults
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // overwrite config
@@ -3934,6 +3935,7 @@ origin_policy = "local-only"
         )
         .unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // create config
@@ -3963,6 +3965,7 @@ origin_policy = "local-only"
         assert_eq!(
             *ui.prompts.lock().unwrap(),
             vec![
+                "select: Codex base-diff 리뷰 증거 정책".to_string(),
                 "select: 개발 환경 설정을 어떻게 만들까요?".to_string(),
                 "select: 설정 editor command".to_string(),
                 "confirm: 설정을 생성할까요?".to_string(),
@@ -3991,6 +3994,7 @@ origin_policy = "local-only"
         let mut ui = MockUi::new();
         ui.add_select(0); // use detected Linear issue workflow
         ui.add_select(0); // use detected Herd local site
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // use Chrome DevTools browser
@@ -4157,6 +4161,7 @@ origin_policy = "local-only"
     fn init_shared_with_github_options_creates_only_shared_config() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
@@ -4246,6 +4251,7 @@ origin_policy = "local-only"
     fn init_with_site_provider_writes_site_section() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // use Chrome DevTools browser
@@ -4316,6 +4322,7 @@ origin_policy = "local-only"
     fn init_with_traefik_site_provider_writes_traefik_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // use Chrome DevTools browser
@@ -4366,6 +4373,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(1); // shared .wt.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
@@ -4411,6 +4419,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // private repo config
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(false); // no agent args
@@ -4491,6 +4500,7 @@ origin_policy = "local-only"
             *ui.prompts.lock().unwrap(),
             vec![
                 "select: 저장 위치".to_string(),
+                "select: Codex base-diff 리뷰 증거 정책".to_string(),
                 "select: 개발 환경 설정을 어떻게 만들까요?".to_string(),
                 "select: 설정 editor command".to_string(),
                 "confirm: agent 실행 args를 추가할까요?".to_string(),
@@ -4505,6 +4515,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // enter agent args
@@ -4554,6 +4565,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // Codex agent
@@ -4591,7 +4603,7 @@ origin_policy = "local-only"
         let prompts = ui.prompts.lock().unwrap().clone();
         assert!(prompts.contains(&"select: 코딩 agent".to_string()));
         let select_items = ui.select_items.lock().unwrap().clone();
-        assert_eq!(select_items[3], vec!["Codex", "Claude"]);
+        assert_eq!(select_items[4], vec!["Codex", "Claude"]);
 
         let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
@@ -4620,6 +4632,7 @@ origin_policy = "local-only"
         std::fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
 
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(1); // customize frequently used settings
         ui.add_select(1); // home worktrees folder
         ui.add_input("lazygit, nvim, pnpm run dev");
@@ -4708,6 +4721,7 @@ origin_policy = "local-only"
         .unwrap();
 
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(1); // customize frequently used settings
         ui.add_select(0); // next to current repository
         ui.add_input("lazygit, nvim");
@@ -4781,6 +4795,7 @@ origin_policy = "local-only"
         std::fs::write(dir.path().join("api/uv.lock"), "").unwrap();
 
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(1); // customize frequently used settings
         ui.add_select(0); // next to current repository
         ui.add_input("lazygit, nvim");
@@ -4828,6 +4843,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(false); // no agent args
@@ -4870,6 +4886,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(false); // no agent args
@@ -5063,6 +5080,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // Codex agent
@@ -5127,6 +5145,7 @@ colors = { task = "", issue = "cyan" }
         .unwrap();
 
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep existing required review policy
         ui.add_select(0); // use current config defaults
         ui.add_select(0); // use system editor
         ui.add_select(0); // prefilled claude agent
@@ -5153,10 +5172,11 @@ colors = { task = "", issue = "cyan" }
         .unwrap();
 
         let select_items = ui.select_items.lock().unwrap().clone();
-        assert_eq!(select_items[0][0], "기존 설정 파일 값 유지하기");
-        assert_eq!(select_items[1][0], "시스템 editor 사용");
-        assert_eq!(select_items[2][0], "Claude");
-        assert_eq!(select_items[3][0], "기존 args 유지: --model sonnet");
+        assert_eq!(select_items[0][0], "required");
+        assert_eq!(select_items[1][0], "기존 설정 파일 값 유지하기");
+        assert_eq!(select_items[2][0], "시스템 editor 사용");
+        assert_eq!(select_items[3][0], "Claude");
+        assert_eq!(select_items[4][0], "기존 args 유지: --model sonnet");
 
         let content = std::fs::read_to_string(local.join("local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
@@ -5243,6 +5263,7 @@ colors = { task = "", issue = "cyan" }
     fn init_accepting_claude_allow_rules_creates_local_settings() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // create config
@@ -5306,6 +5327,7 @@ colors = { task = "", issue = "cyan" }
         .unwrap();
 
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // create config
@@ -5342,6 +5364,7 @@ colors = { task = "", issue = "cyan" }
     fn init_declining_claude_allow_rules_leaves_settings_missing() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // create config
