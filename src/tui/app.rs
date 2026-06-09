@@ -1200,7 +1200,7 @@ impl AppState {
     }
 
     fn scroll_sidebar_down(&mut self, amount: usize) {
-        if self.sidebar_open && self.selected_row().is_some() {
+        if self.sidebar_open && (self.selected_row().is_some() || !self.diagnostics.is_empty()) {
             self.sidebar_scroll = self.sidebar_scroll.saturating_add(amount);
         }
     }
@@ -1834,6 +1834,19 @@ mod tests {
 
         app.handle(KeyInput::PageUp);
         assert_eq!(app.sidebar_scroll(), 0);
+    }
+
+    #[test]
+    fn pagedown_scrolls_diagnostics_detail_without_selection() {
+        let diagnostics = (0..30)
+            .map(|index| format!("diagnostic line {index}"))
+            .collect::<Vec<_>>();
+        let mut app = AppState::with_diagnostics(Vec::new(), diagnostics);
+
+        assert!(app.selected_row().is_none());
+        app.handle(KeyInput::PageDown);
+
+        assert_eq!(app.sidebar_scroll(), 10);
     }
 
     #[test]

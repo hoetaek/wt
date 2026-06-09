@@ -278,13 +278,7 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
         .map(|(index, row)| {
             browser_row(row, columns, &effective_widths).style(row_style(app, index))
         });
-    let constraints = columns
-        .iter()
-        .map(|column| match column.width {
-            BrowserColumnWidth::Length(width) => Constraint::Length(width),
-            BrowserColumnWidth::Min(width) => Constraint::Min(width),
-        })
-        .collect::<Vec<_>>();
+    let constraints = effective_column_constraints(columns, &effective_widths);
     let table = Table::new(rows, constraints)
         .header(
             Row::new(
@@ -336,6 +330,23 @@ fn effective_column_widths(columns: &[BrowserColumn], area_width: u16) -> Vec<us
         }
     }
     widths
+}
+
+fn effective_column_constraints(
+    columns: &[BrowserColumn],
+    effective_widths: &[usize],
+) -> Vec<Constraint> {
+    columns
+        .iter()
+        .zip(effective_widths.iter().copied())
+        .map(|(column, width)| {
+            let width = width.min(u16::MAX as usize) as u16;
+            match column.width {
+                BrowserColumnWidth::Length(_) => Constraint::Length(width),
+                BrowserColumnWidth::Min(_) => Constraint::Min(width),
+            }
+        })
+        .collect()
 }
 
 fn browser_row<'a>(
@@ -1259,6 +1270,62 @@ mod tests {
         assert!(text.contains("task a"));
         assert!(text.contains("META-MARKER"));
         assert!(text.contains("body-marker"));
+    }
+
+    #[test]
+    fn right_sidebar_list_uses_effective_widths_so_later_columns_survive() {
+        let mut browser_row = source_row("a", "provider-origin");
+        browser_row.title = "Short".into();
+        browser_row.branch = Some("feature/a".into());
+        let app = AppState::task_with_columns(
+            vec![browser_row],
+            Vec::new(),
+            vec![
+                BrowserColumn::length("run", BrowserCell::RunStatus, 9),
+                BrowserColumn::length("next", BrowserCell::NextAction, 8),
+                BrowserColumn::length("dur", BrowserCell::Duration, 10),
+                BrowserColumn::length("task", BrowserCell::Task, 80),
+                BrowserColumn::length("branch", BrowserCell::Branch, 24),
+                BrowserColumn::length("source", BrowserCell::Source, 18),
+            ],
+        );
+
+        let text = buffer_text(112, 24, &app);
+
+        assert!(
+            text.contains("feature/a"),
+            "branch column should remain visible beside the sidebar:\n{text}"
+        );
+        assert!(
+            text.contains("provider-origin"),
+            "source column should remain visible beside the sidebar:\n{text}"
+        );
+    }
+
+    #[test]
+    fn table_constraints_use_effective_column_widths() {
+        let columns = vec![
+            BrowserColumn::length("run", BrowserCell::RunStatus, 9),
+            BrowserColumn::length("next", BrowserCell::NextAction, 8),
+            BrowserColumn::length("dur", BrowserCell::Duration, 10),
+            BrowserColumn::length("task", BrowserCell::Task, 80),
+            BrowserColumn::length("branch", BrowserCell::Branch, 24),
+            BrowserColumn::length("source", BrowserCell::Source, 18),
+        ];
+
+        let effective_widths = effective_column_widths(&columns, 80);
+        let constraints = effective_column_constraints(&columns, &effective_widths);
+
+        assert!(
+            effective_widths[3] < 80,
+            "task width should shrink when the list area is narrow"
+        );
+        assert_eq!(
+            constraints[3],
+            Constraint::Length(effective_widths[3] as u16)
+        );
+        assert_eq!(constraints[4], Constraint::Length(24));
+        assert_eq!(constraints[5], Constraint::Length(18));
     }
 
     #[test]
