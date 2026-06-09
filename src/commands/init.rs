@@ -712,8 +712,16 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
 fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<InitPlan> {
     validate_options(options)?;
     let target_exists = target.path.exists();
-    let defaults = if is_interactive_wizard(options) && target_exists {
+    let file_defaults = if target_exists {
         load_init_defaults(&target.path)
+    } else {
+        InitDefaults::default()
+    };
+    // review 정책 보존은 위저드 인터랙티브 여부와 무관하게 기존 파일 값을 따른다.
+    // 다른 섹션의 비대화(--yes) 추천 동작은 기존대로 빈 defaults를 쓴다.
+    let review_defaults = file_defaults.review_policy;
+    let defaults = if is_interactive_wizard(options) {
+        file_defaults
     } else {
         InitDefaults::default()
     };
@@ -736,7 +744,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     let workflow_policy = defaults
         .workflow_policy
         .unwrap_or_else(default_workflow_policy);
-    let review_policy = resolve_review_policy(ctx, options, &defaults)?;
+    let review_policy = resolve_review_policy(ctx, options, review_defaults)?;
     if is_interactive_wizard(options) {
         print_wizard_step(
             ctx,
@@ -2443,14 +2451,13 @@ fn resolve_site_provider(
 fn resolve_review_policy(
     ctx: &Ctx,
     options: &InitOptions,
-    defaults: &InitDefaults,
+    existing: Option<ReviewDefaultPolicy>,
 ) -> Result<Option<ReviewDefaultPolicy>> {
     if options.yes {
-        return Ok(defaults.review_policy);
+        return Ok(existing);
     }
 
-    let default_codex_base = defaults
-        .review_policy
+    let default_codex_base = existing
         .map(|policy| policy.codex_base)
         .unwrap_or(ReviewCodexBasePolicy::None);
     let choices = ordered_values(
@@ -2473,7 +2480,13 @@ fn resolve_review_policy(
         .select_nested_items_without_filter("Codex base-diff 리뷰 증거 정책", &items)?];
 
     if selected == ReviewCodexBasePolicy::None {
-        Ok(None)
+        // 신규 선택이 none이면 override-safety대로 섹션을 생략하되, 파일이 이미
+        // explicit none을 가진 경우만 그 명시 의도를 보존한다.
+        let had_explicit_none =
+            matches!(existing, Some(policy) if policy.codex_base == ReviewCodexBasePolicy::None);
+        Ok(had_explicit_none.then(|| ReviewDefaultPolicy {
+            codex_base: ReviewCodexBasePolicy::None,
+        }))
     } else {
         Ok(Some(ReviewDefaultPolicy {
             codex_base: selected,
@@ -5330,8 +5343,7 @@ colors = { task = "", issue = "cyan" }
             Box::new(Arc::clone(&ui)),
         );
 
-        let policy =
-            resolve_review_policy(&ctx, &InitOptions::default(), &InitDefaults::default()).unwrap();
+        let policy = resolve_review_policy(&ctx, &InitOptions::default(), None).unwrap();
 
         assert!(
             policy.is_none(),
@@ -5356,11 +5368,96 @@ colors = { task = "", issue = "cyan" }
             Box::new(Arc::clone(&ui)),
         );
 
-        let policy = resolve_review_policy(&ctx, &InitOptions::default(), &InitDefaults::default())
+        let policy = resolve_review_policy(&ctx, &InitOptions::default(), None)
             .unwrap()
             .expect("required selection must record the review policy");
 
         assert_eq!(policy.codex_base, ReviewCodexBasePolicy::Required);
+    }
+
+    #[test]
+    fn resolve_review_policy_yes_returns_existing_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let existing = Some(ReviewDefaultPolicy {
+            codex_base: ReviewCodexBasePolicy::Required,
+        });
+
+        let policy = resolve_review_policy(
+            &ctx,
+            &InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+            existing,
+        )
+        .unwrap();
+
+        assert_eq!(
+            policy,
+            Some(ReviewDefaultPolicy {
+                codex_base: ReviewCodexBasePolicy::Required,
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_review_policy_preserves_explicit_none_on_accept() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // 기존 explicit none이 index 0 기본값으로 노출, 그대로 수락
+        let ui = Arc::new(ui);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+        let existing = Some(ReviewDefaultPolicy {
+            codex_base: ReviewCodexBasePolicy::None,
+        });
+
+        let policy = resolve_review_policy(&ctx, &InitOptions::default(), existing).unwrap();
+
+        assert_eq!(
+            policy,
+            Some(ReviewDefaultPolicy {
+                codex_base: ReviewCodexBasePolicy::None,
+            }),
+            "기존 explicit none 수락은 섹션을 보존해야 한다"
+        );
+    }
+
+    #[test]
+    fn resolve_review_policy_downgrade_to_none_still_omits_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(1); // ordered_values가 기존 required를 index 0에 두므로 none은 index 1
+        let ui = Arc::new(ui);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+        let existing = Some(ReviewDefaultPolicy {
+            codex_base: ReviewCodexBasePolicy::Required,
+        });
+
+        let policy = resolve_review_policy(&ctx, &InitOptions::default(), existing).unwrap();
+
+        assert!(
+            policy.is_none(),
+            "required→none 다운그레이드는 override-safety대로 섹션을 생략해야 한다"
+        );
     }
 
     #[test]
