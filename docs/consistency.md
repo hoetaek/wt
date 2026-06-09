@@ -881,8 +881,8 @@ layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 
 | 섹션 / 필드 | 동작 | 의미 |
 |---|---|---|
 | `worktree.path`, `worktree.inject_local_context`, `worktree.naming` | REPLACE (later wins if set) | 단일 값. 윗 layer가 명시하면 아랫 layer를 덮어쓴다. |
-| `worktree.copy`, `worktree.link`, `workspace.tabs`, `workspace.post_deps_tabs` | extend, value-level dedupe | 윗 layer가 항목을 추가한다. 같은 문자열은 한 번만 나온다. |
-| `worktree.copy_as` | extend, `(from, to)` 쌍 dedupe | 같은 from/to 쌍은 한 번만. 다른 from이면 둘 다 살아남는다. |
+| `worktree.copy`, `worktree.link` | extend, `(from, to)` 쌍 dedupe | 문자열 항목은 같은 이름(`from == to`)으로 materialize하고, `{ from, to }` 항목은 rename한다. 같은 from/to 쌍은 한 번만 나온다. |
+| `workspace.tabs`, `workspace.post_deps_tabs` | extend, value-level dedupe | 윗 layer가 항목을 추가한다. 같은 문자열은 한 번만 나온다. |
 | `setup.deps` | extend (현재 dedupe 없음) | 같은 dep을 두 layer가 적으면 두 번 실행된다. dep script는 idempotent하게 짠다. |
 | `setup.env`, `setup.env_files[path]`, `workspace.colors` | HashMap extend (key-level overwrite) | 같은 key를 윗 layer가 덮어쓴다. |
 | `workflow.pull_request`, `workflow.landing`, `review.codex_base`, `editor.command`, `editor.placement`, `workspace.browser` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. `workspace.browser.chrome_devtools`는 `workspace.browser`의 하위 설정이므로 browser section과 함께 교체된다. |
@@ -902,7 +902,7 @@ Named profile에는 profile.toml 외에 두 가지 convention이 더 있다.
 
 | 위치 | 동작 |
 |---|---|
-| `<profile>/scaffold/` | 디렉토리 존재만으로 `copy_as = [{from: <abs>, to: "."}]` 자동 push. 워크트리 생성 시 워크트리 루트에 복사된다. |
+| `<profile>/scaffold/` | 디렉토리 존재만으로 `copy = [{ from = "<abs>", to = "." }]` 자동 push. 워크트리 생성 시 워크트리 루트에 복사된다. |
 | `<profile>/prompts/<mode>.md` | `agent.prompt[mode]`를 **REPLACE**. profile.toml의 inline `[agent.prompt].<mode>`가 같이 있으면 파일이 이기고 stderr에 warning이 찍힌다. |
 | `<profile>/prompts/<mode>.append.md` | `agent.prompt[mode]`에 append. inline replace와 충돌이 아니다. |
 
