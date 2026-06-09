@@ -557,6 +557,17 @@ impl AppState {
         self.copy.inventory_title
     }
 
+    /// List title carrying the active source view, e.g. `Tasks — origin-only`.
+    /// Surfaces the view STATE at the top (above the rows) instead of the footer.
+    /// Workflow browsers do not expose source view, so they keep the plain title.
+    pub(crate) fn inventory_title_line(&self) -> String {
+        if self.copy.source_view_enabled {
+            format!("{} — {}", self.inventory_title(), self.source_view().label())
+        } else {
+            self.inventory_title().to_string()
+        }
+    }
+
     pub(crate) fn empty_inventory_message(&self) -> &str {
         self.copy.empty_inventory_message
     }
@@ -859,21 +870,15 @@ impl AppState {
     }
 
     fn list_status_line(&self) -> String {
-        if self.copy.source_view_enabled {
-            let mut line = format!(
-                "{}  [view: {}]",
-                self.copy.default_status_line,
-                self.source_view().label()
-            );
-            if self.source_view == SourceView::OriginOnly {
-                if let Some(status) = self.origin_only_status_label() {
-                    line.push_str(&format!("  [origin: {status}]"));
-                }
+        // The active view STATE lives in the list title (inventory_title_line);
+        // the footer keeps controls (`h/l view` hint in default_status_line) and
+        // transient origin fetch status only.
+        if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
+            if let Some(status) = self.origin_only_status_label() {
+                return format!("{}  [origin: {status}]", self.copy.default_status_line);
             }
-            line
-        } else {
-            self.copy.default_status_line.to_string()
         }
+        self.copy.default_status_line.to_string()
     }
 
     fn origin_only_status_label(&self) -> Option<String> {
@@ -1765,10 +1770,20 @@ mod tests {
     }
 
     #[test]
-    fn status_line_shows_active_source_view() {
+    fn list_title_shows_active_source_view() {
         let mut app = AppState::new(vec![source_row("a", "local")]);
         app.handle(KeyInput::Char('l'));
-        assert!(app.status_line().contains("[view: local]"));
+        // view STATE now lives in the top list title, not the footer
+        assert_eq!(app.inventory_title_line(), "Tasks — local");
+        assert!(!app.status_line().contains("[view:"));
+        // footer keeps the control hint
+        assert!(app.status_line().contains("h/l view"));
+    }
+
+    #[test]
+    fn workflow_list_title_omits_source_view() {
+        let app = AppState::workflow_with_diagnostics(vec![source_row("wf", "local")], Vec::new());
+        assert_eq!(app.inventory_title_line(), "Workflows");
     }
 
     #[test]

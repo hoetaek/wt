@@ -90,7 +90,7 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     if let Some(message) = app.empty_state_message() {
         let empty = Paragraph::new(message).block(
             Block::default()
-                .title(app.inventory_title())
+                .title(app.inventory_title_line())
                 .borders(Borders::ALL)
                 .border_style(theme::chrome_style())
                 .title_style(theme::chrome_style()),
@@ -130,7 +130,7 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
         .column_spacing(1)
         .block(
             Block::default()
-                .title(app.inventory_title())
+                .title(app.inventory_title_line())
                 .borders(Borders::ALL)
                 .border_style(theme::chrome_style())
                 .title_style(theme::chrome_style()),

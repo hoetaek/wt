@@ -1620,9 +1620,11 @@ Workflow, origin snapshot 같은 디스크 상태만 읽는다. 액션 메뉴는
 발견 가능해야 한다.
 
 Task list 브라우저의 source view는 출처 축을 보는 TUI 전용 presentation filter다.
-`SourceView { All, Local, Published, OriginOnly }`는 상태줄에 `[view: all]`,
-`[view: local]`, `[view: published]`, `[view: origin-only]`로 표시되고, task
-browser에서만 `h`/`l`로 wrap rotate된다. Workflow 브라우저에는 source view를 노출하지 않는다.
+`SourceView { All, Local, Published, OriginOnly }`는 **리스트 제목**에
+`Tasks — all` / `Tasks — local` / `Tasks — published` / `Tasks — origin-only`로
+(view STATE를 상단에) 표시되고, 상태줄에는 `h/l view` 조작 힌트와 OriginOnly의
+fetch staleness(`[origin: ...]`)만 둔다(STATE를 상태줄에 중복하지 않는다). task
+browser에서만 `h`/`l`로 wrap rotate된다. Workflow 브라우저에는 source view를 노출하지 않으며 제목도 plain `Workflows`다.
 Source view는 Local=`source == "local"`, Published=`source == "provider-origin"` predicate이며
 run-status 숨김 축(`wt task list --all`)과 독립적으로 AND 합성된다. OriginOnly는 로컬
 TaskDocument가 없는 provider 이슈를 보는 view다. Browser launch와 All/Local/Published
