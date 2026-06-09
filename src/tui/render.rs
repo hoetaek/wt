@@ -1,6 +1,5 @@
 use crate::tui::app::{
     AppState, BrowserCell, BrowserColumn, BrowserColumnWidth, BrowserRow, Mode, PopupView,
-    SidebarPosition,
 };
 use crate::tui::body_markup::LineKind;
 use crate::tui::remote_ui::PrintKind;
@@ -233,25 +232,10 @@ fn resolve_detail_sidebar_layout(
     let right = right_sidebar_width(area.width).filter(|_| available_height >= 5);
     let bottom = bottom_sidebar_possible(area.width, available_height);
 
-    match app.sidebar_position() {
-        SidebarPosition::Auto => right
-            .map(DetailSidebarLayout::Right)
-            .or_else(|| bottom.then_some(DetailSidebarLayout::Bottom))
-            .unwrap_or(DetailSidebarLayout::Hidden),
-        SidebarPosition::Right => right
-            .map(DetailSidebarLayout::Right)
-            .or_else(|| bottom.then_some(DetailSidebarLayout::Bottom))
-            .unwrap_or(DetailSidebarLayout::Hidden),
-        SidebarPosition::Bottom => {
-            if bottom {
-                DetailSidebarLayout::Bottom
-            } else {
-                right
-                    .map(DetailSidebarLayout::Right)
-                    .unwrap_or(DetailSidebarLayout::Hidden)
-            }
-        }
-    }
+    right
+        .map(DetailSidebarLayout::Right)
+        .or_else(|| bottom.then_some(DetailSidebarLayout::Bottom))
+        .unwrap_or(DetailSidebarLayout::Hidden)
 }
 
 fn right_sidebar_width(width: u16) -> Option<u16> {

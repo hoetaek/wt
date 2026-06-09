@@ -121,13 +121,6 @@ impl SourceView {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SidebarPosition {
-    Auto,
-    Right,
-    Bottom,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     List,
     FilterInput,
@@ -257,7 +250,6 @@ pub(crate) struct AppState {
     #[cfg(test)]
     body_wrap_recompute_count: Cell<usize>,
     sidebar_open: bool,
-    sidebar_position: SidebarPosition,
     sidebar_scroll: usize,
     help_open: bool,
 }
@@ -341,12 +333,6 @@ const LIST_KEYMAP: &[KeymapEntry] = &[
         key: "s",
         desc: "sidebar",
         footer: true,
-        task_only: false,
-    },
-    KeymapEntry {
-        key: "P",
-        desc: "sidebar position",
-        footer: false,
         task_only: false,
     },
     KeymapEntry {
@@ -462,7 +448,6 @@ impl AppState {
             #[cfg(test)]
             body_wrap_recompute_count: Cell::new(0),
             sidebar_open: true,
-            sidebar_position: SidebarPosition::Auto,
             sidebar_scroll: 0,
             help_open: false,
         };
@@ -993,10 +978,6 @@ impl AppState {
         self.sidebar_open
     }
 
-    pub(crate) fn sidebar_position(&self) -> SidebarPosition {
-        self.sidebar_position
-    }
-
     pub(crate) fn sidebar_scroll(&self) -> usize {
         self.sidebar_scroll
     }
@@ -1024,7 +1005,6 @@ impl AppState {
             KeyInput::Char('G') => self.move_to_last(),
             KeyInput::Char('v') => self.open_body_view(),
             KeyInput::Char('s') => self.toggle_sidebar(),
-            KeyInput::Char('P') => self.cycle_sidebar_position(),
             KeyInput::PageDown => self.scroll_sidebar_down(10),
             KeyInput::PageUp => self.scroll_sidebar_up(10),
             KeyInput::Char('?') => self.toggle_help(),
@@ -1070,6 +1050,7 @@ impl AppState {
 
     fn handle_help_key(&mut self, key: KeyInput) -> Outcome {
         match key {
+            KeyInput::Char('q') => return Outcome::Quit,
             KeyInput::Esc | KeyInput::Char('?') => {
                 self.help_open = false;
                 self.status_line = self.list_status_line();
@@ -1215,15 +1196,6 @@ impl AppState {
     fn toggle_sidebar(&mut self) {
         self.sidebar_open = !self.sidebar_open;
         self.sidebar_scroll = 0;
-        self.status_line = self.list_status_line();
-    }
-
-    fn cycle_sidebar_position(&mut self) {
-        self.sidebar_position = match self.sidebar_position {
-            SidebarPosition::Auto => SidebarPosition::Right,
-            SidebarPosition::Right => SidebarPosition::Bottom,
-            SidebarPosition::Bottom => SidebarPosition::Auto,
-        };
         self.status_line = self.list_status_line();
     }
 
@@ -1821,15 +1793,32 @@ mod tests {
     }
 
     #[test]
-    fn capital_p_toggles_sidebar_position_override() {
-        let mut app = AppState::new(vec![source_row("a", "local")]);
-        assert_eq!(app.sidebar_position(), SidebarPosition::Auto);
+    fn capital_p_dispatches_push_shortcut_for_origin_task() {
+        let mut app = app();
 
-        app.handle(KeyInput::Char('P'));
-        assert_eq!(app.sidebar_position(), SidebarPosition::Right);
+        assert_eq!(
+            app.handle(KeyInput::Char('P')),
+            Outcome::Dispatch {
+                key: "origin-sync-tui".into(),
+                action: OriginAction::Push,
+            }
+        );
+    }
 
-        app.handle(KeyInput::Char('P'));
-        assert_eq!(app.sidebar_position(), SidebarPosition::Bottom);
+    #[test]
+    fn capital_p_dispatches_push_shortcut_for_workflow_row() {
+        let mut app = AppState::workflow_with_diagnostics(
+            vec![row("publish-workflow", "Publish workflow", "stale")],
+            Vec::new(),
+        );
+
+        assert_eq!(
+            app.handle(KeyInput::Char('P')),
+            Outcome::Dispatch {
+                key: "publish-workflow".into(),
+                action: OriginAction::Push,
+            }
+        );
     }
 
     #[test]
@@ -2350,6 +2339,15 @@ mod tests {
 
         app.handle(KeyInput::Char('?'));
         assert!(!app.help_open());
+    }
+
+    #[test]
+    fn q_quits_while_help_overlay_is_open() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+
+        app.handle(KeyInput::Char('?'));
+        assert!(app.help_open());
+        assert_eq!(app.handle(KeyInput::Char('q')), Outcome::Quit);
     }
 
     #[test]
