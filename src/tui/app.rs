@@ -82,15 +82,17 @@ pub(crate) enum KeyInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceView {
     All,
-    LocalOnly,
+    Local,
+    Published,
     OriginOnly,
 }
 
 impl SourceView {
     fn next(self) -> Self {
         match self {
-            Self::All => Self::LocalOnly,
-            Self::LocalOnly => Self::OriginOnly,
+            Self::All => Self::Local,
+            Self::Local => Self::Published,
+            Self::Published => Self::OriginOnly,
             Self::OriginOnly => Self::All,
         }
     }
@@ -98,15 +100,17 @@ impl SourceView {
     fn prev(self) -> Self {
         match self {
             Self::All => Self::OriginOnly,
-            Self::OriginOnly => Self::LocalOnly,
-            Self::LocalOnly => Self::All,
+            Self::OriginOnly => Self::Published,
+            Self::Published => Self::Local,
+            Self::Local => Self::All,
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::All => "all",
-            Self::LocalOnly => "local-only",
+            Self::Local => "local",
+            Self::Published => "published",
             Self::OriginOnly => "origin-only",
         }
     }
@@ -525,10 +529,12 @@ impl AppState {
             Some(self.empty_inventory_message().to_string())
         } else if !self.filter.is_empty() {
             Some(self.copy.filter_miss_message.to_string())
-        } else if self.copy.source_view_enabled && self.source_view == SourceView::LocalOnly {
-            Some("no local-only tasks".into())
+        } else if self.copy.source_view_enabled && self.source_view == SourceView::Local {
+            Some("no local tasks".into())
+        } else if self.copy.source_view_enabled && self.source_view == SourceView::Published {
+            Some("no published tasks".into())
         } else if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
-            Some("no origin-linked tasks".into())
+            Some("origin-only - not fetched".into())
         } else {
             Some(self.empty_inventory_message().to_string())
         }
@@ -963,8 +969,9 @@ fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
 fn row_matches_source_view(row: &BrowserRow, view: SourceView) -> bool {
     match view {
         SourceView::All => true,
-        SourceView::LocalOnly => row.source == "local",
-        SourceView::OriginOnly => row.source == "provider-origin",
+        SourceView::Local => row.source == "local",
+        SourceView::Published => row.source == "provider-origin",
+        SourceView::OriginOnly => false,
     }
 }
 
@@ -1285,33 +1292,51 @@ mod tests {
     }
 
     #[test]
-    fn local_only_view_hides_provider_origin_rows() {
+    fn local_view_shows_only_local_source_rows() {
         let mut app = AppState::new(vec![
             source_row("a", "local"),
             source_row("b", "provider-origin"),
         ]);
-        app.set_source_view_for_test(SourceView::LocalOnly);
+        app.set_source_view_for_test(SourceView::Local);
         assert_eq!(app.visible_keys(), vec!["a"]);
     }
 
     #[test]
-    fn origin_only_view_hides_local_rows() {
+    fn published_view_shows_only_provider_origin_rows() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::Published);
+        assert_eq!(app.visible_keys(), vec!["b"]);
+    }
+
+    #[test]
+    fn origin_only_view_is_empty_placeholder_in_s1() {
         let mut app = AppState::new(vec![
             source_row("a", "local"),
             source_row("b", "provider-origin"),
         ]);
         app.set_source_view_for_test(SourceView::OriginOnly);
-        assert_eq!(app.visible_keys(), vec!["b"]);
+        assert!(app.visible_keys().is_empty());
     }
 
     #[test]
-    fn empty_local_only_view_reports_view_specific_message() {
+    fn empty_local_view_reports_view_specific_message() {
         let mut app = AppState::new(vec![source_row("a", "provider-origin")]);
-        app.set_source_view_for_test(SourceView::LocalOnly);
+        app.set_source_view_for_test(SourceView::Local);
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(app.empty_state_message().as_deref(), Some("no local tasks"));
+    }
+
+    #[test]
+    fn empty_published_view_reports_view_specific_message() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.set_source_view_for_test(SourceView::Published);
         assert!(app.visible_keys().is_empty());
         assert_eq!(
             app.empty_state_message().as_deref(),
-            Some("no local-only tasks")
+            Some("no published tasks")
         );
     }
 
@@ -1319,9 +1344,10 @@ mod tests {
     fn empty_origin_only_view_reports_view_specific_message() {
         let mut app = AppState::new(vec![source_row("a", "local")]);
         app.set_source_view_for_test(SourceView::OriginOnly);
+        assert!(app.visible_keys().is_empty());
         assert_eq!(
             app.empty_state_message().as_deref(),
-            Some("no origin-linked tasks")
+            Some("origin-only - not fetched")
         );
     }
 
@@ -1358,7 +1384,7 @@ mod tests {
     #[test]
     fn empty_state_message_reports_filter_miss_before_source_view_empty() {
         let mut app = AppState::new(vec![source_row("a", "local")]);
-        app.set_source_view_for_test(SourceView::LocalOnly);
+        app.set_source_view_for_test(SourceView::Local);
         app.handle(KeyInput::Char('/'));
         for ch in "zzz".chars() {
             app.handle(KeyInput::Char(ch));
@@ -1388,20 +1414,32 @@ mod tests {
     }
 
     #[test]
-    fn source_view_next_prev_wrap() {
-        assert_eq!(SourceView::All.next(), SourceView::LocalOnly);
-        assert_eq!(SourceView::LocalOnly.next(), SourceView::OriginOnly);
+    fn source_view_4way_next_prev_wrap() {
+        assert_eq!(SourceView::All.next(), SourceView::Local);
+        assert_eq!(SourceView::Local.next(), SourceView::Published);
+        assert_eq!(SourceView::Published.next(), SourceView::OriginOnly);
         assert_eq!(SourceView::OriginOnly.next(), SourceView::All);
         assert_eq!(SourceView::All.prev(), SourceView::OriginOnly);
-        assert_eq!(SourceView::OriginOnly.prev(), SourceView::LocalOnly);
-        assert_eq!(SourceView::LocalOnly.prev(), SourceView::All);
+        assert_eq!(SourceView::OriginOnly.prev(), SourceView::Published);
+        assert_eq!(SourceView::Published.prev(), SourceView::Local);
+        assert_eq!(SourceView::Local.prev(), SourceView::All);
+    }
+
+    #[test]
+    fn source_view_labels_match_publish_state() {
+        assert_eq!(SourceView::All.label(), "all");
+        assert_eq!(SourceView::Local.label(), "local");
+        assert_eq!(SourceView::Published.label(), "published");
+        assert_eq!(SourceView::OriginOnly.label(), "origin-only");
     }
 
     #[test]
     fn l_rotates_source_view_forward_wrapping() {
         let mut app = AppState::new(vec![source_row("a", "local")]);
         app.handle(KeyInput::Char('l'));
-        assert_eq!(app.source_view(), SourceView::LocalOnly);
+        assert_eq!(app.source_view(), SourceView::Local);
+        app.handle(KeyInput::Char('l'));
+        assert_eq!(app.source_view(), SourceView::Published);
         app.handle(KeyInput::Char('l'));
         assert_eq!(app.source_view(), SourceView::OriginOnly);
         app.handle(KeyInput::Char('l'));
@@ -1414,14 +1452,18 @@ mod tests {
         app.handle(KeyInput::Char('h'));
         assert_eq!(app.source_view(), SourceView::OriginOnly);
         app.handle(KeyInput::Char('h'));
-        assert_eq!(app.source_view(), SourceView::LocalOnly);
+        assert_eq!(app.source_view(), SourceView::Published);
+        app.handle(KeyInput::Char('h'));
+        assert_eq!(app.source_view(), SourceView::Local);
+        app.handle(KeyInput::Char('h'));
+        assert_eq!(app.source_view(), SourceView::All);
     }
 
     #[test]
     fn status_line_shows_active_source_view() {
         let mut app = AppState::new(vec![source_row("a", "local")]);
         app.handle(KeyInput::Char('l'));
-        assert!(app.status_line().contains("local-only"));
+        assert!(app.status_line().contains("[view: local]"));
     }
 
     #[test]
@@ -1452,6 +1494,7 @@ mod tests {
     #[test]
     fn empty_source_view_does_not_crash_and_nav_is_noop() {
         let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('l'));
         app.handle(KeyInput::Char('l'));
         app.handle(KeyInput::Char('l'));
         assert!(app.visible_keys().is_empty());
