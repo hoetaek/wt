@@ -1,8 +1,9 @@
 use anyhow::bail;
-use serde::de::Error as DeError;
+use serde::de::{Error as DeError, MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt;
 
 pub const RESERVED_PROFILE_NAME: &str = "default";
 pub const AGENT_PROMPT_WORKFLOW_SCOPE: &str = "workflow";
@@ -288,11 +289,61 @@ pub struct WorktreeConfig {
     pub naming: Option<WorktreeNamingConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PathSpec {
     Same(String),
     Rename { from: String, to: String },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PathSpecRenameRaw {
+    from: String,
+    to: String,
+}
+
+struct PathSpecVisitor;
+
+impl<'de> Visitor<'de> for PathSpecVisitor {
+    type Value = PathSpec;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a path string or { from, to } rename path spec")
+    }
+
+    fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+    where
+        E: DeError,
+    {
+        Ok(PathSpec::Same(value.into()))
+    }
+
+    fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
+    where
+        E: DeError,
+    {
+        Ok(PathSpec::Same(value))
+    }
+
+    fn visit_map<A>(self, map: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let raw = PathSpecRenameRaw::deserialize(MapAccessDeserializer::new(map))?;
+        Ok(PathSpec::Rename {
+            from: raw.from,
+            to: raw.to,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for PathSpec {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(PathSpecVisitor)
+    }
 }
 
 impl PathSpec {

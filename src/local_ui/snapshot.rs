@@ -162,6 +162,7 @@ struct WorktreeSummary {
     copy: Vec<String>,
     copy_as: Vec<CopyAsSummary>,
     link: Vec<String>,
+    link_as: Vec<CopyAsSummary>,
     inject_local_context: bool,
     naming: Option<WorktreeNamingSummary>,
 }
@@ -451,6 +452,7 @@ struct ProfileSummary {
     copy: Vec<String>,
     copy_as: Vec<CopyAsSummary>,
     link: Vec<String>,
+    link_as: Vec<CopyAsSummary>,
     agent: String,
     has_site: bool,
     worktree: Option<WorktreeSummary>,
@@ -1046,6 +1048,7 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
                 copy: same_pathspecs(&profile.config.worktree.copy),
                 copy_as: copy_as_summary(&profile.config.worktree.copy),
                 link: same_pathspecs(&profile.config.worktree.link),
+                link_as: rename_pathspec_summary(&profile.config.worktree.link),
                 agent,
                 has_site,
                 worktree,
@@ -1436,6 +1439,10 @@ fn same_pathspecs(specs: &[PathSpec]) -> Vec<String> {
 }
 
 fn copy_as_summary(specs: &[PathSpec]) -> Vec<CopyAsSummary> {
+    rename_pathspec_summary(specs)
+}
+
+fn rename_pathspec_summary(specs: &[PathSpec]) -> Vec<CopyAsSummary> {
     specs
         .iter()
         .filter_map(|spec| match spec {
@@ -1457,6 +1464,7 @@ fn worktree_summary(worktree: &WorktreeConfig) -> Option<WorktreeSummary> {
         copy: same_pathspecs(&worktree.copy),
         copy_as: copy_as_summary(&worktree.copy),
         link: same_pathspecs(&worktree.link),
+        link_as: rename_pathspec_summary(&worktree.link),
         inject_local_context: worktree.inject_local_context.is_some(),
         naming: worktree
             .naming
@@ -1831,7 +1839,7 @@ mod tests {
         write_profile(
             dir.path(),
             "codex",
-            "[worktree]\ncopy = [\".env\", \".linear.toml\", { from = \".local/profiles/codex/scaffold\", to = \".\" }]\nlink = [\".local\"]\n\n[agent]\ncli = \"codex\"\n",
+            "[worktree]\ncopy = [\".env\", \".linear.toml\", { from = \".local/profiles/codex/scaffold\", to = \".\" }]\nlink = [\".local\", { from = \".local/skills\", to = \".codex/skills\" }]\n\n[agent]\ncli = \"codex\"\n",
         );
         write_profile(dir.path(), "bad name", "[agent]\ncli = \"codex\"\n");
         write_retrospec(
@@ -1854,7 +1862,13 @@ mod tests {
 
         let mut config = Config::default();
         config.worktree.copy = vec!["AGENTS.override.md".into()];
-        config.worktree.link = vec![".local".into()];
+        config.worktree.link = vec![
+            ".local".into(),
+            PathSpec::Rename {
+                from: ".local/skills".into(),
+                to: ".codex/skills".into(),
+            },
+        ];
         config.worktree.inject_local_context = Some("## Local context\n".into());
         config.worktree.naming = Some(WorktreeNamingConfig {
             command: "claude -p".into(),
@@ -1952,6 +1966,8 @@ mod tests {
         let worktree = snapshot.config.worktree.as_ref().unwrap();
         assert_eq!(worktree.copy, vec!["AGENTS.override.md".to_string()]);
         assert_eq!(worktree.link, vec![".local".to_string()]);
+        assert_eq!(worktree.link_as[0].from, ".local/skills");
+        assert_eq!(worktree.link_as[0].to, ".codex/skills");
         assert!(worktree.inject_local_context);
         let naming = worktree.naming.as_ref().unwrap();
         assert_eq!(naming.command, "claude -p");
@@ -1992,6 +2008,8 @@ mod tests {
         assert_eq!(profile.copy_as[0].from, ".local/profiles/codex/scaffold");
         assert_eq!(profile.copy_as[0].to, ".");
         assert_eq!(profile.link, vec![".local".to_string()]);
+        assert_eq!(profile.link_as[0].from, ".local/skills");
+        assert_eq!(profile.link_as[0].to, ".codex/skills");
         assert_eq!(
             snapshot.sources.config_paths,
             vec![".wt.toml", "<repo-root>/.wt/config/local.toml"]

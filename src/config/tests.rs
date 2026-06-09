@@ -503,6 +503,21 @@ copy_as = [{ from = "a", to = "b" }]
 }
 
 #[test]
+fn worktree_rename_pathspec_rejects_unknown_fields() {
+    let err = toml::from_str::<Config>(
+        r#"[worktree]
+copy = [{ from = "a", to = "b", unknown = true }]
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("unknown field `unknown`"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn partial_config_fills_defaults() {
     let toml_str = r#"
 [worktree]
