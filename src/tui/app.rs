@@ -228,6 +228,7 @@ struct BrowserCopy {
     origin_count_label: &'static str,
     inventory_title: &'static str,
     empty_inventory_message: &'static str,
+    filter_miss_message: &'static str,
     no_selection_message: &'static str,
     no_selection_status: &'static str,
     default_status_line: &'static str,
@@ -240,6 +241,7 @@ impl BrowserCopy {
         origin_count_label: "actionable tasks",
         inventory_title: "Tasks",
         empty_inventory_message: "No actionable tasks",
+        filter_miss_message: "no matching tasks",
         no_selection_message: "No task selected",
         no_selection_status: "no task selected",
         default_status_line: "j/k move  / filter  h/l view  v body  a archive  Enter actions  q quit",
@@ -251,6 +253,7 @@ impl BrowserCopy {
         origin_count_label: "saved workflows",
         inventory_title: "Workflows",
         empty_inventory_message: "No saved workflows",
+        filter_miss_message: "no matching workflows",
         no_selection_message: "No workflow selected",
         no_selection_status: "no workflow selected",
         default_status_line: "j/k move  / filter  v body  Enter actions  q quit",
@@ -521,7 +524,7 @@ impl AppState {
         if self.rows.is_empty() {
             Some(self.empty_inventory_message().to_string())
         } else if !self.filter.is_empty() {
-            Some("no matching tasks".into())
+            Some(self.copy.filter_miss_message.to_string())
         } else if self.copy.source_view_enabled && self.source_view == SourceView::LocalOnly {
             Some("no local-only tasks".into())
         } else if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
@@ -1365,6 +1368,22 @@ mod tests {
         assert_eq!(
             app.empty_state_message().as_deref(),
             Some("no matching tasks")
+        );
+    }
+
+    #[test]
+    fn workflow_empty_state_message_reports_workflow_filter_miss() {
+        let mut app =
+            AppState::workflow_with_diagnostics(vec![source_row("wf", "local")], Vec::new());
+        app.handle(KeyInput::Char('/'));
+        for ch in "zzz".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no matching workflows")
         );
     }
 
