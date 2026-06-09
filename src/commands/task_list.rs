@@ -784,7 +784,8 @@ fn browser_columns(
     columns: &[Column],
     rows: &[crate::tui::app::BrowserRow],
 ) -> Vec<crate::tui::app::BrowserColumn> {
-    let task_width = browser_task_column_min_width(rows);
+    let task_min_width = browser_task_column_min_width(rows);
+    let task_content_width = browser_task_column_content_width(rows);
     columns
         .iter()
         .filter(|column| !column.hidden)
@@ -800,15 +801,29 @@ fn browser_columns(
                 TaskListColumnKind::Size => crate::tui::app::BrowserCell::Size,
             };
             let width = column.width.unwrap_or_else(|| {
-                browser_task_list_column_width(column.kind, column.grow, task_width) as u16
+                if column.kind == TaskListColumnKind::Task {
+                    task_content_width as u16
+                } else {
+                    browser_task_list_column_width(column.kind, column.grow, task_min_width) as u16
+                }
             });
-            if column.grow && column.width.is_none() {
+            if column.kind == TaskListColumnKind::Task && column.width.is_none() {
+                crate::tui::app::BrowserColumn::length(&column.title, cell, width)
+            } else if column.grow && column.width.is_none() {
                 crate::tui::app::BrowserColumn::min(&column.title, cell, width)
             } else {
                 crate::tui::app::BrowserColumn::length(&column.title, cell, width)
             }
         })
         .collect()
+}
+
+fn browser_task_column_content_width(rows: &[crate::tui::app::BrowserRow]) -> usize {
+    rows.iter()
+        .map(|row| measure_text_width(&format!("{}  task {}", row.title, row.key)))
+        .max()
+        .unwrap_or(0)
+        .clamp(TASK_BROWSER_MIN, TASK_COLUMN_MAX)
 }
 
 fn browser_task_column_min_width(rows: &[crate::tui::app::BrowserRow]) -> usize {
@@ -962,6 +977,7 @@ mod tests {
     use super::*;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions, OutputMode};
+    use crate::origin_action_menu::OriginActionMenu;
     use crate::services::issues::IssueListItem;
     use crate::task_run;
 
@@ -977,6 +993,24 @@ mod tests {
                 ..CtxOptions::default()
             },
         )
+    }
+
+    fn browser_row_fixture(key: &str, title: &str, source: &str) -> crate::tui::app::BrowserRow {
+        crate::tui::app::BrowserRow {
+            key: key.into(),
+            title: title.into(),
+            status: "local".into(),
+            run_status: "new".into(),
+            origin_label: String::new(),
+            next_action: "publish".into(),
+            duration: None,
+            size: None,
+            branch: Some("demo".into()),
+            source: source.into(),
+            body: String::new(),
+            preview_lines: Vec::new(),
+            menu: OriginActionMenu::for_local_task(key, title),
+        }
     }
 
     #[test]
@@ -1520,6 +1554,23 @@ body = "Task body"
         assert!(visible.contains(&"task"));
         assert!(visible.contains(&"branch"));
         assert!(!visible.contains(&"size"));
+    }
+
+    #[test]
+    fn task_column_is_content_capped_not_leftover_fill() {
+        let rows = vec![browser_row_fixture("a", "Short", "demo")];
+        let task_columns = default_task_list_columns(&Config::default())
+            .into_iter()
+            .filter(|column| column.title == "task")
+            .collect::<Vec<_>>();
+
+        let cols = browser_columns(&task_columns, &rows);
+        let task = cols.iter().find(|column| column.title == "task").unwrap();
+
+        assert!(
+            matches!(task.width, crate::tui::app::BrowserColumnWidth::Length(_)),
+            "Task column should be content-width Length, not leftover-fill Min"
+        );
     }
 
     #[test]

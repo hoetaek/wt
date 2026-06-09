@@ -2,6 +2,7 @@ use crate::origin_action_menu::{OriginAction, OriginActionMenu};
 use crate::tui::body_markup::{self, LineKind};
 use crate::tui::remote_ui::PrintKind;
 use crate::ui::selector::strip_terminal_sequences;
+use std::cell::RefCell;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserRow {
@@ -114,6 +115,13 @@ impl SourceView {
             Self::OriginOnly => "origin-only",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SidebarPosition {
+    Auto,
+    Right,
+    Bottom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,6 +249,11 @@ pub(crate) struct AppState {
     columns: Vec<BrowserColumn>,
     body_view_open: bool,
     body_scroll: usize,
+    body_cache: RefCell<BodyLineCache>,
+    sidebar_open: bool,
+    sidebar_position: SidebarPosition,
+    sidebar_scroll: usize,
+    help_open: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -252,7 +265,6 @@ struct BrowserCopy {
     filter_miss_message: &'static str,
     no_selection_message: &'static str,
     no_selection_status: &'static str,
-    default_status_line: &'static str,
     source_view_enabled: bool,
 }
 
@@ -265,7 +277,6 @@ impl BrowserCopy {
         filter_miss_message: "no matching tasks",
         no_selection_message: "No task selected",
         no_selection_status: "no task selected",
-        default_status_line: "j/k move  / filter  h/l view  v body  a archive  Enter actions  q quit",
         source_view_enabled: true,
     };
 
@@ -277,9 +288,110 @@ impl BrowserCopy {
         filter_miss_message: "no matching workflows",
         no_selection_message: "No workflow selected",
         no_selection_status: "no workflow selected",
-        default_status_line: "j/k move  / filter  v body  Enter actions  q quit",
         source_view_enabled: false,
     };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KeymapEntry {
+    key: &'static str,
+    desc: &'static str,
+    footer: bool,
+    task_only: bool,
+}
+
+const LIST_KEYMAP: &[KeymapEntry] = &[
+    KeymapEntry {
+        key: "j/k",
+        desc: "move",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "q",
+        desc: "quit",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "g/G",
+        desc: "first/last",
+        footer: false,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "/",
+        desc: "filter",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "h/l",
+        desc: "view",
+        footer: true,
+        task_only: true,
+    },
+    KeymapEntry {
+        key: "s",
+        desc: "sidebar",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "P",
+        desc: "sidebar position",
+        footer: false,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "PageUp/Dn",
+        desc: "scroll detail",
+        footer: false,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "v",
+        desc: "body",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "Enter",
+        desc: "actions",
+        footer: false,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "a",
+        desc: "archive",
+        footer: true,
+        task_only: true,
+    },
+    KeymapEntry {
+        key: "i",
+        desc: "import origin-only",
+        footer: false,
+        task_only: true,
+    },
+    KeymapEntry {
+        key: "r",
+        desc: "refetch origin-only",
+        footer: false,
+        task_only: true,
+    },
+    KeymapEntry {
+        key: "?",
+        desc: "help",
+        footer: true,
+        task_only: false,
+    },
+];
+
+#[derive(Debug, Clone, Default)]
+struct BodyLineCache {
+    selected_key: Option<String>,
+    body: String,
+    lines: Vec<(LineKind, String)>,
 }
 
 impl AppState {
@@ -331,12 +443,21 @@ impl AppState {
             columns,
             body_view_open: false,
             body_scroll: 0,
+            body_cache: RefCell::new(BodyLineCache::default()),
+            sidebar_open: true,
+            sidebar_position: SidebarPosition::Auto,
+            sidebar_scroll: 0,
+            help_open: false,
         };
         state.status_line = state.list_status_line();
         state
     }
 
     pub(crate) fn handle(&mut self, key: KeyInput) -> Outcome {
+        if self.help_open {
+            return self.handle_help_key(key);
+        }
+
         if self.body_view_open {
             return self.handle_body_view_key(key);
         }
@@ -453,9 +574,24 @@ impl AppState {
     }
 
     pub(crate) fn body_lines(&self) -> Vec<(LineKind, String)> {
-        self.selected_row()
-            .map(|row| body_markup::markup_body(&sanitize_body_for_markup(&row.body)))
-            .unwrap_or_default()
+        let Some((selected_key, body)) = self
+            .selected_row()
+            .map(|row| (row.key.clone(), row.body.clone()))
+        else {
+            let mut cache = self.body_cache.borrow_mut();
+            cache.selected_key = None;
+            cache.body.clear();
+            cache.lines.clear();
+            return Vec::new();
+        };
+
+        let mut cache = self.body_cache.borrow_mut();
+        if cache.selected_key.as_deref() != Some(selected_key.as_str()) || cache.body != body {
+            cache.selected_key = Some(selected_key);
+            cache.body = body;
+            cache.lines = body_markup::markup_body(&sanitize_body_for_markup(&cache.body));
+        }
+        cache.lines.clone()
     }
 
     pub(crate) fn begin_action(&mut self, key: &str, verb: &str) {
@@ -514,8 +650,31 @@ impl AppState {
         &self.filter
     }
 
+    #[cfg(test)]
     pub(crate) fn source_view(&self) -> SourceView {
         self.source_view
+    }
+
+    pub(crate) fn source_view_tabs(&self) -> Vec<(&'static str, Option<usize>, bool)> {
+        if !self.copy.source_view_enabled {
+            return Vec::new();
+        }
+
+        [
+            SourceView::All,
+            SourceView::Local,
+            SourceView::Published,
+            SourceView::OriginOnly,
+        ]
+        .into_iter()
+        .map(|view| {
+            (
+                view.label(),
+                self.source_view_count(view),
+                self.source_view == view,
+            )
+        })
+        .collect()
     }
 
     #[cfg(test)]
@@ -523,6 +682,7 @@ impl AppState {
         self.source_view = view;
         self.status_line = self.list_status_line();
         self.clamp_selection();
+        self.reset_detail_scroll();
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -557,15 +717,8 @@ impl AppState {
         self.copy.inventory_title
     }
 
-    /// List title carrying the active source view, e.g. `Tasks — origin-only`.
-    /// Surfaces the view STATE at the top (above the rows) instead of the footer.
-    /// Workflow browsers do not expose source view, so they keep the plain title.
     pub(crate) fn inventory_title_line(&self) -> String {
-        if self.copy.source_view_enabled {
-            format!("{} — {}", self.inventory_title(), self.source_view().label())
-        } else {
-            self.inventory_title().to_string()
-        }
+        self.inventory_title().to_string()
     }
 
     pub(crate) fn empty_inventory_message(&self) -> &str {
@@ -682,6 +835,7 @@ impl AppState {
             .position(|row| row.key == preferred_key)
             .unwrap_or(self.selected_index);
         self.clamp_selection();
+        self.reset_detail_scroll();
         self.select_first_enabled_menu_item();
         self.clamp_body_scroll();
     }
@@ -702,6 +856,7 @@ impl AppState {
         self.origin_only = OriginOnlyState::Fetching { spinner_frame: 0 };
         self.selected_index = 0;
         self.clamp_selection();
+        self.reset_detail_scroll();
         self.status_line = self.list_status_line();
     }
 
@@ -718,6 +873,7 @@ impl AppState {
             Err(message) => OriginOnlyState::Error { message },
         };
         self.clamp_selection();
+        self.reset_detail_scroll();
         self.select_first_enabled_menu_item();
         self.clamp_body_scroll();
         if self.mode == Mode::List {
@@ -743,11 +899,81 @@ impl AppState {
         counts
     }
 
+    fn source_view_count(&self, view: SourceView) -> Option<usize> {
+        match (view, &self.origin_only) {
+            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => Some(
+                rows.iter()
+                    .filter(|row| row_matches_filter(row, &self.filter))
+                    .count(),
+            ),
+            (SourceView::OriginOnly, _) => None,
+            _ => Some(
+                self.rows
+                    .iter()
+                    .filter(|row| {
+                        row_matches_filter(row, &self.filter) && row_matches_source_view(row, view)
+                    })
+                    .count(),
+            ),
+        }
+    }
+
+    fn keymap_entries(&self) -> Vec<KeymapEntry> {
+        LIST_KEYMAP
+            .iter()
+            .copied()
+            .filter(|entry| !entry.task_only || self.copy.source_view_enabled)
+            .collect()
+    }
+
+    fn footer_keymap_summary(&self) -> String {
+        self.keymap_entries()
+            .into_iter()
+            .filter(|entry| entry.footer)
+            .map(|entry| format!("{} {}", entry.key, entry.desc))
+            .collect::<Vec<_>>()
+            .join("  ")
+    }
+
+    pub(crate) fn sidebar_open(&self) -> bool {
+        self.sidebar_open
+    }
+
+    pub(crate) fn sidebar_position(&self) -> SidebarPosition {
+        self.sidebar_position
+    }
+
+    pub(crate) fn sidebar_scroll(&self) -> usize {
+        self.sidebar_scroll
+    }
+
+    pub(crate) fn clamp_sidebar_scroll_to(&mut self, max_scroll: usize) {
+        self.sidebar_scroll = self.sidebar_scroll.min(max_scroll);
+    }
+
+    pub(crate) fn help_open(&self) -> bool {
+        self.help_open
+    }
+
+    pub(crate) fn help_keymap(&self) -> Vec<(&'static str, &'static str)> {
+        self.keymap_entries()
+            .into_iter()
+            .map(|entry| (entry.key, entry.desc))
+            .collect()
+    }
+
     fn handle_list_key(&mut self, key: KeyInput) -> Outcome {
         match key {
             KeyInput::Down | KeyInput::Char('j') => self.move_down(),
             KeyInput::Up | KeyInput::Char('k') => self.move_up(),
+            KeyInput::Char('g') => self.move_to_first(),
+            KeyInput::Char('G') => self.move_to_last(),
             KeyInput::Char('v') => self.open_body_view(),
+            KeyInput::Char('s') => self.toggle_sidebar(),
+            KeyInput::Char('P') => self.cycle_sidebar_position(),
+            KeyInput::PageDown => self.scroll_sidebar_down(10),
+            KeyInput::PageUp => self.scroll_sidebar_up(10),
+            KeyInput::Char('?') => self.toggle_help(),
             KeyInput::Char('r')
                 if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly =>
             {
@@ -783,7 +1009,24 @@ impl AppState {
                     return Outcome::Dispatch { key, action };
                 }
             }
-            KeyInput::PageUp | KeyInput::PageDown | KeyInput::Esc | KeyInput::Backspace => {}
+            KeyInput::Esc | KeyInput::Backspace => {}
+        }
+        Outcome::Continue
+    }
+
+    fn handle_help_key(&mut self, key: KeyInput) -> Outcome {
+        match key {
+            KeyInput::Esc | KeyInput::Char('?') => {
+                self.help_open = false;
+                self.status_line = self.list_status_line();
+            }
+            KeyInput::Up
+            | KeyInput::Down
+            | KeyInput::PageUp
+            | KeyInput::PageDown
+            | KeyInput::Enter
+            | KeyInput::Backspace
+            | KeyInput::Char(_) => {}
         }
         Outcome::Continue
     }
@@ -861,6 +1104,7 @@ impl AppState {
         };
         self.selected_index = 0;
         self.clamp_selection();
+        self.reset_detail_scroll();
         self.status_line = self.list_status_line();
         if self.source_view == SourceView::OriginOnly && self.origin_only_needs_fetch() {
             self.begin_origin_fetch();
@@ -870,15 +1114,13 @@ impl AppState {
     }
 
     fn list_status_line(&self) -> String {
-        // The active view STATE lives in the list title (inventory_title_line);
-        // the footer keeps controls (`h/l view` hint in default_status_line) and
-        // transient origin fetch status only.
+        let controls = self.footer_keymap_summary();
         if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
             if let Some(status) = self.origin_only_status_label() {
-                return format!("{}  [origin: {status}]", self.copy.default_status_line);
+                return format!("{controls}  [origin: {status}]");
             }
         }
-        self.copy.default_status_line.to_string()
+        controls
     }
 
     fn origin_only_status_label(&self) -> Option<String> {
@@ -913,23 +1155,83 @@ impl AppState {
         self.body_scroll = self.body_scroll.min(max_scroll);
     }
 
+    fn toggle_sidebar(&mut self) {
+        self.sidebar_open = !self.sidebar_open;
+        self.sidebar_scroll = 0;
+        self.status_line = self.list_status_line();
+    }
+
+    fn cycle_sidebar_position(&mut self) {
+        self.sidebar_position = match self.sidebar_position {
+            SidebarPosition::Auto => SidebarPosition::Right,
+            SidebarPosition::Right => SidebarPosition::Bottom,
+            SidebarPosition::Bottom => SidebarPosition::Auto,
+        };
+        self.status_line = self.list_status_line();
+    }
+
+    fn scroll_sidebar_down(&mut self, amount: usize) {
+        if self.sidebar_open && self.selected_row().is_some() {
+            self.sidebar_scroll = self.sidebar_scroll.saturating_add(amount);
+        }
+    }
+
+    fn scroll_sidebar_up(&mut self, amount: usize) {
+        self.sidebar_scroll = self.sidebar_scroll.saturating_sub(amount);
+    }
+
+    fn toggle_help(&mut self) {
+        self.help_open = !self.help_open;
+        self.status_line = self.list_status_line();
+    }
+
     fn move_down(&mut self) {
         let len = self.visible_rows().len();
         if len > 0 {
-            self.selected_index = (self.selected_index + 1).min(len - 1);
+            self.set_selected_index((self.selected_index + 1).min(len - 1));
         }
     }
 
     fn move_up(&mut self) {
-        self.selected_index = self.selected_index.saturating_sub(1);
+        self.set_selected_index(self.selected_index.saturating_sub(1));
+    }
+
+    fn move_to_first(&mut self) {
+        if !self.visible_rows().is_empty() {
+            self.set_selected_index(0);
+        }
+    }
+
+    fn move_to_last(&mut self) {
+        let len = self.visible_rows().len();
+        if len > 0 {
+            self.set_selected_index(len.saturating_sub(1));
+        }
+    }
+
+    fn set_selected_index(&mut self, index: usize) {
+        if self.selected_index != index {
+            self.selected_index = index;
+            self.reset_detail_scroll();
+        } else {
+            self.selected_index = index;
+        }
+    }
+
+    fn reset_detail_scroll(&mut self) {
+        self.sidebar_scroll = 0;
     }
 
     fn clamp_selection(&mut self) {
         let len = self.visible_rows().len();
+        let before = self.selected_index;
         if len == 0 {
             self.selected_index = 0;
         } else {
             self.selected_index = self.selected_index.min(len - 1);
+        }
+        if self.selected_index != before {
+            self.reset_detail_scroll();
         }
     }
 
@@ -1398,6 +1700,45 @@ mod tests {
     }
 
     #[test]
+    fn s_toggles_sidebar_default_open() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        assert!(app.sidebar_open());
+
+        app.handle(KeyInput::Char('s'));
+        assert!(!app.sidebar_open());
+
+        app.handle(KeyInput::Char('s'));
+        assert!(app.sidebar_open());
+    }
+
+    #[test]
+    fn capital_p_toggles_sidebar_position_override() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        assert_eq!(app.sidebar_position(), SidebarPosition::Auto);
+
+        app.handle(KeyInput::Char('P'));
+        assert_eq!(app.sidebar_position(), SidebarPosition::Right);
+
+        app.handle(KeyInput::Char('P'));
+        assert_eq!(app.sidebar_position(), SidebarPosition::Bottom);
+    }
+
+    #[test]
+    fn pageup_pagedown_scroll_sidebar_when_open() {
+        let body = (0..20)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = app_with_body(&body);
+
+        app.handle(KeyInput::PageDown);
+        assert_eq!(app.sidebar_scroll(), 10);
+
+        app.handle(KeyInput::PageUp);
+        assert_eq!(app.sidebar_scroll(), 0);
+    }
+
+    #[test]
     fn down_and_up_move_selection_within_bounds() {
         let mut app = app();
         assert_eq!(app.selected_key(), Some("origin-sync-tui"));
@@ -1408,6 +1749,21 @@ mod tests {
         assert_eq!(app.selected_key(), Some("scratch-clean"));
         app.handle(KeyInput::Up);
         assert_eq!(app.selected_key(), Some("workflow-docs"));
+    }
+
+    #[test]
+    fn g_moves_to_first_capital_g_to_last() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+
+        app.handle(KeyInput::Char('G'));
+        assert_eq!(app.selected_key(), Some("c"));
+
+        app.handle(KeyInput::Char('g'));
+        assert_eq!(app.selected_key(), Some("a"));
     }
 
     #[test]
@@ -1452,6 +1808,31 @@ mod tests {
         ]);
         assert_eq!(app.source_view(), SourceView::All);
         assert_eq!(app.visible_keys(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn source_view_tabs_expose_label_count_and_active() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::Local);
+
+        let tabs = app.source_view_tabs();
+        let local = tabs.iter().find(|tab| tab.0 == "local").unwrap();
+        assert_eq!(local.1, Some(1));
+        assert!(local.2);
+
+        let all = tabs.iter().find(|tab| tab.0 == "all").unwrap();
+        assert_eq!(all.1, Some(2));
+        assert!(!all.2);
+    }
+
+    #[test]
+    fn workflow_browser_has_no_source_view_tabs() {
+        let app = AppState::workflow_with_diagnostics(vec![source_row("w", "local")], Vec::new());
+
+        assert!(app.source_view_tabs().is_empty());
     }
 
     #[test]
@@ -1770,13 +2151,12 @@ mod tests {
     }
 
     #[test]
-    fn list_title_shows_active_source_view() {
+    fn list_title_stays_plain_when_source_view_tabs_own_view_state() {
         let mut app = AppState::new(vec![source_row("a", "local")]);
         app.handle(KeyInput::Char('l'));
-        // view STATE now lives in the top list title, not the footer
-        assert_eq!(app.inventory_title_line(), "Tasks — local");
+
+        assert_eq!(app.inventory_title_line(), "Tasks");
         assert!(!app.status_line().contains("[view:"));
-        // footer keeps the control hint
         assert!(app.status_line().contains("h/l view"));
     }
 
@@ -1832,6 +2212,33 @@ mod tests {
         app.handle(KeyInput::Char('h'));
         assert_eq!(app.source_view(), SourceView::All);
         assert!(!app.status_line().contains("view:"));
+    }
+
+    #[test]
+    fn question_mark_toggles_help_overlay() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        assert!(!app.help_open());
+
+        app.handle(KeyInput::Char('?'));
+        assert!(app.help_open());
+
+        let keys = app.help_keymap();
+        assert!(keys.iter().any(|(key, _)| *key == "s"));
+        assert!(keys.iter().any(|(key, _)| *key == "h/l"));
+
+        app.handle(KeyInput::Char('?'));
+        assert!(!app.help_open());
+    }
+
+    #[test]
+    fn footer_hint_and_overlay_share_keymap_source() {
+        let app = AppState::new(vec![source_row("a", "local")]);
+        let keys = app.help_keymap();
+
+        assert!(keys.iter().any(|(key, _)| *key == "q"));
+        assert!(keys.iter().any(|(key, desc)| {
+            app.status_line().contains(*key) && app.status_line().contains(*desc)
+        }));
     }
 
     #[test]

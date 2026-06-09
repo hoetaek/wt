@@ -1,5 +1,6 @@
 use crate::tui::app::{
     AppState, BrowserCell, BrowserColumn, BrowserColumnWidth, BrowserRow, Mode, PopupView,
+    SidebarPosition,
 };
 use crate::tui::body_markup::LineKind;
 use crate::tui::remote_ui::PrintKind;
@@ -11,23 +12,43 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 
-const PREVIEW_MIN_HEIGHT: u16 = 16;
+const SIDEBAR_RIGHT_MIN_LIST_WIDTH: u16 = 80;
+const SIDEBAR_RIGHT_MIN_WIDTH: u16 = 32;
+const SIDEBAR_BOTTOM_MIN_WIDTH: u16 = 50;
+const SIDEBAR_BOTTOM_HEIGHT: u16 = 7;
 const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DetailSidebarLayout {
+    Hidden,
+    Right(u16),
+    Bottom,
+}
 
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
     let area = frame.area();
     let show_body = app.body_view_open();
     let show_output = !app.output_lines().is_empty();
-    let show_preview = !show_body
-        && area.height >= PREVIEW_MIN_HEIGHT
-        && (!show_output || area.height >= PREVIEW_MIN_HEIGHT + 6);
-    let row_min_height = if show_body || show_preview { 5 } else { 1 };
-    let mut constraints = vec![Constraint::Length(3), Constraint::Min(row_min_height)];
+    let header_height = header_height(app, area);
+    let detail_layout = if show_body {
+        DetailSidebarLayout::Hidden
+    } else {
+        resolve_detail_sidebar_layout(area, app, header_height, show_output)
+    };
+    let row_min_height = if show_body || matches!(detail_layout, DetailSidebarLayout::Bottom) {
+        5
+    } else {
+        1
+    };
+    let mut constraints = vec![
+        Constraint::Length(header_height),
+        Constraint::Min(row_min_height),
+    ];
     if show_output {
         constraints.push(Constraint::Length(output_panel_height(area)));
     }
-    if show_preview {
-        constraints.push(Constraint::Length(7));
+    if matches!(detail_layout, DetailSidebarLayout::Bottom) {
+        constraints.push(Constraint::Length(SIDEBAR_BOTTOM_HEIGHT));
     }
     constraints.push(Constraint::Length(1));
 
@@ -37,6 +58,12 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
     chunk_index += 1;
     if show_body {
         draw_body_view(frame, chunks[chunk_index], app);
+    } else if let DetailSidebarLayout::Right(sidebar_width) = detail_layout {
+        let row_chunks =
+            Layout::horizontal([Constraint::Min(1), Constraint::Length(sidebar_width)])
+                .split(chunks[chunk_index]);
+        draw_rows(frame, row_chunks[0], app);
+        draw_detail_sidebar(frame, row_chunks[1], app);
     } else {
         draw_rows(frame, chunks[chunk_index], app);
     }
@@ -45,8 +72,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
         draw_output_panel(frame, chunks[chunk_index], app);
         chunk_index += 1;
     }
-    if show_preview {
-        draw_preview(frame, chunks[chunk_index], app);
+    if matches!(detail_layout, DetailSidebarLayout::Bottom) {
+        draw_detail_sidebar(frame, chunks[chunk_index], app);
         chunk_index += 1;
     }
     draw_status(frame, chunks[chunk_index], app);
@@ -54,12 +81,84 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
     if app.mode() == Mode::Menu {
         draw_menu(frame, centered_rect(area), app);
     }
+    if app.help_open() {
+        draw_help_popup(frame, area, app);
+    }
     if let Some(popup) = app.popup_view() {
         draw_popup(frame, area, popup);
     }
 }
 
 fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
+    let mut lines = Vec::new();
+    let tabs = source_view_tab_line(app);
+    if let Some(tabs) = tabs {
+        lines.push(tabs);
+    }
+    if let Some(search) = search_line(app) {
+        lines.push(search);
+    }
+    lines.push(summary_line(app));
+
+    let header = Paragraph::new(lines).block(chrome_block());
+    frame.render_widget(header, area);
+}
+
+fn header_height(app: &AppState, area: Rect) -> u16 {
+    if area.height <= 8 {
+        return 3.min(area.height.saturating_sub(1).max(1));
+    }
+
+    let mut inner_lines = 1;
+    if !app.source_view_tabs().is_empty() {
+        inner_lines += 1;
+    }
+    if app.mode() == Mode::FilterInput || !app.filter().is_empty() {
+        inner_lines += 1;
+    }
+    (inner_lines + 2).min(area.height.saturating_sub(1).max(1))
+}
+
+fn source_view_tab_line(app: &AppState) -> Option<Line<'static>> {
+    let tabs = app.source_view_tabs();
+    if tabs.is_empty() {
+        return None;
+    }
+
+    let mut spans = Vec::new();
+    for (index, (label, count, active)) in tabs.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" | ", theme::dim_style()));
+        }
+        let label = if active {
+            format!("[{label}]")
+        } else {
+            label.to_string()
+        };
+        let count = count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "-".into());
+        spans.push(Span::raw(format!("{label} ({count})")));
+    }
+    Some(Line::from(spans))
+}
+
+fn search_line(app: &AppState) -> Option<Line<'static>> {
+    if app.mode() != Mode::FilterInput && app.filter().is_empty() {
+        return None;
+    }
+    let query = if app.filter().is_empty() {
+        "type to filter"
+    } else {
+        app.filter()
+    };
+    Some(Line::from(vec![
+        Span::styled("/ ", theme::dim_style()),
+        Span::raw(query.to_string()),
+    ]))
+}
+
+fn summary_line(app: &AppState) -> Line<'static> {
     let mut summary = if app.is_empty() {
         vec![Span::raw(format!(
             "Origin health: {}",
@@ -82,8 +181,68 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
         summary.push(Span::raw("  "));
         summary.push(Span::raw(app.diagnostics().join("  ")));
     }
-    let header = Paragraph::new(Line::from(summary)).block(chrome_block());
-    frame.render_widget(header, area);
+    Line::from(summary)
+}
+
+fn resolve_detail_sidebar_layout(
+    area: Rect,
+    app: &AppState,
+    header_height: u16,
+    show_output: bool,
+) -> DetailSidebarLayout {
+    if !app.sidebar_open() {
+        return DetailSidebarLayout::Hidden;
+    }
+
+    let output_height = if show_output {
+        output_panel_height(area)
+    } else {
+        0
+    };
+    let available_height = area
+        .height
+        .saturating_sub(header_height)
+        .saturating_sub(output_height)
+        .saturating_sub(1);
+    if available_height < 5 {
+        return DetailSidebarLayout::Hidden;
+    }
+
+    let right = right_sidebar_width(area.width).filter(|_| available_height >= 5);
+    let bottom = bottom_sidebar_possible(area.width, available_height);
+
+    match app.sidebar_position() {
+        SidebarPosition::Auto => right
+            .map(DetailSidebarLayout::Right)
+            .or_else(|| bottom.then_some(DetailSidebarLayout::Bottom))
+            .unwrap_or(DetailSidebarLayout::Hidden),
+        SidebarPosition::Right => right
+            .map(DetailSidebarLayout::Right)
+            .or_else(|| bottom.then_some(DetailSidebarLayout::Bottom))
+            .unwrap_or(DetailSidebarLayout::Hidden),
+        SidebarPosition::Bottom => {
+            if bottom {
+                DetailSidebarLayout::Bottom
+            } else {
+                right
+                    .map(DetailSidebarLayout::Right)
+                    .unwrap_or(DetailSidebarLayout::Hidden)
+            }
+        }
+    }
+}
+
+fn right_sidebar_width(width: u16) -> Option<u16> {
+    let max_sidebar_width = width.saturating_sub(SIDEBAR_RIGHT_MIN_LIST_WIDTH);
+    if max_sidebar_width < SIDEBAR_RIGHT_MIN_WIDTH {
+        return None;
+    }
+    let desired = width.saturating_mul(35) / 100;
+    Some(desired.clamp(SIDEBAR_RIGHT_MIN_WIDTH, max_sidebar_width))
+}
+
+fn bottom_sidebar_possible(width: u16, available_height: u16) -> bool {
+    width >= SIDEBAR_BOTTOM_MIN_WIDTH && available_height >= SIDEBAR_BOTTOM_HEIGHT + 5
 }
 
 fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
@@ -104,12 +263,15 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let row_capacity = table_row_capacity(area);
     let offset = row_viewport_offset(selected_index, row_capacity);
     let columns = app.columns();
+    let effective_widths = effective_column_widths(columns, area.width);
     let rows = visible_rows
         .into_iter()
         .enumerate()
         .skip(offset)
         .take(row_capacity)
-        .map(|(index, row)| browser_row(row, columns).style(row_style(app, index)));
+        .map(|(index, row)| {
+            browser_row(row, columns, &effective_widths).style(row_style(app, index))
+        });
     let constraints = columns
         .iter()
         .map(|column| match column.width {
@@ -150,17 +312,46 @@ fn row_viewport_offset(selected_index: usize, row_capacity: usize) -> usize {
     }
 }
 
-fn browser_row<'a>(row: &'a BrowserRow, columns: &'a [BrowserColumn]) -> Row<'a> {
+fn effective_column_widths(columns: &[BrowserColumn], area_width: u16) -> Vec<usize> {
+    let mut widths = columns
+        .iter()
+        .map(browser_column_width_hint)
+        .collect::<Vec<_>>();
+    let spacing = columns.len().saturating_sub(1);
+    let total_width = widths.iter().sum::<usize>() + spacing;
+    let inner_width = area_width.saturating_sub(2) as usize;
+    let overflow = total_width.saturating_sub(inner_width);
+    if overflow > 0 {
+        if let Some(task_index) = columns
+            .iter()
+            .position(|column| column.cell == BrowserCell::Task)
+        {
+            widths[task_index] = widths[task_index].saturating_sub(overflow).max(1);
+        }
+    }
+    widths
+}
+
+fn browser_row<'a>(
+    row: &'a BrowserRow,
+    columns: &'a [BrowserColumn],
+    effective_widths: &'a [usize],
+) -> Row<'a> {
     Row::new(
         columns
             .iter()
-            .map(|column| browser_cell(row, column))
+            .zip(effective_widths.iter().copied())
+            .map(|(column, effective_width)| browser_cell(row, column, effective_width))
             .collect::<Vec<_>>(),
     )
 }
 
-fn browser_cell<'a>(row: &'a BrowserRow, column: &BrowserColumn) -> Cell<'a> {
-    let text = browser_cell_text(row, column);
+fn browser_cell<'a>(
+    row: &'a BrowserRow,
+    column: &BrowserColumn,
+    effective_width: usize,
+) -> Cell<'a> {
+    let text = browser_cell_text(row, column, effective_width);
     let cell = Cell::from(text);
     match column.cell {
         BrowserCell::Status | BrowserCell::OriginStatus => cell.style(status_style(&row.status)),
@@ -169,7 +360,7 @@ fn browser_cell<'a>(row: &'a BrowserRow, column: &BrowserColumn) -> Cell<'a> {
     }
 }
 
-fn browser_cell_text(row: &BrowserRow, column: &BrowserColumn) -> String {
+fn browser_cell_text(row: &BrowserRow, column: &BrowserColumn, effective_width: usize) -> String {
     match column.cell {
         BrowserCell::Status | BrowserCell::OriginStatus => row.status.clone(),
         BrowserCell::RunStatus => row.run_status.clone(),
@@ -181,7 +372,7 @@ fn browser_cell_text(row: &BrowserRow, column: &BrowserColumn) -> String {
         BrowserCell::Size => row.size.clone().unwrap_or_else(|| "-".into()),
         BrowserCell::Branch => row.branch.clone().unwrap_or_else(|| "not prepared".into()),
         BrowserCell::Source => row.source.clone(),
-        BrowserCell::Task => browser_task_cell_text(row, browser_column_width_hint(column)),
+        BrowserCell::Task => browser_task_cell_text(row, effective_width),
     }
 }
 
@@ -236,37 +427,74 @@ fn row_style(app: &AppState, index: usize) -> Style {
     }
 }
 
-fn draw_preview(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
-    let mut lines = app
-        .diagnostics()
-        .iter()
-        .map(|line| Line::from(line.as_str()))
-        .collect::<Vec<_>>();
-    if !lines.is_empty() && app.selected_row().is_some() {
-        lines.push(Line::from(""));
+fn draw_detail_sidebar(frame: &mut Frame<'_>, area: Rect, app: &mut AppState) {
+    let visible_count = area.height.saturating_sub(2) as usize;
+    let content_width = area.width.saturating_sub(2).max(1) as usize;
+    let mut lines = detail_sidebar_lines(app, content_width);
+    if lines.is_empty() {
+        lines.push(Line::styled(
+            app.no_selection_message().to_string(),
+            theme::dim_style(),
+        ));
     }
-    lines.extend(
-        app.selected_row()
-            .map(|row| {
-                row.preview_lines
-                    .iter()
-                    .map(|line| Line::from(line.as_str()))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_else(|| vec![Line::from(app.no_selection_message())]),
-    );
+
+    let max_start = body_viewport_max_start(lines.len(), visible_count);
+    app.clamp_sidebar_scroll_to(max_start);
+    let start = app.sidebar_scroll();
+    let percent = body_scroll_percent(lines.len(), visible_count, start);
     let title = app
         .selected_row()
-        .map(|row| format!("Preview {}", row.title))
-        .unwrap_or_else(|| "Preview".into());
-    let preview = Paragraph::new(lines).block(
+        .map(|row| format!("Detail {} {percent}%", row.title))
+        .unwrap_or_else(|| format!("Detail {percent}%"));
+    let rendered_lines = lines
+        .into_iter()
+        .skip(start)
+        .take(visible_count)
+        .collect::<Vec<_>>();
+    let detail = Paragraph::new(rendered_lines).block(
         Block::default()
             .title(title)
             .borders(Borders::ALL)
             .border_style(theme::chrome_style())
             .title_style(theme::chrome_style()),
     );
-    frame.render_widget(preview, area);
+    frame.render_widget(detail, area);
+}
+
+fn detail_sidebar_lines(app: &AppState, content_width: usize) -> Vec<Line<'static>> {
+    let mut lines = app
+        .diagnostics()
+        .iter()
+        .map(|line| Line::from(line.to_string()))
+        .collect::<Vec<_>>();
+    let Some(row) = app.selected_row() else {
+        return lines;
+    };
+
+    if !lines.is_empty() {
+        lines.push(Line::from(""));
+    }
+    lines.extend(
+        row.preview_lines
+            .iter()
+            .map(|line| Line::from(line.clone())),
+    );
+
+    let body_lines = app.body_lines();
+    if !body_lines.is_empty() {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.extend(
+            body_lines
+                .iter()
+                .flat_map(|(kind, text)| body_visual_lines(kind, text, content_width)),
+        );
+    } else if !lines.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::styled("no body", theme::dim_style()));
+    }
+    lines
 }
 
 fn draw_output_panel(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
@@ -405,6 +633,24 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
         );
     }
     frame.render_widget(Paragraph::new(Line::styled(line, theme::dim_style())), area);
+}
+
+fn draw_help_popup(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
+    let keymap = app.help_keymap();
+    let desired_height = keymap.len() as u16 + 2;
+    let area = popup_rect(area, desired_height);
+    frame.render_widget(Clear, area);
+    let lines = keymap
+        .into_iter()
+        .map(|(key, desc)| {
+            Line::from(vec![
+                Span::styled(format!("{key:<12}"), theme::chrome_style()),
+                Span::raw(desc.to_string()),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let popup = Paragraph::new(lines).block(popup_block("Help"));
+    frame.render_widget(popup, area);
 }
 
 fn centered_rect(area: Rect) -> Rect {
@@ -685,7 +931,9 @@ fn styled_segment_line<'a>(text: String, segment: &str, style: Style) -> Line<'a
 mod tests {
     use super::*;
     use crate::origin_action_menu::{OriginActionMenu, OriginLabel};
-    use crate::tui::app::{AppState, BrowserCell, BrowserColumn, BrowserRow, KeyInput, PopupSpec};
+    use crate::tui::app::{
+        AppState, BrowserCell, BrowserColumn, BrowserRow, KeyInput, PopupSpec, SourceView,
+    };
     use crate::tui::remote_ui::PrintKind;
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
@@ -766,6 +1014,12 @@ mod tests {
                 OriginLabel::new("linear", "WT-142"),
             ),
         }
+    }
+
+    fn source_row(key: &str, source: &str) -> BrowserRow {
+        let mut browser_row = row(key, key, "stale");
+        browser_row.source = source.into();
+        browser_row
     }
 
     fn line_contains_text(buffer: &Buffer, width: u16, y: u16, text: &str) -> bool {
@@ -959,6 +1213,42 @@ mod tests {
     }
 
     #[test]
+    fn header_renders_source_view_tabs_with_separator_and_active() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::Published);
+
+        let text = buffer_text(120, 24, &app);
+
+        assert!(text.contains("local (1)"));
+        assert!(text.contains("[published] (1)"));
+        assert!(text.contains("|"));
+    }
+
+    #[test]
+    fn workflow_header_omits_source_view_tabs() {
+        let app = AppState::workflow_with_diagnostics(vec![source_row("wf", "local")], Vec::new());
+
+        let text = buffer_text(120, 24, &app);
+
+        assert!(!text.contains("all ("));
+        assert!(!text.contains("published"));
+    }
+
+    #[test]
+    fn header_shows_search_bar_when_filtering() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('/'));
+        app.handle(KeyInput::Char('x'));
+
+        let text = buffer_text(120, 24, &app);
+
+        assert!(text.contains("/ x"));
+    }
+
+    #[test]
     fn narrow_terminal_omits_preview_panel() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.preview_lines = vec!["PREVIEW-MARKER".into()];
@@ -966,6 +1256,49 @@ mod tests {
         let text = buffer_text(80, 10, &app);
         assert!(!text.contains("PREVIEW-MARKER"));
         assert!(text.contains("Origin sync TUI"));
+    }
+
+    #[test]
+    fn wide_terminal_shows_sidebar_on_the_right_with_body_and_meta() {
+        let mut browser_row = source_row("a", "provider-origin");
+        browser_row.title = "task a".into();
+        browser_row.body = "## Detail Body\nbody-marker".into();
+        browser_row.preview_lines = vec!["META-MARKER".into()];
+        let app = AppState::new(vec![browser_row]);
+
+        let text = buffer_text(140, 24, &app);
+
+        assert!(text.contains("task a"));
+        assert!(text.contains("META-MARKER"));
+        assert!(text.contains("body-marker"));
+    }
+
+    #[test]
+    fn narrow_terminal_reflows_sidebar_to_bottom() {
+        let mut browser_row = source_row("a", "provider-origin");
+        browser_row.title = "task a".into();
+        browser_row.body = "body-marker".into();
+        browser_row.preview_lines = vec!["META-MARKER".into()];
+        let app = AppState::new(vec![browser_row]);
+
+        let text = buffer_text(70, 24, &app);
+
+        assert!(text.contains("task a"));
+        assert!(text.contains("body-marker"));
+    }
+
+    #[test]
+    fn tiny_terminal_hides_sidebar_no_crash() {
+        let mut browser_row = source_row("a", "provider-origin");
+        browser_row.title = "task a".into();
+        browser_row.body = "body-marker".into();
+        browser_row.preview_lines = vec!["META-MARKER".into()];
+        let app = AppState::new(vec![browser_row]);
+
+        let text = buffer_text(40, 8, &app);
+
+        assert!(text.contains("task a"));
+        assert!(!text.contains("body-marker"));
     }
 
     #[test]
@@ -1111,6 +1444,19 @@ mod tests {
         assert!(text.contains("disabled:"));
         assert!(text.contains("External write"));
         assert!(text.contains("Enter run"));
+    }
+
+    #[test]
+    fn help_overlay_renders_full_keymap() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('?'));
+
+        let text = buffer_text(100, 24, &app);
+
+        assert!(text.contains("Help"));
+        assert!(text.contains("s"));
+        assert!(text.contains("sidebar"));
+        assert!(text.contains("h/l"));
     }
 
     #[test]
