@@ -237,6 +237,23 @@ impl<'a> GitService<'a> {
     }
 
     pub fn status_porcelain(&self, cwd: &Path) -> Result<String> {
+        let out = self
+            .runner
+            .run("git", &["status", "--porcelain"], Some(cwd))?;
+        if !out.success {
+            bail!(
+                "git status --porcelain failed: {}",
+                if out.stderr.is_empty() {
+                    &out.stdout
+                } else {
+                    &out.stderr
+                }
+            );
+        }
+        Ok(out.stdout)
+    }
+
+    pub fn status_porcelain_untracked_files_all(&self, cwd: &Path) -> Result<String> {
         let out = self.runner.run(
             "git",
             &["status", "--porcelain", "--untracked-files=all"],
@@ -738,13 +755,30 @@ branch refs/heads/main
     }
 
     #[test]
-    fn status_porcelain_requests_full_untracked_paths() {
+    fn status_porcelain_uses_default_untracked_summary() {
+        let mut runner = MockRunner::new();
+        runner.add_response("?? .codex/", true);
+        let cwd = PathBuf::from("/home/dev/sample-app-worktree");
+        let git = GitService::new(&runner, None);
+
+        assert_eq!(git.status_porcelain(&cwd).unwrap(), "?? .codex/");
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["status", "--porcelain"]);
+        assert_eq!(calls[0].2.as_ref(), Some(&cwd));
+    }
+
+    #[test]
+    fn status_porcelain_untracked_files_all_requests_full_untracked_paths() {
         let mut runner = MockRunner::new();
         runner.add_response("?? .codex/skills", true);
         let cwd = PathBuf::from("/home/dev/sample-app-worktree");
         let git = GitService::new(&runner, None);
 
-        assert_eq!(git.status_porcelain(&cwd).unwrap(), "?? .codex/skills");
+        assert_eq!(
+            git.status_porcelain_untracked_files_all(&cwd).unwrap(),
+            "?? .codex/skills"
+        );
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(

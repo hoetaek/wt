@@ -12,6 +12,7 @@ use crate::workflow::run::{
 };
 use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask};
 use anyhow::{Result, bail};
+use std::path::Path;
 
 use super::codex_base_review::validate_required_codex_base_review;
 use super::task_match::{workflow_matrix_task_matches, workflow_task_matches};
@@ -213,7 +214,7 @@ fn validate_completable_stack_task(ctx: &Ctx, row: &WorkflowTask) -> Result<()> 
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
 
     if let Some(path) = git.checked_out_path(branch)? {
-        let status = git.status_porcelain(&path)?;
+        let status = status_porcelain_for_configured_links(ctx, &git, &path)?;
         let relevant_status = relevant_worktree_status(ctx, &status);
         if !relevant_status.trim().is_empty() {
             bail!(
@@ -235,6 +236,18 @@ fn validate_completable_stack_task(ctx: &Ctx, row: &WorkflowTask) -> Result<()> 
     Ok(())
 }
 
+fn status_porcelain_for_configured_links(
+    ctx: &Ctx,
+    git: &GitService<'_>,
+    path: &Path,
+) -> Result<String> {
+    let status = git.status_porcelain(path)?;
+    if ctx.config.worktree.link.is_empty() || !status_may_hide_configured_link(ctx, &status) {
+        return Ok(status);
+    }
+    git.status_porcelain_untracked_files_all(path)
+}
+
 fn relevant_worktree_status(ctx: &Ctx, status: &str) -> String {
     status
         .lines()
@@ -254,6 +267,30 @@ fn is_configured_link_status_line(ctx: &Ctx, line: &str) -> bool {
         .iter()
         .map(|linked| linked.to().trim_end_matches('/'))
         .any(|linked| path == linked || path.starts_with(&format!("{linked}/")))
+}
+
+fn status_may_hide_configured_link(ctx: &Ctx, status: &str) -> bool {
+    status
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .any(|line| status_line_may_hide_configured_link(ctx, line))
+}
+
+fn status_line_may_hide_configured_link(ctx: &Ctx, line: &str) -> bool {
+    if !line.starts_with("?? ") {
+        return false;
+    }
+    let Some(path) = porcelain_status_path(line) else {
+        return false;
+    };
+    let path = path.trim_end_matches('/');
+    ctx.config
+        .worktree
+        .link
+        .iter()
+        .map(|linked| linked.to().trim_end_matches('/'))
+        .any(|linked| linked != path && linked.starts_with(&format!("{path}/")))
 }
 
 fn porcelain_status_path(line: &str) -> Option<&str> {
