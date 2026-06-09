@@ -518,7 +518,11 @@ impl AppState {
         if !self.visible_rows().is_empty() {
             return None;
         }
-        if self.copy.source_view_enabled && self.source_view == SourceView::LocalOnly {
+        if self.rows.is_empty() {
+            Some(self.empty_inventory_message().to_string())
+        } else if !self.filter.is_empty() {
+            Some("no matching tasks".into())
+        } else if self.copy.source_view_enabled && self.source_view == SourceView::LocalOnly {
             Some("no local-only tasks".into())
         } else if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
             Some("no origin-linked tasks".into())
@@ -1331,6 +1335,37 @@ mod tests {
     fn empty_state_message_is_none_when_rows_are_visible() {
         let app = AppState::new(vec![source_row("a", "local")]);
         assert!(app.empty_state_message().is_none());
+    }
+
+    #[test]
+    fn empty_state_message_reports_filter_miss_in_all_view() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('/'));
+        for ch in "zzz".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no matching tasks")
+        );
+    }
+
+    #[test]
+    fn empty_state_message_reports_filter_miss_before_source_view_empty() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.set_source_view_for_test(SourceView::LocalOnly);
+        app.handle(KeyInput::Char('/'));
+        for ch in "zzz".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no matching tasks")
+        );
     }
 
     #[test]
