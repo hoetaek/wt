@@ -738,7 +738,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     let workflow_policy = defaults
         .workflow_policy
         .unwrap_or_else(default_workflow_policy);
-    let review_policy = defaults.review_policy;
+    let review_policy = resolve_review_policy(ctx, options, &defaults)?;
     if is_interactive_wizard(options) {
         print_wizard_step(
             ctx,
@@ -827,6 +827,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         target.kind,
         &detected,
         &common,
+        review_policy,
     );
     if target_exists && (!options.yes || options.dry_run) {
         notices.push(InitNotice {
@@ -941,6 +942,7 @@ fn existing_target_warning_message(path: &Path, options: &InitOptions) -> String
     format!("설정 파일이 이미 있습니다: {} ({suffix})", path.display())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_plan_notices(
     ctx: &Ctx,
     profile: Option<&InitProfile>,
@@ -949,6 +951,7 @@ fn build_plan_notices(
     target_kind: InitTargetKind,
     detected: &DetectedRepo,
     common: &InitCommonConfig,
+    review_policy: Option<ReviewDefaultPolicy>,
 ) -> Vec<InitNotice> {
     let mut notices = Vec::new();
 
@@ -1023,6 +1026,15 @@ fn build_plan_notices(
             ),
             InitSiteProvider::DockerProxy | InitSiteProvider::None => {}
         }
+    }
+
+    if review_policy.is_some() {
+        push_missing_command_warning(
+            ctx,
+            &mut notices,
+            "codex",
+            "codex CLI가 없습니다. 생성된 review 설정은 저장할 수 있지만 codex base-diff review에는 codex가 필요합니다",
+        );
     }
 
     if common.worktree_naming {
@@ -2398,6 +2410,47 @@ fn resolve_site_provider(
     }
 }
 
+fn resolve_review_policy(
+    ctx: &Ctx,
+    options: &InitOptions,
+    defaults: &InitDefaults,
+) -> Result<Option<ReviewDefaultPolicy>> {
+    if options.yes {
+        return Ok(defaults.review_policy);
+    }
+
+    let default_codex_base = defaults
+        .review_policy
+        .map(|policy| policy.codex_base)
+        .unwrap_or(ReviewCodexBasePolicy::None);
+    let choices = ordered_values(
+        &[
+            ReviewCodexBasePolicy::None,
+            ReviewCodexBasePolicy::Advisory,
+            ReviewCodexBasePolicy::Required,
+        ],
+        Some(&default_codex_base),
+    );
+    let items = choices
+        .iter()
+        .map(|policy| review_policy_choice_item(*policy))
+        .collect::<Vec<_>>();
+
+    ctx.ui
+        .print_dim("review 정책 — Codex base-diff 리뷰 증거 수집 (none/advisory/required)");
+    let selected = choices[ctx
+        .ui
+        .select_nested_items_without_filter("Codex base-diff 리뷰 증거 정책", &items)?];
+
+    if selected == ReviewCodexBasePolicy::None {
+        Ok(None)
+    } else {
+        Ok(Some(ReviewDefaultPolicy {
+            codex_base: selected,
+        }))
+    }
+}
+
 fn resolve_gh_user(
     ctx: &Ctx,
     options: &InitOptions,
@@ -2421,6 +2474,20 @@ fn resolve_gh_user(
 
 fn ordered_agents(default: Option<InitAgent>) -> Vec<InitAgent> {
     ordered_values(&[InitAgent::Codex, InitAgent::Claude], default.as_ref())
+}
+
+fn review_policy_choice_item(policy: ReviewCodexBasePolicy) -> PromptItem {
+    match policy {
+        ReviewCodexBasePolicy::None => PromptItem::with_description("none", "안 씀"),
+        ReviewCodexBasePolicy::Advisory => PromptItem::with_description(
+            "advisory",
+            "코디네이터가 codex review를 보내고 증거를 기록합니다. 미가용은 차단하지 않습니다.",
+        ),
+        ReviewCodexBasePolicy::Required => PromptItem::with_description(
+            "required",
+            "wt workflow pass 전 codex base-diff review 증거가 필수입니다.",
+        ),
+    }
 }
 
 fn ordered_issue_providers(default: Option<&InitIssueProvider>) -> Vec<InitIssueProvider> {
@@ -3175,6 +3242,93 @@ mod tests {
     }
 
     #[test]
+    fn build_plan_notices_warns_when_codex_missing_for_active_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let notices = build_plan_notices(
+            &ctx,
+            None,
+            None,
+            None,
+            InitTargetKind::Local,
+            &DetectedRepo::default(),
+            &InitCommonConfig::default(),
+            Some(ReviewDefaultPolicy {
+                codex_base: ReviewCodexBasePolicy::Required,
+            }),
+        );
+
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.message.contains("codex base-diff review")),
+            "advisory/required + missing codex must warn about codex base-diff review"
+        );
+    }
+
+    #[test]
+    fn build_plan_notices_omits_review_warning_when_policy_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let notices = build_plan_notices(
+            &ctx,
+            None,
+            None,
+            None,
+            InitTargetKind::Local,
+            &DetectedRepo::default(),
+            &InitCommonConfig::default(),
+            None,
+        );
+
+        assert!(
+            !notices
+                .iter()
+                .any(|notice| notice.message.contains("codex base-diff review")),
+            "absent review policy must not warn about codex base-diff review"
+        );
+    }
+
+    #[test]
+    fn init_interactive_required_review_writes_section_and_warns_missing_codex() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(2); // required review policy
+        ui.add_select(2); // minimal common config
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                local: true,
+                agent: Some(InitAgent::None),
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+
+        assert!(plan.content.contains("[review]"));
+        assert!(plan.content.contains("codex_base = \"required\""));
+        assert!(
+            plan.notices
+                .iter()
+                .any(|notice| notice.message.contains("codex base-diff review")),
+            "required review policy must warn when codex is unavailable"
+        );
+    }
+
+    #[test]
     fn init_linear_writes_provider_preferred_origin_policy() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_for_dir(&dir);
@@ -3217,6 +3371,7 @@ origin_policy = "local-only"
         .unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // keep Linear issue provider
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // keep existing common config defaults
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // overwrite config
@@ -3780,6 +3935,7 @@ origin_policy = "local-only"
         )
         .unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // create config
@@ -3809,6 +3965,7 @@ origin_policy = "local-only"
         assert_eq!(
             *ui.prompts.lock().unwrap(),
             vec![
+                "select: Codex base-diff 리뷰 증거 정책".to_string(),
                 "select: 개발 환경 설정을 어떻게 만들까요?".to_string(),
                 "select: 설정 editor command".to_string(),
                 "confirm: 설정을 생성할까요?".to_string(),
@@ -3837,6 +3994,7 @@ origin_policy = "local-only"
         let mut ui = MockUi::new();
         ui.add_select(0); // use detected Linear issue workflow
         ui.add_select(0); // use detected Herd local site
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // use Chrome DevTools browser
@@ -4003,6 +4161,7 @@ origin_policy = "local-only"
     fn init_shared_with_github_options_creates_only_shared_config() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
@@ -4092,6 +4251,7 @@ origin_policy = "local-only"
     fn init_with_site_provider_writes_site_section() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // use Chrome DevTools browser
@@ -4162,6 +4322,7 @@ origin_policy = "local-only"
     fn init_with_traefik_site_provider_writes_traefik_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // use Chrome DevTools browser
@@ -4212,6 +4373,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(1); // shared .wt.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
@@ -4257,6 +4419,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // private repo config
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(false); // no agent args
@@ -4337,6 +4500,7 @@ origin_policy = "local-only"
             *ui.prompts.lock().unwrap(),
             vec![
                 "select: 저장 위치".to_string(),
+                "select: Codex base-diff 리뷰 증거 정책".to_string(),
                 "select: 개발 환경 설정을 어떻게 만들까요?".to_string(),
                 "select: 설정 editor command".to_string(),
                 "confirm: agent 실행 args를 추가할까요?".to_string(),
@@ -4351,6 +4515,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // enter agent args
@@ -4400,6 +4565,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // Codex agent
@@ -4437,7 +4603,7 @@ origin_policy = "local-only"
         let prompts = ui.prompts.lock().unwrap().clone();
         assert!(prompts.contains(&"select: 코딩 agent".to_string()));
         let select_items = ui.select_items.lock().unwrap().clone();
-        assert_eq!(select_items[3], vec!["Codex", "Claude"]);
+        assert_eq!(select_items[4], vec!["Codex", "Claude"]);
 
         let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
@@ -4466,6 +4632,7 @@ origin_policy = "local-only"
         std::fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
 
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(1); // customize frequently used settings
         ui.add_select(1); // home worktrees folder
         ui.add_input("lazygit, nvim, pnpm run dev");
@@ -4554,6 +4721,7 @@ origin_policy = "local-only"
         .unwrap();
 
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(1); // customize frequently used settings
         ui.add_select(0); // next to current repository
         ui.add_input("lazygit, nvim");
@@ -4627,6 +4795,7 @@ origin_policy = "local-only"
         std::fs::write(dir.path().join("api/uv.lock"), "").unwrap();
 
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(1); // customize frequently used settings
         ui.add_select(0); // next to current repository
         ui.add_input("lazygit, nvim");
@@ -4674,6 +4843,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(false); // no agent args
@@ -4716,6 +4886,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(false); // no agent args
@@ -4909,6 +5080,7 @@ origin_policy = "local-only"
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // Codex agent
@@ -4973,6 +5145,7 @@ colors = { task = "", issue = "cyan" }
         .unwrap();
 
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep existing required review policy
         ui.add_select(0); // use current config defaults
         ui.add_select(0); // use system editor
         ui.add_select(0); // prefilled claude agent
@@ -4999,10 +5172,11 @@ colors = { task = "", issue = "cyan" }
         .unwrap();
 
         let select_items = ui.select_items.lock().unwrap().clone();
-        assert_eq!(select_items[0][0], "기존 설정 파일 값 유지하기");
-        assert_eq!(select_items[1][0], "시스템 editor 사용");
-        assert_eq!(select_items[2][0], "Claude");
-        assert_eq!(select_items[3][0], "기존 args 유지: --model sonnet");
+        assert_eq!(select_items[0][0], "required");
+        assert_eq!(select_items[1][0], "기존 설정 파일 값 유지하기");
+        assert_eq!(select_items[2][0], "시스템 editor 사용");
+        assert_eq!(select_items[3][0], "Claude");
+        assert_eq!(select_items[4][0], "기존 args 유지: --model sonnet");
 
         let content = std::fs::read_to_string(local.join("local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
@@ -5037,9 +5211,57 @@ colors = { task = "", issue = "cyan" }
     }
 
     #[test]
+    fn resolve_review_policy_omits_section_on_none_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // default none is index 0
+        let ui = Arc::new(ui);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        let policy =
+            resolve_review_policy(&ctx, &InitOptions::default(), &InitDefaults::default()).unwrap();
+
+        assert!(
+            policy.is_none(),
+            "none selection must omit the review policy section"
+        );
+        let items = ui.select_items.lock().unwrap().clone();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].len(), 3);
+    }
+
+    #[test]
+    fn resolve_review_policy_records_required_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(2); // [none, advisory, required]
+        let ui = Arc::new(ui);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        let policy = resolve_review_policy(&ctx, &InitOptions::default(), &InitDefaults::default())
+            .unwrap()
+            .expect("required selection must record the review policy");
+
+        assert_eq!(policy.codex_base, ReviewCodexBasePolicy::Required);
+    }
+
+    #[test]
     fn init_accepting_claude_allow_rules_creates_local_settings() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // create config
@@ -5103,6 +5325,7 @@ colors = { task = "", issue = "cyan" }
         .unwrap();
 
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // create config
@@ -5139,6 +5362,7 @@ colors = { task = "", issue = "cyan" }
     fn init_declining_claude_allow_rules_leaves_settings_missing() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // keep review policy unset
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_confirm(true); // create config
