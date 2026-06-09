@@ -514,6 +514,19 @@ impl AppState {
         self.copy.empty_inventory_message
     }
 
+    pub(crate) fn empty_state_message(&self) -> Option<String> {
+        if !self.visible_rows().is_empty() {
+            return None;
+        }
+        if self.copy.source_view_enabled && self.source_view == SourceView::LocalOnly {
+            Some("no local-only tasks".into())
+        } else if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
+            Some("no origin-linked tasks".into())
+        } else {
+            Some(self.empty_inventory_message().to_string())
+        }
+    }
+
     pub(crate) fn no_selection_message(&self) -> &str {
         self.copy.no_selection_message
     }
@@ -1282,6 +1295,42 @@ mod tests {
         ]);
         app.set_source_view_for_test(SourceView::OriginOnly);
         assert_eq!(app.visible_keys(), vec!["b"]);
+    }
+
+    #[test]
+    fn empty_local_only_view_reports_view_specific_message() {
+        let mut app = AppState::new(vec![source_row("a", "provider-origin")]);
+        app.set_source_view_for_test(SourceView::LocalOnly);
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no local-only tasks")
+        );
+    }
+
+    #[test]
+    fn empty_origin_only_view_reports_view_specific_message() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no origin-linked tasks")
+        );
+    }
+
+    #[test]
+    fn empty_state_message_falls_back_to_inventory_when_no_rows() {
+        let app = AppState::new(vec![]);
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("No actionable tasks")
+        );
+    }
+
+    #[test]
+    fn empty_state_message_is_none_when_rows_are_visible() {
+        let app = AppState::new(vec![source_row("a", "local")]);
+        assert!(app.empty_state_message().is_none());
     }
 
     #[test]

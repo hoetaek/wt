@@ -87,8 +87,8 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 }
 
 fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
-    if app.is_empty() {
-        let empty = Paragraph::new(app.empty_inventory_message()).block(
+    if let Some(message) = app.empty_state_message() {
+        let empty = Paragraph::new(message).block(
             Block::default()
                 .title(app.inventory_title())
                 .borders(Borders::ALL)
