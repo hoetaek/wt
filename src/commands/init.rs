@@ -942,6 +942,7 @@ fn existing_target_warning_message(path: &Path, options: &InitOptions) -> String
     format!("설정 파일이 이미 있습니다: {} ({suffix})", path.display())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_plan_notices(
     ctx: &Ctx,
     profile: Option<&InitProfile>,
@@ -2435,9 +2436,8 @@ fn resolve_review_policy(
         .map(|policy| review_policy_choice_item(*policy))
         .collect::<Vec<_>>();
 
-    ctx.ui.print_dim(
-        "review 정책 — Codex base-diff 리뷰 증거 수집 (none/advisory/required)",
-    );
+    ctx.ui
+        .print_dim("review 정책 — Codex base-diff 리뷰 증거 수집 (none/advisory/required)");
     let selected = choices[ctx
         .ui
         .select_nested_items_without_filter("Codex base-diff 리뷰 증거 정책", &items)?];
@@ -5225,8 +5225,7 @@ colors = { task = "", issue = "cyan" }
         );
 
         let policy =
-            resolve_review_policy(&ctx, &InitOptions::default(), &InitDefaults::default())
-                .unwrap();
+            resolve_review_policy(&ctx, &InitOptions::default(), &InitDefaults::default()).unwrap();
 
         assert!(
             policy.is_none(),
@@ -5251,10 +5250,9 @@ colors = { task = "", issue = "cyan" }
             Box::new(Arc::clone(&ui)),
         );
 
-        let policy =
-            resolve_review_policy(&ctx, &InitOptions::default(), &InitDefaults::default())
-                .unwrap()
-                .expect("required selection must record the review policy");
+        let policy = resolve_review_policy(&ctx, &InitOptions::default(), &InitDefaults::default())
+            .unwrap()
+            .expect("required selection must record the review policy");
 
         assert_eq!(policy.codex_base, ReviewCodexBasePolicy::Required);
     }
