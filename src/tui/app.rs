@@ -528,6 +528,7 @@ impl AppState {
     pub(crate) fn is_empty(&self) -> bool {
         match (&self.source_view, &self.origin_only) {
             (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows.is_empty(),
+            (SourceView::OriginOnly, _) => true,
             _ => self.rows.is_empty(),
         }
     }
@@ -535,6 +536,7 @@ impl AppState {
     pub(crate) fn row_count(&self) -> usize {
         match (&self.source_view, &self.origin_only) {
             (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows.len(),
+            (SourceView::OriginOnly, _) => 0,
             _ => self.rows.len(),
         }
     }
@@ -715,6 +717,7 @@ impl AppState {
                     push_origin_status_count(&mut counts, row);
                 }
             }
+            (SourceView::OriginOnly, _) => {}
             _ => {
                 for row in &self.rows {
                     push_origin_status_count(&mut counts, row);
@@ -1502,6 +1505,26 @@ mod tests {
 
         assert!(!app.origin_only_needs_fetch());
         assert_eq!(app.visible_keys(), vec!["github:175"]);
+    }
+
+    #[test]
+    fn origin_only_non_loaded_header_inventory_is_empty() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+
+        assert!(app.is_empty());
+        assert_eq!(app.row_count(), 0);
+        assert!(app.origin_status_counts().is_empty());
+
+        app.begin_origin_fetch();
+        assert!(app.is_empty());
+        assert_eq!(app.row_count(), 0);
+        assert!(app.origin_status_counts().is_empty());
+
+        app.apply_origin_fetch(Err("github not authenticated".into()), "");
+        assert!(app.is_empty());
+        assert_eq!(app.row_count(), 0);
+        assert!(app.origin_status_counts().is_empty());
     }
 
     #[test]

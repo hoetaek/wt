@@ -180,22 +180,11 @@ fn poll_origin_fetch(
     let Some(current) = origin_fetch.as_mut() else {
         return;
     };
-    loop {
-        match current.ui_rx.try_recv() {
-            Ok(request) => handle_ui_request(app, request, pending_reply, origin_ctx),
-            Err(mpsc::TryRecvError::Empty) => break,
-            Err(mpsc::TryRecvError::Disconnected) => break,
-        }
-    }
+    drain_origin_fetch_requests(app, current, pending_reply, origin_ctx);
 
     match current.done_rx.try_recv() {
-        Ok(Ok(())) => {
-            *origin_fetch = None;
-        }
-        Ok(Err(err)) => {
-            if app.origin_fetching() {
-                app.apply_origin_fetch(Err(format!("{err:#}")), "");
-            }
+        Ok(result) => {
+            finish_origin_fetch_after_done(app, current, pending_reply, origin_ctx, result);
             *origin_fetch = None;
         }
         Err(mpsc::TryRecvError::Empty) => {}
@@ -210,6 +199,43 @@ fn poll_origin_fetch(
             }
             *origin_fetch = None;
         }
+    }
+}
+
+fn drain_origin_fetch_requests(
+    app: &mut AppState,
+    current: &mut dispatch::InFlightOriginFetch,
+    pending_reply: &mut Option<mpsc::Sender<UiReply>>,
+    origin_ctx: Option<&Ctx>,
+) {
+    loop {
+        match current.ui_rx.try_recv() {
+            Ok(request) => handle_ui_request(app, request, pending_reply, origin_ctx),
+            Err(mpsc::TryRecvError::Empty) => break,
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+    }
+}
+
+fn finish_origin_fetch_after_done(
+    app: &mut AppState,
+    current: &mut dispatch::InFlightOriginFetch,
+    pending_reply: &mut Option<mpsc::Sender<UiReply>>,
+    origin_ctx: Option<&Ctx>,
+    result: Result<()>,
+) {
+    drain_origin_fetch_requests(app, current, pending_reply, origin_ctx);
+    match result {
+        Ok(()) if app.origin_fetching() => {
+            app.apply_origin_fetch(
+                Err("origin issue fetch finished without a result".into()),
+                "",
+            );
+        }
+        Err(err) if app.origin_fetching() => {
+            app.apply_origin_fetch(Err(format!("{err:#}")), "");
+        }
+        Ok(()) | Err(_) => {}
     }
 }
 
@@ -338,6 +364,25 @@ fn is_ctrl_c(key: KeyEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::{Ctx, CtxOptions, OutputMode};
+    use crate::services::issues::IssueListItem;
+    use std::sync::mpsc;
+
+    fn test_ctx(root: &std::path::Path) -> Ctx {
+        Ctx::new_with_options(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+            CtxOptions {
+                output_mode: OutputMode::Text,
+                ..CtxOptions::default()
+            },
+        )
+    }
 
     #[test]
     fn popup_outcome_maps_to_ui_reply_exhaustively() {
@@ -364,5 +409,40 @@ mod tests {
             key_input(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
             Some(KeyInput::PageDown)
         );
+    }
+
+    #[test]
+    fn origin_fetch_done_drains_pending_loaded_request_before_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let (ui_tx, ui_rx) = mpsc::channel();
+        let (_done_tx, done_rx) = mpsc::channel();
+        ui_tx
+            .send(UiRequest::OriginIssuesLoaded {
+                provider: "github".into(),
+                result: Ok(vec![IssueListItem {
+                    identifier: "175".into(),
+                    title: "A".into(),
+                    display: "github #175".into(),
+                    hint: None,
+                }]),
+            })
+            .unwrap();
+        let mut fetch = dispatch::InFlightOriginFetch { ui_rx, done_rx };
+        let mut app = AppState::new(Vec::new());
+        app.set_source_view_for_test(crate::tui::app::SourceView::OriginOnly);
+        app.begin_origin_fetch();
+        let mut pending_reply = None;
+
+        finish_origin_fetch_after_done(
+            &mut app,
+            &mut fetch,
+            &mut pending_reply,
+            Some(&ctx),
+            Ok(()),
+        );
+
+        assert_eq!(app.visible_keys(), vec!["github:175"]);
+        assert!(!app.origin_fetching());
     }
 }

@@ -83,11 +83,12 @@ pub(crate) fn normalize_origin_key(provider: &str, id: &str) -> (String, String)
 pub(crate) fn local_origin_keys(ctx: &Ctx) -> Result<HashSet<(String, String)>> {
     let mut keys = HashSet::new();
     for path in task::task_document_paths(ctx)? {
-        let relative_path = task_relative_path(ctx, &path);
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read task: {relative_path}"))?;
-        let document: TaskDocument = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse task: {relative_path}"))?;
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(document) = toml::from_str::<TaskDocument>(&content) else {
+            continue;
+        };
         if let Some(origin) = document.origin {
             keys.insert(normalize_origin_key(&origin.provider, &origin.id));
         }
@@ -1008,6 +1009,31 @@ mod tests {
         assert_eq!(keys, vec!["github:175"]);
         assert_eq!(rows[0].source, "provider-origin");
         assert!(rows[0].branch.is_none());
+    }
+
+    #[test]
+    fn local_origin_keys_skips_malformed_tasks_and_keeps_valid_origins() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("valid.toml"),
+            r##"title = "Valid"
+branch = "valid"
+body = "Task body"
+
+[origin]
+provider = "github"
+id = "#182"
+"##,
+        )
+        .unwrap();
+        fs::write(tasks_dir.join("bad.toml"), "unknown = true\n").unwrap();
+
+        let keys = local_origin_keys(&ctx).unwrap();
+
+        assert!(keys.contains(&normalize_origin_key("github", "182")));
     }
 
     #[test]
