@@ -738,7 +738,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     let workflow_policy = defaults
         .workflow_policy
         .unwrap_or_else(default_workflow_policy);
-    let review_policy = defaults.review_policy;
+    let review_policy = resolve_review_policy(ctx, options, &defaults)?;
     if is_interactive_wizard(options) {
         print_wizard_step(
             ctx,
@@ -827,6 +827,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         target.kind,
         &detected,
         &common,
+        review_policy,
     );
     if target_exists && (!options.yes || options.dry_run) {
         notices.push(InitNotice {
@@ -949,6 +950,7 @@ fn build_plan_notices(
     target_kind: InitTargetKind,
     detected: &DetectedRepo,
     common: &InitCommonConfig,
+    review_policy: Option<ReviewDefaultPolicy>,
 ) -> Vec<InitNotice> {
     let mut notices = Vec::new();
 
@@ -1023,6 +1025,15 @@ fn build_plan_notices(
             ),
             InitSiteProvider::DockerProxy | InitSiteProvider::None => {}
         }
+    }
+
+    if review_policy.is_some() {
+        push_missing_command_warning(
+            ctx,
+            &mut notices,
+            "codex",
+            "codex CLI가 없습니다. 생성된 review 설정은 저장할 수 있지만 codex base-diff review에는 codex가 필요합니다",
+        );
     }
 
     if common.worktree_naming {
@@ -3228,6 +3239,93 @@ mod tests {
         assert!(plan.content.contains("provider = \"github\""));
         assert!(plan.content.contains("[worktree.naming]"));
         assert!(!plan.content.contains("[profile.agent]"));
+    }
+
+    #[test]
+    fn build_plan_notices_warns_when_codex_missing_for_active_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let notices = build_plan_notices(
+            &ctx,
+            None,
+            None,
+            None,
+            InitTargetKind::Local,
+            &DetectedRepo::default(),
+            &InitCommonConfig::default(),
+            Some(ReviewDefaultPolicy {
+                codex_base: ReviewCodexBasePolicy::Required,
+            }),
+        );
+
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.message.contains("codex base-diff review")),
+            "advisory/required + missing codex must warn about codex base-diff review"
+        );
+    }
+
+    #[test]
+    fn build_plan_notices_omits_review_warning_when_policy_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let notices = build_plan_notices(
+            &ctx,
+            None,
+            None,
+            None,
+            InitTargetKind::Local,
+            &DetectedRepo::default(),
+            &InitCommonConfig::default(),
+            None,
+        );
+
+        assert!(
+            !notices
+                .iter()
+                .any(|notice| notice.message.contains("codex base-diff review")),
+            "absent review policy must not warn about codex base-diff review"
+        );
+    }
+
+    #[test]
+    fn init_interactive_required_review_writes_section_and_warns_missing_codex() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(2); // required review policy
+        ui.add_select(2); // minimal common config
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                local: true,
+                agent: Some(InitAgent::None),
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+
+        assert!(plan.content.contains("[review]"));
+        assert!(plan.content.contains("codex_base = \"required\""));
+        assert!(
+            plan.notices
+                .iter()
+                .any(|notice| notice.message.contains("codex base-diff review")),
+            "required review policy must warn when codex is unavailable"
+        );
     }
 
     #[test]
