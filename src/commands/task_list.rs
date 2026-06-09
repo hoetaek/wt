@@ -96,9 +96,20 @@ pub(crate) fn local_origin_keys(ctx: &Ctx) -> Result<HashSet<(String, String)>> 
     Ok(keys)
 }
 
+pub(crate) fn local_task_keys(ctx: &Ctx) -> Result<HashSet<String>> {
+    let mut keys = HashSet::new();
+    for path in task::task_document_paths(ctx)? {
+        if let Ok(key) = task::task_key_from_path(&path) {
+            keys.insert(key);
+        }
+    }
+    Ok(keys)
+}
+
 pub(crate) fn origin_only_rows(
     issues: Vec<IssueListItem>,
-    local: &HashSet<(String, String)>,
+    local_origin_keys: &HashSet<(String, String)>,
+    local_task_keys: &HashSet<String>,
     provider: &str,
 ) -> Vec<crate::tui::app::BrowserRow> {
     let provider = provider.trim().to_ascii_lowercase();
@@ -106,7 +117,10 @@ pub(crate) fn origin_only_rows(
         .into_iter()
         .filter_map(|issue| {
             let (_, id) = normalize_origin_key(&provider, &issue.identifier);
-            if local.contains(&(provider.clone(), id.clone())) {
+            let import_key = task::safe_task_key(&issue.identifier);
+            if local_origin_keys.contains(&(provider.clone(), id.clone()))
+                || local_task_keys.contains(&import_key)
+            {
                 return None;
             }
             let key = format!("{provider}:{id}");
@@ -988,6 +1002,7 @@ mod tests {
         let local: HashSet<(String, String)> = [normalize_origin_key("github", "#182")]
             .into_iter()
             .collect();
+        let local_task_keys = HashSet::new();
         let issues = vec![
             IssueListItem {
                 identifier: "175".into(),
@@ -1003,12 +1018,59 @@ mod tests {
             },
         ];
 
-        let rows = origin_only_rows(issues, &local, "github");
+        let rows = origin_only_rows(issues, &local, &local_task_keys, "github");
 
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(keys, vec!["github:175"]);
         assert_eq!(rows[0].source, "provider-origin");
         assert!(rows[0].branch.is_none());
+    }
+
+    #[test]
+    fn origin_only_rows_excludes_existing_local_task_import_keys() {
+        use std::collections::HashSet;
+
+        let local_origin_keys = HashSet::new();
+        let local_task_keys: HashSet<String> = ["PROJ-123".to_string()].into_iter().collect();
+        let issues = vec![
+            IssueListItem {
+                identifier: "PROJ-123".into(),
+                title: "Already local".into(),
+                display: "linear PROJ-123".into(),
+                hint: None,
+            },
+            IssueListItem {
+                identifier: "PROJ-124".into(),
+                title: "Provider only".into(),
+                display: "linear PROJ-124".into(),
+                hint: None,
+            },
+        ];
+
+        let rows = origin_only_rows(issues, &local_origin_keys, &local_task_keys, "linear");
+
+        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, vec!["linear:proj-124"]);
+    }
+
+    #[test]
+    fn local_task_keys_collects_task_document_keys_without_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("PROJ-123.toml"),
+            r#"title = "Already local"
+branch = "proj-123"
+body = "Task body"
+"#,
+        )
+        .unwrap();
+
+        let keys = local_task_keys(&ctx).unwrap();
+
+        assert!(keys.contains("PROJ-123"));
     }
 
     #[test]

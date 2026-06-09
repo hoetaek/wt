@@ -327,8 +327,14 @@ fn reconcile_origin_issues(
 ) -> std::result::Result<Vec<BrowserRow>, String> {
     let issues = result?;
     let ctx = origin_ctx.ok_or_else(|| "origin issue fetch is unavailable here".to_string())?;
-    let local = task_list::local_origin_keys(ctx).map_err(|err| format!("{err:#}"))?;
-    Ok(task_list::origin_only_rows(issues, &local, provider))
+    let local_origin_keys = task_list::local_origin_keys(ctx).map_err(|err| format!("{err:#}"))?;
+    let local_task_keys = task_list::local_task_keys(ctx).map_err(|err| format!("{err:#}"))?;
+    Ok(task_list::origin_only_rows(
+        issues,
+        &local_origin_keys,
+        &local_task_keys,
+        provider,
+    ))
 }
 
 fn reply_for(outcome: PopupOutcome) -> UiReply {

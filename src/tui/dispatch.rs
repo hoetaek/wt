@@ -752,7 +752,8 @@ body = "Task body"
         use crate::services::issues::IssueListItem;
         use std::collections::HashSet;
 
-        let local: HashSet<(String, String)> = HashSet::new();
+        let local_origins: HashSet<(String, String)> = HashSet::new();
+        let local_task_keys = HashSet::new();
         let rows = crate::commands::task_list::origin_only_rows(
             vec![IssueListItem {
                 identifier: "175".into(),
@@ -760,7 +761,8 @@ body = "Task body"
                 display: "github #175".into(),
                 hint: None,
             }],
-            &local,
+            &local_origins,
+            &local_task_keys,
             "github",
         );
 

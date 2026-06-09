@@ -662,6 +662,7 @@ impl AppState {
     ) {
         self.rows = rows;
         self.diagnostics = diagnostics;
+        self.origin_only = OriginOnlyState::NotFetched;
         self.mode = Mode::List;
         self.status_line = self.list_status_line();
         self.selected_index = self
@@ -1505,6 +1506,22 @@ mod tests {
 
         assert!(!app.origin_only_needs_fetch());
         assert_eq!(app.visible_keys(), vec!["github:175"]);
+    }
+
+    #[test]
+    fn replacing_local_rows_invalidates_loaded_origin_only_cache() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+
+        app.replace_rows_preserving_selection(
+            vec![source_row("local-b", "local")],
+            Vec::new(),
+            "local-b",
+        );
+
+        assert!(app.origin_only_needs_fetch());
+        assert!(app.visible_keys().is_empty());
     }
 
     #[test]
