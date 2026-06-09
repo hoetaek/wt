@@ -2398,6 +2398,48 @@ fn resolve_site_provider(
     }
 }
 
+fn resolve_review_policy(
+    ctx: &Ctx,
+    options: &InitOptions,
+    defaults: &InitDefaults,
+) -> Result<Option<ReviewDefaultPolicy>> {
+    if options.yes {
+        return Ok(defaults.review_policy);
+    }
+
+    let default_codex_base = defaults
+        .review_policy
+        .map(|policy| policy.codex_base)
+        .unwrap_or(ReviewCodexBasePolicy::None);
+    let choices = ordered_values(
+        &[
+            ReviewCodexBasePolicy::None,
+            ReviewCodexBasePolicy::Advisory,
+            ReviewCodexBasePolicy::Required,
+        ],
+        Some(&default_codex_base),
+    );
+    let items = choices
+        .iter()
+        .map(|policy| review_policy_choice_item(*policy))
+        .collect::<Vec<_>>();
+
+    ctx.ui.print_dim(
+        "review 정책 — Codex base-diff 리뷰 증거 수집 (none/advisory/required)",
+    );
+    let selected = choices[ctx
+        .ui
+        .select_nested_items_without_filter("Codex base-diff 리뷰 증거 정책", &items)?];
+
+    if selected == ReviewCodexBasePolicy::None {
+        Ok(None)
+    } else {
+        Ok(Some(ReviewDefaultPolicy {
+            codex_base: selected,
+        }))
+    }
+}
+
 fn resolve_gh_user(
     ctx: &Ctx,
     options: &InitOptions,
@@ -2421,6 +2463,20 @@ fn resolve_gh_user(
 
 fn ordered_agents(default: Option<InitAgent>) -> Vec<InitAgent> {
     ordered_values(&[InitAgent::Codex, InitAgent::Claude], default.as_ref())
+}
+
+fn review_policy_choice_item(policy: ReviewCodexBasePolicy) -> PromptItem {
+    match policy {
+        ReviewCodexBasePolicy::None => PromptItem::with_description("none", "안 씀"),
+        ReviewCodexBasePolicy::Advisory => PromptItem::with_description(
+            "advisory",
+            "코디네이터가 codex review를 보내고 증거를 기록합니다. 미가용은 차단하지 않습니다.",
+        ),
+        ReviewCodexBasePolicy::Required => PromptItem::with_description(
+            "required",
+            "wt workflow pass 전 codex base-diff review 증거가 필수입니다.",
+        ),
+    }
 }
 
 fn ordered_issue_providers(default: Option<&InitIssueProvider>) -> Vec<InitIssueProvider> {
@@ -5034,6 +5090,55 @@ colors = { task = "", issue = "cyan" }
             workspace.colors.get("pr").map(String::as_str),
             Some("magenta")
         );
+    }
+
+    #[test]
+    fn resolve_review_policy_omits_section_on_none_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // default none is index 0
+        let ui = Arc::new(ui);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        let policy =
+            resolve_review_policy(&ctx, &InitOptions::default(), &InitDefaults::default())
+                .unwrap();
+
+        assert!(
+            policy.is_none(),
+            "none selection must omit the review policy section"
+        );
+        let items = ui.select_items.lock().unwrap().clone();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].len(), 3);
+    }
+
+    #[test]
+    fn resolve_review_policy_records_required_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(2); // [none, advisory, required]
+        let ui = Arc::new(ui);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        let policy =
+            resolve_review_policy(&ctx, &InitOptions::default(), &InitDefaults::default())
+                .unwrap()
+                .expect("required selection must record the review policy");
+
+        assert_eq!(policy.codex_base, ReviewCodexBasePolicy::Required);
     }
 
     #[test]
