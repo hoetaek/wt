@@ -84,7 +84,6 @@ const STRINGS = {
     namingBranchLabel: "branch",
     namingWorkspaceLabel: "workspace",
     namingPromptLabel: "prompt",
-    copyAsLabel: "copy_as",
     localContextLabel: "inject_local_context",
     setupLabel: "Setup",
     depsLabel: "deps",
@@ -160,7 +159,6 @@ const STRINGS = {
     worktreeHelp: "Files and local context prepared inside each new worktree.",
     worktreePathHelp: "Template for where new worktrees are created.",
     worktreeCopyHelp: "Files copied into the new worktree.",
-    worktreeCopyAsHelp: "Files copied to a different destination in the new worktree.",
     worktreeLinkHelp: "Paths linked instead of copied.",
     localContextHelp: "Injects rendered site/worktree/parent context into the agent context file.",
     namingHelp: "How wt asks for stable branch/workspace names.",
@@ -389,7 +387,6 @@ const STRINGS = {
     namingBranchLabel: "branch",
     namingWorkspaceLabel: "workspace",
     namingPromptLabel: "prompt",
-    copyAsLabel: "copy_as",
     localContextLabel: "inject_local_context",
     setupLabel: "setup",
     depsLabel: "deps",
@@ -465,7 +462,6 @@ const STRINGS = {
     worktreeHelp: "새 worktree 안에 준비할 파일과 로컬 컨텍스트입니다.",
     worktreePathHelp: "새 worktree를 만들 위치 템플릿입니다.",
     worktreeCopyHelp: "새 worktree에 복사할 파일입니다.",
-    worktreeCopyAsHelp: "새 worktree에서 다른 위치나 이름으로 복사할 파일입니다.",
     worktreeLinkHelp: "복사하지 않고 링크로 연결할 경로입니다.",
     localContextHelp: "site, worktree, parent 정보를 렌더링해 agent 컨텍스트 파일에 주입합니다.",
     namingHelp: "wt가 안정적인 branch/workspace 이름을 만드는 방식입니다.",
@@ -1214,7 +1210,6 @@ function profileCard(row) {
   return card(row.name, [
     pill(`${t("agentLabel")} ${row.agent}`, "blue"),
     valuesPill(t("copyLabel"), profileCopyValues(row)),
-    valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
     valuesPill(t("linkLabel"), profileLinkValues(row)),
     row.has_site ? pill(t("profileSiteLabel"), "green") : "",
   ], [row.path], bodyPreview(row.source_text), "violet", [
@@ -1325,13 +1320,6 @@ function configEffectiveCards(config, options = {}) {
         label: t("copyLabel"),
         value: joinValues(worktree.copy),
         description: t("worktreeCopyHelp"),
-      });
-    }
-    if (worktree.copy_as?.length) {
-      worktreeItems.push({
-        label: t("copyAsLabel"),
-        value: joinValues(worktree.copy_as.map(copyAsValue)),
-        description: t("worktreeCopyAsHelp"),
       });
     }
     if (worktree.link?.length) {
@@ -1591,10 +1579,6 @@ function joinValues(values) {
   return values.filter(Boolean).join(", ");
 }
 
-function copyAsValue(entry) {
-  return `${entry.from} -> ${entry.to}`;
-}
-
 function shortValues(values, maxItems = 2) {
   const clean = values.filter(Boolean);
   if (clean.length <= maxItems) {
@@ -1605,10 +1589,6 @@ function shortValues(values, maxItems = 2) {
 
 function profileCopyValues(row) {
   return row.copy || [];
-}
-
-function profileCopyAsValues(row) {
-  return (row.copy_as || []).map(copyAsValue);
 }
 
 function profileLinkValues(row) {
@@ -1730,7 +1710,6 @@ function profileMasterDetailRecord(row, selected) {
     listPills: [
       pill(`${t("agentLabel")} ${row.agent}`, "blue"),
       valuesPill(t("copyLabel"), profileCopyValues(row)),
-      valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
     ],
@@ -1740,7 +1719,6 @@ function profileMasterDetailRecord(row, selected) {
       pill(t("profileOnlyBadge"), "green"),
       pill(`${t("agentLabel")} ${row.agent}`, "blue"),
       valuesPill(t("copyLabel"), profileCopyValues(row)),
-      valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
     ],
@@ -2967,7 +2945,6 @@ function profileScanRow(row) {
     pills: [
       pill(`${t("agentLabel")} ${row.agent}`, "blue"),
       valuesPill(t("copyLabel"), profileCopyValues(row)),
-      valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
     ],

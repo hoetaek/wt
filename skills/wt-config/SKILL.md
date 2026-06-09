@@ -89,8 +89,8 @@ Default recommendation rules:
 - Add `[setup]` only when the repo has a real per-worktree install/sync step.
 - Add `[setup.env]` or `[setup.env_files]` only for non-secret,
   worktree-specific values rendered into env files that already exist after
-  `[worktree]` copy/link/copy_as. Env substitution runs after copy/link and
-  before deps, so deps cannot create the target file for the same setup run.
+  `[worktree]` copy/link materialization. Env substitution runs after copy/link
+  and before deps, so deps cannot create the target file for the same setup run.
 - Add `[issues]` only when provider issue workflows are used.
 - Add `[site]`, `[workspace.browser]`, and `workspace.post_deps_tabs` only for
   app/web repos with a local server or URL.
@@ -105,6 +105,10 @@ Default recommendation rules:
 - Add `[editor]` only when a concrete editor command is useful for wt-managed
   TOML editing.
 - Add `[worktree]` only for real path/copy/link/context needs.
+  `copy` and `link` both accept string entries for same-name materialization and
+  `{ from, to }` entries for rename materialization. Use
+  `copy = [{ from = "...", to = "..." }]` for renamed copies and
+  `link = [{ from = "...", to = "..." }]` for renamed symlinks.
 - Add `[workflow]` only when future workflow PR/landing policy should differ
   from built-in defaults.
 - Keep simple agent defaults inline under `[profile.agent]`; use named profiles
@@ -240,21 +244,22 @@ explicitly:
 
 - **Profile dormancy.** `<repo-root>/.wt/config/profiles/<name>/` exists
   (with `profile.toml`, `scaffold/`, or `prompts/`) but `wt config show` shows no
-  `copy_as` pointing into that scaffold and no prompts from
-  `profile.toml`/`prompts/*.md`. Cause: `.wt.toml`/`local.toml` is missing
-  `[profile] name = "<name>"`, and no command passes `--profile <name>`. Fix:
-  add `[profile] name = "<name>"` to the owner file, or remove the profile
-  directory if it is unused.
+  `copy = [{ from = ".../scaffold", to = "." }]` entry for that scaffold and no
+  prompts from `profile.toml`/`prompts/*.md`. Cause:
+  `.wt.toml`/`local.toml` is missing `[profile] name = "<name>"`, and no command
+  passes `--profile <name>`. Fix: add `[profile] name = "<name>"` to the owner
+  file, or remove the profile directory if it is unused.
 - **Named profile + inline `[profile.agent.*]` collision.** When `[profile]` has
   both `name = "<name>"` and inline settings like `[profile.agent.prompt]`,
   `wt config show` fails with a hard parse error (schema validation rejects the
   combination). Fix: pick one — drop `name` to use inline, or move the inline
   prompts into the named profile's `prompts/*.md` (or its own `profile.toml`'s
   `[agent.prompt]`) and delete the inline block.
-- **Scaffold drift.** `[profile] name = "<name>"` is set and `wt config show` shows
-  the `copy_as` scaffold entry, but `scaffold/` is empty or missing the files
-  the user expects. Fix: populate `<repo-root>/.wt/config/profiles/<name>/scaffold/`
-  with the actual files the worktree should receive, then re-run `wt config show`.
+- **Scaffold drift.** `[profile] name = "<name>"` is set and `wt config show`
+  shows the `copy = [{ from = ".../scaffold", to = "." }]` scaffold entry, but
+  `scaffold/` is empty or missing the files the user expects. Fix: populate
+  `<repo-root>/.wt/config/profiles/<name>/scaffold/` with the actual files the
+  worktree should receive, then re-run `wt config show`.
 - **Prompt file vs inline collision.** `profile.toml` defines
   `[agent.prompt].<mode>` and the same profile has `prompts/<mode>.md`.
   Behavior: file wins, stderr emits `warning: [agent.prompt].<mode> from
@@ -264,10 +269,11 @@ explicitly:
   is supported. `prompts/<mode>.append.md` is not a conflict; it layers on top
   of either source.
 - **Env template no-op or wrong target.** `wt config show` shows `[setup.env]`, but
-  the worktree will not have `.env` after copy/link/copy_as, or the intended
-  file is nested/suffixed such as `frontend/.env.development`. Cause:
+  the worktree will not have `.env` after copy/link materialization, or the
+  intended file is nested/suffixed such as `frontend/.env.development`. Cause:
   `[setup.env]` only updates root `.env` and skips missing targets. Fix: add
-  personal `[worktree] copy = [".env"]` or a suitable `copy_as`/`link`, move
+  personal `[worktree] copy = [".env"]`, `copy = [{ from = "...", to = ".env" }]`,
+  or a suitable `link = [{ from = "...", to = ".env" }]`, move
   nested keys under `[setup.env_files."path"]`, or remove the env template if
   no target file should exist.
 - **Effective ≠ files in another way.** Any setting the user clearly intended
@@ -308,7 +314,7 @@ If the recommendation includes named profiles, also run:
 
 ```bash
 wt config show --profile <name>
-wt config show | grep -E 'copy_as|\[agent' # named profile actually merged into effective?
+wt config show | grep -E 'copy =|link =|\[agent' # named profile actually merged into effective?
 ```
 
 If this skill file or wt init behavior changes inside the `wt` repo, validate

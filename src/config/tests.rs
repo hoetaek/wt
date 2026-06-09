@@ -2,6 +2,10 @@ use super::merge::merge_config;
 use super::*;
 use std::collections::HashMap;
 
+fn pathspec_pairs(specs: &[PathSpec]) -> Vec<(&str, &str)> {
+    specs.iter().map(|spec| (spec.from(), spec.to())).collect()
+}
+
 #[test]
 fn parses_full_config() {
     let toml_str = r#"
@@ -69,14 +73,21 @@ cli = "claude"
     let config: Config = toml::from_str(toml_str).unwrap();
 
     assert_eq!(
-        config.worktree.copy,
-        vec![".env", "CLAUDE.local.md", ".claude/settings.local.json"]
+        pathspec_pairs(&config.worktree.copy),
+        vec![
+            (".env", ".env"),
+            ("CLAUDE.local.md", "CLAUDE.local.md"),
+            (".claude/settings.local.json", ".claude/settings.local.json")
+        ]
     );
     assert_eq!(
         config.worktree.path.as_deref(),
         Some("$HOME/worktrees/{{default_name}}")
     );
-    assert_eq!(config.worktree.link, vec!["tmp/shared-cache"]);
+    assert_eq!(
+        pathspec_pairs(&config.worktree.link),
+        vec![("tmp/shared-cache", "tmp/shared-cache")]
+    );
     assert!(config.worktree.inject_local_context.is_some());
     assert!(
         config
@@ -445,10 +456,65 @@ link = ["tmp/shared-cache"]
 "#;
     let config: Config = toml::from_str(toml_str).unwrap();
     assert_eq!(
-        config.worktree.copy,
-        vec![".env", ".claude/settings.local.json", ".claude/hooks"]
+        pathspec_pairs(&config.worktree.copy),
+        vec![
+            (".env", ".env"),
+            (".claude/settings.local.json", ".claude/settings.local.json"),
+            (".claude/hooks", ".claude/hooks")
+        ]
     );
-    assert_eq!(config.worktree.link, vec!["tmp/shared-cache"]);
+    assert_eq!(
+        pathspec_pairs(&config.worktree.link),
+        vec![("tmp/shared-cache", "tmp/shared-cache")]
+    );
+}
+
+#[test]
+fn worktree_copy_and_link_accept_rename_specs() {
+    let config: Config = toml::from_str(
+        r#"[worktree]
+copy = [".env", { from = ".local/skills", to = ".codex/skills" }]
+link = [".local", { from = ".local/skills", to = ".codex/skills" }]
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.worktree.copy[0].from(), ".env");
+    assert_eq!(config.worktree.copy[0].to(), ".env");
+    assert_eq!(config.worktree.copy[1].from(), ".local/skills");
+    assert_eq!(config.worktree.copy[1].to(), ".codex/skills");
+    assert_eq!(config.worktree.link[1].from(), ".local/skills");
+    assert_eq!(config.worktree.link[1].to(), ".codex/skills");
+}
+
+#[test]
+fn worktree_rejects_removed_copy_as_field() {
+    let err = toml::from_str::<Config>(
+        r#"[worktree]
+copy_as = [{ from = "a", to = "b" }]
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("copy_as is no longer supported"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn worktree_rename_pathspec_rejects_unknown_fields() {
+    let err = toml::from_str::<Config>(
+        r#"[worktree]
+copy = [{ from = "a", to = "b", unknown = true }]
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("unknown field `unknown`"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -458,7 +524,10 @@ fn partial_config_fills_defaults() {
 copy = [".env"]
 "#;
     let config: Config = toml::from_str(toml_str).unwrap();
-    assert_eq!(config.worktree.copy, vec![".env"]);
+    assert_eq!(
+        pathspec_pairs(&config.worktree.copy),
+        vec![(".env", ".env")]
+    );
     assert!(config.worktree.link.is_empty());
     assert!(config.site.is_none());
     assert!(config.workspace.is_none());
@@ -562,7 +631,10 @@ copy = ["CLAUDE.local.md"]
     let site = config.site.as_ref().unwrap();
     assert_eq!(site.provider, SiteProvider::Traefik);
     assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}.l"));
-    assert_eq!(config.worktree.copy, vec![".env", "CLAUDE.local.md"]);
+    assert_eq!(
+        pathspec_pairs(&config.worktree.copy),
+        vec![(".env", ".env"), ("CLAUDE.local.md", "CLAUDE.local.md")]
+    );
     let workflow_policy = config.workflow_default_policy();
     assert_eq!(
         workflow_policy.pull_request,
@@ -754,6 +826,37 @@ fn workflow_policy_rejects_boolean_pull_request_values() {
     let err = toml::from_str::<Config>("[workflow]\npull_request = true\n").unwrap_err();
 
     assert!(err.to_string().contains("booleans are not aliases"));
+}
+
+#[test]
+fn profile_link_specs_dedupe_by_destination() {
+    let base: Config = toml::from_str(
+        r#"
+[worktree]
+link = [{ from = ".local/default-skills", to = ".codex/skills" }]
+"#,
+    )
+    .unwrap();
+    let profile: Config = toml::from_str(
+        r#"
+[worktree]
+link = [
+    { from = ".local/user-skills", to = ".codex/skills" },
+    { from = ".local/bin", to = ".codex/bin" },
+]
+"#,
+    )
+    .unwrap();
+
+    let merged = merge_config(&base, profile);
+
+    assert_eq!(
+        pathspec_pairs(&merged.worktree.link),
+        vec![
+            (".local/default-skills", ".codex/skills"),
+            (".local/bin", ".codex/bin")
+        ]
+    );
 }
 
 #[test]
@@ -1318,10 +1421,13 @@ fn load_profiles_discovers_profile_toml_files() {
     assert_eq!(profiles.len(), 2);
     assert_eq!(profiles[0].0, "baseline");
     assert_eq!(profiles[1].0, "tdd");
-    assert_eq!(profiles[0].1.worktree.copy, vec![".env".to_string()]);
     assert_eq!(
-        profiles[1].1.worktree.copy,
-        vec![".env".to_string(), "CLAUDE.local.md".to_string()]
+        pathspec_pairs(&profiles[0].1.worktree.copy),
+        vec![(".env", ".env")]
+    );
+    assert_eq!(
+        pathspec_pairs(&profiles[1].1.worktree.copy),
+        vec![(".env", ".env"), ("CLAUDE.local.md", "CLAUDE.local.md")]
     );
 }
 
@@ -1733,8 +1839,17 @@ args = ["--yolo"]
         .unwrap()
         .unwrap();
 
-    assert_eq!(profile.worktree.copy, vec![".env"]);
-    assert_eq!(profile.worktree.link, vec!["tmp/shared-cache"]);
+    assert!(
+        profile
+            .worktree
+            .copy
+            .iter()
+            .any(|entry| entry.from() == ".env" && entry.to() == ".env")
+    );
+    assert_eq!(
+        pathspec_pairs(&profile.worktree.link),
+        vec![("tmp/shared-cache", "tmp/shared-cache")]
+    );
     assert_eq!(
         profile.worktree.path.as_deref(),
         Some("worktrees/{{default_name}}")
@@ -1742,9 +1857,14 @@ args = ["--yolo"]
     let agent = profile.agent.unwrap();
     assert_eq!(agent.args, vec!["--yolo"]);
     assert_eq!(agent.prompt.get("issue").unwrap(), &vec!["handle issue\n"]);
-    assert!(profile.worktree.copy_as.iter().any(|entry| {
-        entry.from == profile_dir.join("scaffold").display().to_string() && entry.to == "."
-    }));
+    let scaffold = profile_dir.join("scaffold").display().to_string();
+    assert!(
+        profile
+            .worktree
+            .copy
+            .iter()
+            .any(|entry| entry.from() == scaffold.as_str() && entry.to() == ".")
+    );
 }
 
 #[test]
@@ -1773,8 +1893,14 @@ path = "profiles/{{default_name}}"
         profile.worktree.path.as_deref(),
         Some("profiles/{{default_name}}")
     );
-    assert_eq!(profile.worktree.copy, vec![".env"]);
-    assert_eq!(profile.worktree.link, vec!["tmp/shared-cache"]);
+    assert_eq!(
+        pathspec_pairs(&profile.worktree.copy),
+        vec![(".env", ".env")]
+    );
+    assert_eq!(
+        pathspec_pairs(&profile.worktree.link),
+        vec![("tmp/shared-cache", "tmp/shared-cache")]
+    );
 }
 
 #[test]
@@ -1801,9 +1927,14 @@ cli = "claude"
         .unwrap()
         .unwrap();
 
-    assert!(profile.worktree.copy_as.iter().any(|entry| {
-        entry.from == profile_dir.join("scaffold").display().to_string() && entry.to == "."
-    }));
+    let scaffold = profile_dir.join("scaffold").display().to_string();
+    assert!(
+        profile
+            .worktree
+            .copy
+            .iter()
+            .any(|entry| entry.from() == scaffold.as_str() && entry.to() == ".")
+    );
 }
 
 #[test]

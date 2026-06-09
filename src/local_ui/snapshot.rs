@@ -1,7 +1,7 @@
 use crate::config::{
-    AgentCli, AgentConfig, Config, ConfigSource, EditorPlacement, IssueProviderType, ReadyMode,
-    ReviewCodexBasePolicy, SetupConfig, SiteProvider, SubmitMode, WorkflowDefaultLandingPolicy,
-    WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
+    AgentCli, AgentConfig, Config, ConfigSource, EditorPlacement, IssueProviderType, PathSpec,
+    ReadyMode, ReviewCodexBasePolicy, SetupConfig, SiteProvider, SubmitMode,
+    WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
 };
 use crate::config_render::render_effective_config;
 use crate::context::{
@@ -160,16 +160,9 @@ struct IssuesSummary {
 struct WorktreeSummary {
     path: Option<String>,
     copy: Vec<String>,
-    copy_as: Vec<CopyAsSummary>,
     link: Vec<String>,
     inject_local_context: bool,
     naming: Option<WorktreeNamingSummary>,
-}
-
-#[derive(Debug, Serialize)]
-struct CopyAsSummary {
-    from: String,
-    to: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -449,7 +442,6 @@ struct ProfileSummary {
     name: String,
     path: String,
     copy: Vec<String>,
-    copy_as: Vec<CopyAsSummary>,
     link: Vec<String>,
     agent: String,
     has_site: bool,
@@ -1043,18 +1035,8 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
             ProfileSummary {
                 name: profile.name,
                 path: relative_path(ctx, &profile.path),
-                copy: profile.config.worktree.copy.clone(),
-                copy_as: profile
-                    .config
-                    .worktree
-                    .copy_as
-                    .iter()
-                    .map(|entry| CopyAsSummary {
-                        from: entry.from.clone(),
-                        to: entry.to.clone(),
-                    })
-                    .collect(),
-                link: profile.config.worktree.link.clone(),
+                copy: pathspec_summary_values(&profile.config.worktree.copy),
+                link: pathspec_summary_values(&profile.config.worktree.link),
                 agent,
                 has_site,
                 worktree,
@@ -1434,22 +1416,24 @@ fn agent_summary(agent: Option<&AgentConfig>) -> Option<AgentSummary> {
     })
 }
 
+fn pathspec_summary_values(specs: &[PathSpec]) -> Vec<String> {
+    specs
+        .iter()
+        .map(|spec| match spec {
+            PathSpec::Same(value) => value.clone(),
+            PathSpec::Rename { from, to } => format!("{from} -> {to}"),
+        })
+        .collect()
+}
+
 fn worktree_summary(worktree: &WorktreeConfig) -> Option<WorktreeSummary> {
     if *worktree == WorktreeConfig::default() {
         return None;
     }
     Some(WorktreeSummary {
         path: worktree.path.clone(),
-        copy: worktree.copy.clone(),
-        copy_as: worktree
-            .copy_as
-            .iter()
-            .map(|entry| CopyAsSummary {
-                from: entry.from.clone(),
-                to: entry.to.clone(),
-            })
-            .collect(),
-        link: worktree.link.clone(),
+        copy: pathspec_summary_values(&worktree.copy),
+        link: pathspec_summary_values(&worktree.link),
         inject_local_context: worktree.inject_local_context.is_some(),
         naming: worktree
             .naming
@@ -1824,7 +1808,7 @@ mod tests {
         write_profile(
             dir.path(),
             "codex",
-            "[worktree]\ncopy = [\".env\", \".linear.toml\"]\ncopy_as = [{ from = \".local/profiles/codex/scaffold\", to = \".\" }]\nlink = [\".local\"]\n\n[agent]\ncli = \"codex\"\n",
+            "[worktree]\ncopy = [\".env\", \".linear.toml\", { from = \".local/profiles/codex/scaffold\", to = \".\" }]\nlink = [\".local\", { from = \".local/skills\", to = \".codex/skills\" }]\n\n[agent]\ncli = \"codex\"\n",
         );
         write_profile(dir.path(), "bad name", "[agent]\ncli = \"codex\"\n");
         write_retrospec(
@@ -1847,7 +1831,13 @@ mod tests {
 
         let mut config = Config::default();
         config.worktree.copy = vec!["AGENTS.override.md".into()];
-        config.worktree.link = vec![".local".into()];
+        config.worktree.link = vec![
+            ".local".into(),
+            PathSpec::Rename {
+                from: ".local/skills".into(),
+                to: ".codex/skills".into(),
+            },
+        ];
         config.worktree.inject_local_context = Some("## Local context\n".into());
         config.worktree.naming = Some(WorktreeNamingConfig {
             command: "claude -p".into(),
@@ -1944,7 +1934,13 @@ mod tests {
         assert_eq!(issues.gh_user.as_deref(), Some("alice"));
         let worktree = snapshot.config.worktree.as_ref().unwrap();
         assert_eq!(worktree.copy, vec!["AGENTS.override.md".to_string()]);
-        assert_eq!(worktree.link, vec![".local".to_string()]);
+        assert_eq!(
+            worktree.link,
+            vec![
+                ".local".to_string(),
+                ".local/skills -> .codex/skills".to_string()
+            ]
+        );
         assert!(worktree.inject_local_context);
         let naming = worktree.naming.as_ref().unwrap();
         assert_eq!(naming.command, "claude -p");
@@ -1980,11 +1976,19 @@ mod tests {
         let profile = snapshot.profiles.items.first().unwrap();
         assert_eq!(
             profile.copy,
-            vec![".env".to_string(), ".linear.toml".to_string()]
+            vec![
+                ".env".to_string(),
+                ".linear.toml".to_string(),
+                ".local/profiles/codex/scaffold -> .".to_string()
+            ]
         );
-        assert_eq!(profile.copy_as[0].from, ".local/profiles/codex/scaffold");
-        assert_eq!(profile.copy_as[0].to, ".");
-        assert_eq!(profile.link, vec![".local".to_string()]);
+        assert_eq!(
+            profile.link,
+            vec![
+                ".local".to_string(),
+                ".local/skills -> .codex/skills".to_string()
+            ]
+        );
         assert_eq!(
             snapshot.sources.config_paths,
             vec![".wt.toml", "<repo-root>/.wt/config/local.toml"]

@@ -1,8 +1,9 @@
 use crate::config::{
     AgentCli, AgentConfig, ColumnConfig, Config, EditorConfig, EditorPlacement, IssueProviderType,
-    IssuesConfig, ReadyMode, ReviewCodexBasePolicy, ReviewDefaultPolicy, SetupConfig, SiteConfig,
-    SiteProvider, SubmitMode, TaskListConfig, WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy,
-    WorkflowDefaultPullRequestMode, WorkspaceBrowserMode, WorkspaceConfig, WorktreeConfig,
+    IssuesConfig, PathSpec, ReadyMode, ReviewCodexBasePolicy, ReviewDefaultPolicy, SetupConfig,
+    SiteConfig, SiteProvider, SubmitMode, TaskListConfig, WorkflowDefaultLandingPolicy,
+    WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode, WorkspaceBrowserMode, WorkspaceConfig,
+    WorktreeConfig,
 };
 
 pub fn render_effective_config(config: &Config) -> String {
@@ -48,21 +49,16 @@ fn append_worktree_section(s: &mut String, worktree: &WorktreeConfig) {
         s.push_str(&format!("path = {}\n", toml_quote(path)));
     }
     if !worktree.copy.is_empty() {
-        s.push_str(&format!("copy = {}\n", toml_array(&worktree.copy)));
-    }
-    if !worktree.copy_as.is_empty() {
-        s.push_str("copy_as = [\n");
-        for entry in &worktree.copy_as {
-            s.push_str(&format!(
-                "    {{ from = {}, to = {} }},\n",
-                toml_quote(&entry.from),
-                toml_quote(&entry.to)
-            ));
-        }
-        s.push_str("]\n");
+        s.push_str(&format!(
+            "copy = {}\n",
+            render_pathspec_array(&worktree.copy)
+        ));
     }
     if !worktree.link.is_empty() {
-        s.push_str(&format!("link = {}\n", toml_array(&worktree.link)));
+        s.push_str(&format!(
+            "link = {}\n",
+            render_pathspec_array(&worktree.link)
+        ));
     }
     if let Some(context) = worktree.inject_local_context.as_deref() {
         s.push_str(&format!("inject_local_context = {}\n", toml_quote(context)));
@@ -401,6 +397,22 @@ fn toml_array(values: &[String]) -> String {
     )
 }
 
+fn render_pathspec_array(specs: &[PathSpec]) -> String {
+    format!(
+        "[{}]",
+        specs
+            .iter()
+            .map(|spec| match spec {
+                PathSpec::Same(value) => toml_quote(value),
+                PathSpec::Rename { from, to } => {
+                    format!("{{ from = {}, to = {} }}", toml_quote(from), toml_quote(to))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 fn toml_inline_string_entries(values: &[(&str, &str)]) -> String {
     let rendered = values
         .iter()
@@ -444,7 +456,7 @@ mod tests {
     use super::render_effective_config;
     use crate::config::{
         ColumnConfig, Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
-        OriginPolicy, ReviewCodexBasePolicy, ReviewConfig, SiteConfig, SiteProvider,
+        OriginPolicy, PathSpec, ReviewCodexBasePolicy, ReviewConfig, SiteConfig, SiteProvider,
         TaskListColumns, TaskListConfig, WorkflowConfig, WorkflowDefaultPullRequestMode,
         WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
         WorkspaceConfig,
@@ -478,6 +490,36 @@ mod tests {
 
         assert!(rendered.contains("[review]\n"));
         assert!(rendered.contains("codex_base = \"required\"\n"));
+    }
+
+    #[test]
+    fn worktree_pathspec_arrays_round_trip() {
+        let mut config = Config::default();
+        config.worktree.copy = vec![
+            PathSpec::Same(".env".into()),
+            PathSpec::Rename {
+                from: ".local/skills".into(),
+                to: ".codex/skills".into(),
+            },
+        ];
+        config.worktree.link = vec![PathSpec::Rename {
+            from: ".local/bin/tool".into(),
+            to: "bin/tool".into(),
+        }];
+
+        let rendered = render_effective_config(&config);
+
+        assert!(
+            rendered
+                .contains(r#"copy = [".env", { from = ".local/skills", to = ".codex/skills" }]"#)
+        );
+        assert!(rendered.contains(r#"link = [{ from = ".local/bin/tool", to = "bin/tool" }]"#));
+
+        let parsed: Config = toml::from_str(&rendered).unwrap();
+        assert_eq!(parsed.worktree.copy[1].from(), ".local/skills");
+        assert_eq!(parsed.worktree.copy[1].to(), ".codex/skills");
+        assert_eq!(parsed.worktree.link[0].from(), ".local/bin/tool");
+        assert_eq!(parsed.worktree.link[0].to(), "bin/tool");
     }
 
     #[test]

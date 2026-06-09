@@ -5,26 +5,11 @@ use std::fs;
 use std::path::Path;
 
 pub(super) fn copy_files(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
-    for file in &config.worktree.copy {
-        let src = source_path(ctx, file);
+    for entry in &config.worktree.copy {
+        let src = source_path(ctx, entry.from());
         if src.exists() {
             let real_src = fs::canonicalize(&src).unwrap_or(src.clone());
-            let dest = wt_path.join(file);
-            if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            if real_src.is_dir() {
-                copy_dir_recursive(&real_src, &dest)?;
-            } else {
-                fs::copy(&real_src, &dest)?;
-            }
-        }
-    }
-    for entry in &config.worktree.copy_as {
-        let src = source_path(ctx, &entry.from);
-        if src.exists() {
-            let real_src = fs::canonicalize(&src).unwrap_or(src.clone());
-            let dest = wt_path.join(&entry.to);
+            let dest = wt_path.join(entry.to());
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -39,11 +24,11 @@ pub(super) fn copy_files(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<(
 }
 
 pub(super) fn link_files(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
-    for file in &config.worktree.link {
-        let src = source_path(ctx, file);
+    for entry in &config.worktree.link {
+        let src = source_path(ctx, entry.from());
         if src.exists() {
             let real_src = fs::canonicalize(&src).unwrap_or(src);
-            let dest = wt_path.join(file);
+            let dest = wt_path.join(entry.to());
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent)?;
             }

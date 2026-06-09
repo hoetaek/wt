@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::schema::{PROMPT_COMMON_SCOPE, PROMPT_RUNTIME_MODES, prompt_append_mode};
 use super::{
-    AgentConfig, ColumnConfig, Config, CopyAsEntry, EditorConfig, ReviewConfig, SetupConfig,
+    AgentConfig, ColumnConfig, Config, EditorConfig, PathSpec, ReviewConfig, SetupConfig,
     TaskListConfig, WorkflowConfig, WorkspaceConfig, WorktreeConfig,
 };
 
@@ -178,9 +178,8 @@ fn merge_worktree_config(base: &mut WorktreeConfig, profile: WorktreeConfig) {
     if profile.path.is_some() {
         base.path = profile.path;
     }
-    extend_unique(&mut base.copy, profile.copy);
-    extend_copy_as_unique(&mut base.copy_as, profile.copy_as);
-    extend_unique(&mut base.link, profile.link);
+    extend_pathspec_unique(&mut base.copy, profile.copy);
+    extend_link_pathspec_unique(&mut base.link, profile.link);
     if profile.inject_local_context.is_some() {
         base.inject_local_context = profile.inject_local_context;
     }
@@ -261,12 +260,20 @@ fn extend_unique(target: &mut Vec<String>, additions: Vec<String>) {
     }
 }
 
-fn extend_copy_as_unique(target: &mut Vec<CopyAsEntry>, additions: Vec<CopyAsEntry>) {
+fn extend_pathspec_unique(target: &mut Vec<PathSpec>, additions: Vec<PathSpec>) {
     for value in additions {
         if !target
             .iter()
-            .any(|entry| entry.from == value.from && entry.to == value.to)
+            .any(|entry| entry.from() == value.from() && entry.to() == value.to())
         {
+            target.push(value);
+        }
+    }
+}
+
+fn extend_link_pathspec_unique(target: &mut Vec<PathSpec>, additions: Vec<PathSpec>) {
+    for value in additions {
+        if !target.iter().any(|entry| entry.to() == value.to()) {
             target.push(value);
         }
     }
