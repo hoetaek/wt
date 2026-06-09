@@ -452,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_files_copies_copy_as_directory_to_worktree_root() {
+    fn copy_files_copies_renamed_directory_to_worktree_root() {
         use crate::config::PathSpec;
         use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};

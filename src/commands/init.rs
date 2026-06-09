@@ -1620,16 +1620,17 @@ fn resolve_worktree_copy(
     current: &[PathSpec],
     detected: &DetectedRepo,
 ) -> Result<Vec<PathSpec>> {
-    let mut renamed = renamed_pathspecs(current);
-    let current_same = same_pathspecs(current);
-    if !detected.has_env_file && current_same.is_empty() {
-        return Ok(renamed);
-    }
-
-    let mut recommended = current_same;
-    if detected.has_env_file && !recommended.iter().any(|path| path == ".env") {
+    let mut recommended = same_pathspecs(current);
+    if detected.has_env_file
+        && !has_pathspec_destination(current, ".env")
+        && !recommended.iter().any(|path| path == ".env")
+    {
         recommended.push(".env".into());
     }
+    if recommended.is_empty() {
+        return Ok(current.to_vec());
+    }
+
     let default = recommended.join(", ");
     let input = ctx.ui.input(
         "각 worktree로 복사할 파일",
@@ -1639,12 +1640,7 @@ fn resolve_worktree_copy(
             default.as_str()
         }),
     )?;
-    let mut resolved = split_list(&input)
-        .into_iter()
-        .map(PathSpec::Same)
-        .collect::<Vec<_>>();
-    resolved.append(&mut renamed);
-    Ok(resolved)
+    Ok(pathspecs_with_resolved_same(current, split_list(&input)))
 }
 
 fn resolve_worktree_link(
@@ -1652,18 +1648,16 @@ fn resolve_worktree_link(
     current: &[PathSpec],
     detected: &DetectedRepo,
 ) -> Result<Vec<PathSpec>> {
-    let mut renamed = renamed_pathspecs(current);
-    let current_same = same_pathspecs(current);
-    if detected.local_links.is_empty() && current_same.is_empty() {
-        return Ok(renamed);
-    }
-
-    let mut recommended = current_same;
+    let mut recommended = same_pathspecs(current);
     for link in &detected.local_links {
-        if !recommended.contains(link) {
+        if !has_pathspec_destination(current, link) && !recommended.contains(link) {
             recommended.push(link.clone());
         }
     }
+    if recommended.is_empty() {
+        return Ok(current.to_vec());
+    }
+
     let default = recommended.join(", ");
     let input = ctx.ui.input(
         "각 worktree에 링크할 로컬 파일",
@@ -1673,12 +1667,7 @@ fn resolve_worktree_link(
             default.as_str()
         }),
     )?;
-    let mut resolved = split_list(&input)
-        .into_iter()
-        .map(PathSpec::Same)
-        .collect::<Vec<_>>();
-    resolved.append(&mut renamed);
-    Ok(resolved)
+    Ok(pathspecs_with_resolved_same(current, split_list(&input)))
 }
 
 fn same_pathspecs(specs: &[PathSpec]) -> Vec<String> {
@@ -1691,14 +1680,25 @@ fn same_pathspecs(specs: &[PathSpec]) -> Vec<String> {
         .collect()
 }
 
-fn renamed_pathspecs(specs: &[PathSpec]) -> Vec<PathSpec> {
-    specs
-        .iter()
-        .filter_map(|spec| match spec {
-            PathSpec::Same(_) => None,
-            PathSpec::Rename { .. } => Some(spec.clone()),
-        })
-        .collect()
+fn has_pathspec_destination(specs: &[PathSpec], destination: &str) -> bool {
+    specs.iter().any(|spec| spec.to() == destination)
+}
+
+fn pathspecs_with_resolved_same(current: &[PathSpec], resolved_same: Vec<String>) -> Vec<PathSpec> {
+    let mut same_values = resolved_same.into_iter();
+    let mut merged = Vec::new();
+    for spec in current {
+        match spec {
+            PathSpec::Same(_) => {
+                if let Some(value) = same_values.next() {
+                    merged.push(PathSpec::Same(value));
+                }
+            }
+            PathSpec::Rename { .. } => merged.push(spec.clone()),
+        }
+    }
+    merged.extend(same_values.map(PathSpec::Same));
+    merged
 }
 
 fn resolve_workspace_tabs(
@@ -2865,6 +2865,55 @@ mod tests {
             Box::new(runner),
             Box::new(MockUi::new()),
         )
+    }
+
+    #[test]
+    fn init_pathspec_same_resolution_preserves_rename_order() {
+        let current = vec![
+            PathSpec::Rename {
+                from: ".wt/config/profiles/codex/scaffold".into(),
+                to: ".".into(),
+            },
+            PathSpec::Same(".env".into()),
+            PathSpec::Rename {
+                from: ".local/skills".into(),
+                to: ".codex/skills".into(),
+            },
+        ];
+
+        let resolved =
+            pathspecs_with_resolved_same(&current, vec![".env".into(), ".env.local".into()]);
+
+        assert_eq!(
+            pathspec_pairs(&resolved),
+            vec![
+                (".wt/config/profiles/codex/scaffold", "."),
+                (".env", ".env"),
+                (".local/skills", ".codex/skills"),
+                (".env.local", ".env.local")
+            ]
+        );
+    }
+
+    #[test]
+    fn init_link_detection_skips_existing_renamed_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+        let current = vec![PathSpec::Rename {
+            from: ".local/default-skills".into(),
+            to: ".local".into(),
+        }];
+        let detected = DetectedRepo {
+            local_links: vec![".local".into()],
+            ..DetectedRepo::default()
+        };
+
+        let resolved = resolve_worktree_link(&ctx, &current, &detected).unwrap();
+
+        assert_eq!(
+            pathspec_pairs(&resolved),
+            vec![(".local/default-skills", ".local")]
+        );
     }
 
     #[test]
