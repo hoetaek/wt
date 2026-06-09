@@ -108,11 +108,27 @@ Default recommendation rules:
   `copy` and `link` both accept string entries for same-name materialization and
   `{ from, to }` entries for rename materialization. Use
   `copy = [{ from = "...", to = "..." }]` for renamed copies and
-  `link = [{ from = "...", to = "..." }]` for renamed symlinks.
+  `link = [{ from = "...", to = "..." }]` for renamed symlinks. Add
+  `[worktree.naming]` (command, prompt, optional branch/workspace) only when the
+  repo needs a custom branch/workspace naming command instead of the built-in
+  default; it renders as its own sub-section in `wt config show`.
 - Add `[workflow]` only when future workflow PR/landing policy should differ
-  from built-in defaults.
+  from built-in defaults. `wt config show` always materializes `[workflow]`
+  (pull_request, landing) even at defaults, so its presence in the effective
+  output is not evidence the user configured it.
+- Add `[review]` only when the codex_base policy should differ from the built-in
+  default (`none`). Like `[workflow]`, `wt config show` always materializes
+  `[review].codex_base`, so a `none` value there is the default, not intent.
+- Add `[task_list.columns.<name>]` (`run`, `next`, `dur`, `task`, `branch`,
+  `source`, `origin_status`, `size`, each with `hidden`/`width`) only when the
+  user wants to hide or resize a task-browser column from its built-in layout.
 - Keep simple agent defaults inline under `[profile.agent]`; use named profiles
-  only when prompt/scaffold/profile reuse is worth the structure.
+  only when prompt/scaffold/profile reuse is worth the structure. Note the
+  surface flip: you author agent settings under `[profile.agent]` (or a named
+  profile's `[agent]`), but `wt config show` merges the profile and renders the
+  result as a top-level `[agent]` block (cli, args, command, ready, submit,
+  timeout, send_after, plus `[agent.prompt]`). When diagnosing the effective
+  output, look for `[agent]`, not `[profile.agent]`.
 - Do not add active `[workspace].colors` when it only restates built-in
   defaults.
 - Do not add cargo-audit, cargo-deny, browsers, or provider helpers to active
@@ -204,9 +220,17 @@ Cover these when relevant:
 - `[workspace.browser.chrome_devtools]`
 - `[editor]`
 - `[worktree]`
+- `[worktree.naming]`
 - `[workflow]`
-- `[profile.agent]`
+- `[review]`
+- `[task_list.columns.*]`
+- `[profile.agent]` (renders as effective `[agent]`)
 - named profiles
+
+`[workflow]` and `[review]` always appear in `wt config show` even at their
+built-in defaults, so frame them as "default materialized" unless the owner file
+actually sets a non-default value. `[task_list.columns.*]` and `[worktree.naming]`
+only appear when the user overrode a built-in.
 
 The omission rationale should be practical, for example: "CLI repo, no dev
 server", "tool missing locally", "built-in default already covers this", or
@@ -276,6 +300,11 @@ explicitly:
   or a suitable `link = [{ from = "...", to = ".env" }]`, move
   nested keys under `[setup.env_files."path"]`, or remove the env template if
   no target file should exist.
+- **Materialized default mistaken for intent.** `[workflow]`, `[review]`, and
+  active `[site]`/`[workspace.browser]`/`[agent]` sections render their built-in
+  defaults in `wt config show` even when no file sets them. Before claiming a
+  value is "configured," confirm an owner file actually declares it; otherwise
+  report it as the default that wt materializes.
 - **Effective ≠ files in another way.** Any setting the user clearly intended
   (a prompt, a tab, a command) is absent from `wt config show`. Trace which file
   owns it and why the merge dropped it (wrong section, wrong owner file,
