@@ -228,6 +228,7 @@ struct BrowserCopy {
     origin_count_label: &'static str,
     inventory_title: &'static str,
     empty_inventory_message: &'static str,
+    filter_miss_message: &'static str,
     no_selection_message: &'static str,
     no_selection_status: &'static str,
     default_status_line: &'static str,
@@ -240,6 +241,7 @@ impl BrowserCopy {
         origin_count_label: "actionable tasks",
         inventory_title: "Tasks",
         empty_inventory_message: "No actionable tasks",
+        filter_miss_message: "no matching tasks",
         no_selection_message: "No task selected",
         no_selection_status: "no task selected",
         default_status_line: "j/k move  / filter  h/l view  v body  a archive  Enter actions  q quit",
@@ -251,6 +253,7 @@ impl BrowserCopy {
         origin_count_label: "saved workflows",
         inventory_title: "Workflows",
         empty_inventory_message: "No saved workflows",
+        filter_miss_message: "no matching workflows",
         no_selection_message: "No workflow selected",
         no_selection_status: "no workflow selected",
         default_status_line: "j/k move  / filter  v body  Enter actions  q quit",
@@ -512,6 +515,23 @@ impl AppState {
 
     pub(crate) fn empty_inventory_message(&self) -> &str {
         self.copy.empty_inventory_message
+    }
+
+    pub(crate) fn empty_state_message(&self) -> Option<String> {
+        if !self.visible_rows().is_empty() {
+            return None;
+        }
+        if self.rows.is_empty() {
+            Some(self.empty_inventory_message().to_string())
+        } else if !self.filter.is_empty() {
+            Some(self.copy.filter_miss_message.to_string())
+        } else if self.copy.source_view_enabled && self.source_view == SourceView::LocalOnly {
+            Some("no local-only tasks".into())
+        } else if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
+            Some("no origin-linked tasks".into())
+        } else {
+            Some(self.empty_inventory_message().to_string())
+        }
     }
 
     pub(crate) fn no_selection_message(&self) -> &str {
@@ -1282,6 +1302,89 @@ mod tests {
         ]);
         app.set_source_view_for_test(SourceView::OriginOnly);
         assert_eq!(app.visible_keys(), vec!["b"]);
+    }
+
+    #[test]
+    fn empty_local_only_view_reports_view_specific_message() {
+        let mut app = AppState::new(vec![source_row("a", "provider-origin")]);
+        app.set_source_view_for_test(SourceView::LocalOnly);
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no local-only tasks")
+        );
+    }
+
+    #[test]
+    fn empty_origin_only_view_reports_view_specific_message() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no origin-linked tasks")
+        );
+    }
+
+    #[test]
+    fn empty_state_message_falls_back_to_inventory_when_no_rows() {
+        let app = AppState::new(vec![]);
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("No actionable tasks")
+        );
+    }
+
+    #[test]
+    fn empty_state_message_is_none_when_rows_are_visible() {
+        let app = AppState::new(vec![source_row("a", "local")]);
+        assert!(app.empty_state_message().is_none());
+    }
+
+    #[test]
+    fn empty_state_message_reports_filter_miss_in_all_view() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('/'));
+        for ch in "zzz".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no matching tasks")
+        );
+    }
+
+    #[test]
+    fn empty_state_message_reports_filter_miss_before_source_view_empty() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.set_source_view_for_test(SourceView::LocalOnly);
+        app.handle(KeyInput::Char('/'));
+        for ch in "zzz".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no matching tasks")
+        );
+    }
+
+    #[test]
+    fn workflow_empty_state_message_reports_workflow_filter_miss() {
+        let mut app =
+            AppState::workflow_with_diagnostics(vec![source_row("wf", "local")], Vec::new());
+        app.handle(KeyInput::Char('/'));
+        for ch in "zzz".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no matching workflows")
+        );
     }
 
     #[test]

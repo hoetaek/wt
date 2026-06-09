@@ -1614,6 +1614,14 @@ Workflow, origin snapshot 같은 디스크 상태만 읽는다. 액션 메뉴는
 모델이 단일 소스이며, 단축키는 액셀러레이터일 뿐이다. 모든 액션은 Enter 메뉴에서
 발견 가능해야 한다.
 
+Task list 브라우저의 source view는 출처 축을 보는 TUI 전용 presentation filter다.
+`SourceView { All, LocalOnly, OriginOnly }`는 상태줄에 `[view: all]`,
+`[view: local-only]`, `[view: origin-only]`로 표시되고, task browser에서만 `h`/`l`로
+wrap rotate된다. Workflow 브라우저에는 source view를 노출하지 않는다. Source view는
+`source = "local" | "provider-origin"` predicate이며 run-status 숨김 축(`wt task list
+--all`)과 독립적으로 AND 합성된다. 이 개념의 canonical 이름은 source view다. Source view는 `.wt/` storage owner인 bucket, config/message ownership을 뜻하는 scope와 다른 개념이므로
+그 단어들을 재사용하지 않는다.
+
 액션 실행은 브라우저 안의 dispatch 계약을 따른다. Browser action menu의 모든 origin
 변경 액션(diff, fetch, pull, push, publish, attach)과 task browser archive action은
 브라우저 화면을 떠나지 않고 worker 실행으로 수행된다. 백엔드 command와 같은 함수,
