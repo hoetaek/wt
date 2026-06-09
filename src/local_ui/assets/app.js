@@ -85,7 +85,6 @@ const STRINGS = {
     namingWorkspaceLabel: "workspace",
     namingPromptLabel: "prompt",
     copyAsLabel: "copy_as",
-    linkAsLabel: "link_as",
     localContextLabel: "inject_local_context",
     setupLabel: "Setup",
     depsLabel: "deps",
@@ -163,7 +162,6 @@ const STRINGS = {
     worktreeCopyHelp: "Files copied into the new worktree.",
     worktreeCopyAsHelp: "Files copied to a different destination in the new worktree.",
     worktreeLinkHelp: "Paths linked instead of copied.",
-    worktreeLinkAsHelp: "Paths linked to a different destination in the new worktree.",
     localContextHelp: "Injects rendered site/worktree/parent context into the agent context file.",
     namingHelp: "How wt asks for stable branch/workspace names.",
     namingCommandHelp: "Command used to generate naming variables.",
@@ -392,7 +390,6 @@ const STRINGS = {
     namingWorkspaceLabel: "workspace",
     namingPromptLabel: "prompt",
     copyAsLabel: "copy_as",
-    linkAsLabel: "link_as",
     localContextLabel: "inject_local_context",
     setupLabel: "setup",
     depsLabel: "deps",
@@ -470,7 +467,6 @@ const STRINGS = {
     worktreeCopyHelp: "새 worktree에 복사할 파일입니다.",
     worktreeCopyAsHelp: "새 worktree에서 다른 위치나 이름으로 복사할 파일입니다.",
     worktreeLinkHelp: "복사하지 않고 링크로 연결할 경로입니다.",
-    worktreeLinkAsHelp: "새 worktree에서 다른 위치나 이름으로 링크할 경로입니다.",
     localContextHelp: "site, worktree, parent 정보를 렌더링해 agent 컨텍스트 파일에 주입합니다.",
     namingHelp: "wt가 안정적인 branch/workspace 이름을 만드는 방식입니다.",
     namingCommandHelp: "이름 변수를 생성할 때 실행하는 명령입니다.",
@@ -1220,7 +1216,6 @@ function profileCard(row) {
     valuesPill(t("copyLabel"), profileCopyValues(row)),
     valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
     valuesPill(t("linkLabel"), profileLinkValues(row)),
-    valuesPill(t("linkAsLabel"), profileLinkAsValues(row)),
     row.has_site ? pill(t("profileSiteLabel"), "green") : "",
   ], [row.path], bodyPreview(row.source_text), "violet", [
     detail(t("sourceToml"), row.source_text, "source"),
@@ -1344,13 +1339,6 @@ function configEffectiveCards(config, options = {}) {
         label: t("linkLabel"),
         value: joinValues(worktree.link),
         description: t("worktreeLinkHelp"),
-      });
-    }
-    if (worktree.link_as?.length) {
-      worktreeItems.push({
-        label: t("linkAsLabel"),
-        value: joinValues(worktree.link_as.map(copyAsValue)),
-        description: t("worktreeLinkAsHelp"),
       });
     }
     if (worktree.inject_local_context) {
@@ -1627,10 +1615,6 @@ function profileLinkValues(row) {
   return row.link || [];
 }
 
-function profileLinkAsValues(row) {
-  return (row.link_as || []).map(copyAsValue);
-}
-
 function valuesPill(label, values, tone = "") {
   const value = shortValues(values);
   return value ? pill(`${label} ${value}`, tone) : "";
@@ -1748,7 +1732,6 @@ function profileMasterDetailRecord(row, selected) {
       valuesPill(t("copyLabel"), profileCopyValues(row)),
       valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
-      valuesPill(t("linkAsLabel"), profileLinkAsValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
     ],
     summary: selected ? t("selectedProfileSummary") : t("availableProfileSummary"),
@@ -1759,7 +1742,6 @@ function profileMasterDetailRecord(row, selected) {
       valuesPill(t("copyLabel"), profileCopyValues(row)),
       valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
-      valuesPill(t("linkAsLabel"), profileLinkAsValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
     ],
     paths: [],
@@ -2987,7 +2969,6 @@ function profileScanRow(row) {
       valuesPill(t("copyLabel"), profileCopyValues(row)),
       valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
       valuesPill(t("linkLabel"), profileLinkValues(row)),
-      valuesPill(t("linkAsLabel"), profileLinkAsValues(row)),
       row.has_site ? pill(t("profileSiteLabel"), "green") : "",
     ],
     paths: [row.path],
