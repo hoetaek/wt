@@ -91,7 +91,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
 
 fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let mut lines = Vec::new();
-    let tabs = source_view_tab_line(app);
+    let tabs = source_view_tab_line(app, area.width);
     if let Some(tabs) = tabs {
         lines.push(tabs);
     }
@@ -119,10 +119,28 @@ fn header_height(app: &AppState, area: Rect) -> u16 {
     (inner_lines + 2).min(area.height.saturating_sub(1).max(1))
 }
 
-fn source_view_tab_line(app: &AppState) -> Option<Line<'static>> {
+fn source_view_tab_line(app: &AppState, area_width: u16) -> Option<Line<'static>> {
     let tabs = app.source_view_tabs();
     if tabs.is_empty() {
         return None;
+    }
+
+    let full_text = tabs
+        .iter()
+        .map(|(label, count, active)| source_view_tab_text(label, *count, *active))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let inner_width = area_width.saturating_sub(2) as usize;
+    if measure_text_width(&full_text) > inner_width {
+        let (label, count, _) = tabs
+            .iter()
+            .find(|(_, _, active)| *active)
+            .copied()
+            .expect("source view tabs should include active view");
+        return Some(Line::from(format!(
+            "view: {}",
+            source_view_tab_text(label, count, true)
+        )));
     }
 
     let mut spans = Vec::new();
@@ -130,17 +148,21 @@ fn source_view_tab_line(app: &AppState) -> Option<Line<'static>> {
         if index > 0 {
             spans.push(Span::styled(" | ", theme::dim_style()));
         }
-        let label = if active {
-            format!("[{label}]")
-        } else {
-            label.to_string()
-        };
-        let count = count
-            .map(|count| count.to_string())
-            .unwrap_or_else(|| "-".into());
-        spans.push(Span::raw(format!("{label} ({count})")));
+        spans.push(Span::raw(source_view_tab_text(label, count, active)));
     }
     Some(Line::from(spans))
+}
+
+fn source_view_tab_text(label: &str, count: Option<usize>, active: bool) -> String {
+    let label = if active {
+        format!("[{label}]")
+    } else {
+        label.to_string()
+    };
+    let count = count
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| "-".into());
+    format!("{label} ({count})")
 }
 
 fn search_line(app: &AppState) -> Option<Line<'static>> {
@@ -480,7 +502,7 @@ fn detail_sidebar_lines(app: &AppState, content_width: usize) -> Vec<Line<'stati
             .map(|line| Line::from(line.clone())),
     );
 
-    let body_lines = app.body_lines();
+    let body_lines = app.wrapped_body_lines(content_width);
     if !body_lines.is_empty() {
         if !lines.is_empty() {
             lines.push(Line::from(""));
@@ -488,7 +510,7 @@ fn detail_sidebar_lines(app: &AppState, content_width: usize) -> Vec<Line<'stati
         lines.extend(
             body_lines
                 .iter()
-                .flat_map(|(kind, text)| body_visual_lines(kind, text, content_width)),
+                .map(|(kind, text)| body_wrapped_visual_line(kind, text)),
         );
     } else if !lines.is_empty() {
         lines.push(Line::from(""));
@@ -520,10 +542,10 @@ fn draw_output_panel(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 fn draw_body_view(frame: &mut Frame<'_>, area: Rect, app: &mut AppState) {
     let visible_count = area.height.saturating_sub(2) as usize;
     let content_width = area.width.saturating_sub(2).max(1) as usize;
-    let body_lines = app.body_lines();
+    let body_lines = app.wrapped_body_lines(content_width);
     let mut visual_lines = body_lines
         .iter()
-        .flat_map(|(kind, text)| body_visual_lines(kind, text, content_width))
+        .map(|(kind, text)| body_wrapped_visual_line(kind, text))
         .collect::<Vec<_>>();
     if visual_lines.is_empty() {
         visual_lines.push(Line::styled("no body", theme::dim_style()));
@@ -567,52 +589,16 @@ fn body_scroll_percent(line_count: usize, visible_count: usize, start: usize) ->
     visible_end.saturating_mul(100) / line_count
 }
 
-fn body_visual_lines(kind: &LineKind, text: &str, width: usize) -> Vec<Line<'static>> {
-    let (text, style) = body_text_and_style(kind, text);
-    wrap_body_text(&text, width)
-        .into_iter()
-        .map(|line| Line::styled(line, style))
-        .collect()
+fn body_wrapped_visual_line(kind: &LineKind, text: &str) -> Line<'static> {
+    Line::styled(text.to_string(), body_line_style(kind))
 }
 
-fn body_text_and_style(kind: &LineKind, text: &str) -> (String, Style) {
+fn body_line_style(kind: &LineKind) -> Style {
     match kind {
-        LineKind::Heading => (text.to_string(), body_heading_style()),
-        LineKind::Code => (text.to_string(), theme::dim_style()),
-        LineKind::Checkbox(checked) => {
-            let marker = if *checked { "☑ " } else { "☐ " };
-            (format!("{marker}{text}"), Style::default())
-        }
-        LineKind::Plain => (text.to_string(), Style::default()),
+        LineKind::Heading => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        LineKind::Code => theme::dim_style(),
+        LineKind::Checkbox(_) | LineKind::Plain => Style::default(),
     }
-}
-
-fn body_heading_style() -> Style {
-    Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-}
-
-fn wrap_body_text(text: &str, width: usize) -> Vec<String> {
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0;
-
-    for ch in text.chars() {
-        let ch_width = measure_text_width(&ch.to_string());
-        if current_width > 0 && current_width + ch_width > width {
-            lines.push(current);
-            current = String::new();
-            current_width = 0;
-        }
-        current.push(ch);
-        current_width += ch_width;
-    }
-
-    lines.push(current);
-    lines
 }
 
 fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
@@ -637,16 +623,21 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 
 fn draw_help_popup(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let keymap = app.help_keymap();
-    let desired_height = keymap.len() as u16 + 2;
+    let desired_height = keymap.len().div_ceil(2) as u16 + 2;
     let area = popup_rect(area, desired_height);
     frame.render_widget(Clear, area);
     let lines = keymap
-        .into_iter()
-        .map(|(key, desc)| {
-            Line::from(vec![
-                Span::styled(format!("{key:<12}"), theme::chrome_style()),
-                Span::raw(desc.to_string()),
-            ])
+        .chunks(2)
+        .map(|chunk| {
+            let mut spans = Vec::new();
+            for (index, (key, desc)) in chunk.iter().enumerate() {
+                if index > 0 {
+                    spans.push(Span::styled("  |  ", theme::dim_style()));
+                }
+                spans.push(Span::styled(format!("{key:<10}"), theme::chrome_style()));
+                spans.push(Span::raw(desc.to_string()));
+            }
+            Line::from(spans)
         })
         .collect::<Vec<_>>();
     let popup = Paragraph::new(lines).block(popup_block("Help"));
@@ -1228,6 +1219,19 @@ mod tests {
     }
 
     #[test]
+    fn narrow_header_keeps_active_source_view_visible() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::Published);
+
+        let text = buffer_text(32, 24, &app);
+
+        assert!(text.contains("published"));
+    }
+
+    #[test]
     fn workflow_header_omits_source_view_tabs() {
         let app = AppState::workflow_with_diagnostics(vec![source_row("wf", "local")], Vec::new());
 
@@ -1285,6 +1289,37 @@ mod tests {
 
         assert!(text.contains("task a"));
         assert!(text.contains("body-marker"));
+    }
+
+    #[test]
+    fn detail_sidebar_reuses_wrapped_body_until_width_or_selection_changes() {
+        let mut browser_row = source_row("a", "provider-origin");
+        browser_row.title = "task a".into();
+        browser_row.body = (0..80)
+            .map(|index| format!("word{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut second_row = source_row("b", "provider-origin");
+        second_row.title = "task b".into();
+        second_row.body = "second body marker".into();
+        let mut app = AppState::new(vec![browser_row, second_row]);
+
+        assert_eq!(app.body_wrap_recompute_count(), 0);
+        let _ = buffer_text_mut(160, 24, &mut app);
+        assert_eq!(app.body_wrap_recompute_count(), 1);
+        let _ = buffer_text_mut(160, 24, &mut app);
+        assert_eq!(app.body_wrap_recompute_count(), 1);
+
+        app.handle(KeyInput::PageDown);
+        let _ = buffer_text_mut(160, 24, &mut app);
+        assert_eq!(app.body_wrap_recompute_count(), 1);
+
+        let _ = buffer_text_mut(170, 24, &mut app);
+        assert_eq!(app.body_wrap_recompute_count(), 2);
+
+        app.handle(KeyInput::Char('j'));
+        let _ = buffer_text_mut(170, 24, &mut app);
+        assert_eq!(app.body_wrap_recompute_count(), 3);
     }
 
     #[test]
@@ -1457,6 +1492,19 @@ mod tests {
         assert!(text.contains("s"));
         assert!(text.contains("sidebar"));
         assert!(text.contains("h/l"));
+    }
+
+    #[test]
+    fn help_overlay_shows_every_key_on_24_line_terminal() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        let keys = app.help_keymap();
+        app.handle(KeyInput::Char('?'));
+
+        let text = buffer_text(100, 24, &app);
+
+        for (key, _) in keys {
+            assert!(text.contains(key), "missing help key {key} in:\n{text}");
+        }
     }
 
     #[test]

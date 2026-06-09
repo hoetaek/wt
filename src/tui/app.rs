@@ -2,6 +2,9 @@ use crate::origin_action_menu::{OriginAction, OriginActionMenu};
 use crate::tui::body_markup::{self, LineKind};
 use crate::tui::remote_ui::PrintKind;
 use crate::ui::selector::strip_terminal_sequences;
+use console::measure_text_width;
+#[cfg(test)]
+use std::cell::Cell;
 use std::cell::RefCell;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,6 +253,9 @@ pub(crate) struct AppState {
     body_view_open: bool,
     body_scroll: usize,
     body_cache: RefCell<BodyLineCache>,
+    body_wrap_cache: RefCell<BodyWrapCache>,
+    #[cfg(test)]
+    body_wrap_recompute_count: Cell<usize>,
     sidebar_open: bool,
     sidebar_position: SidebarPosition,
     sidebar_scroll: usize,
@@ -394,6 +400,14 @@ struct BodyLineCache {
     lines: Vec<(LineKind, String)>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct BodyWrapCache {
+    selected_key: Option<String>,
+    body: String,
+    width: usize,
+    lines: Vec<(LineKind, String)>,
+}
+
 impl AppState {
     #[cfg(test)]
     pub(crate) fn new(rows: Vec<BrowserRow>) -> Self {
@@ -444,6 +458,9 @@ impl AppState {
             body_view_open: false,
             body_scroll: 0,
             body_cache: RefCell::new(BodyLineCache::default()),
+            body_wrap_cache: RefCell::new(BodyWrapCache::default()),
+            #[cfg(test)]
+            body_wrap_recompute_count: Cell::new(0),
             sidebar_open: true,
             sidebar_position: SidebarPosition::Auto,
             sidebar_scroll: 0,
@@ -592,6 +609,43 @@ impl AppState {
             cache.lines = body_markup::markup_body(&sanitize_body_for_markup(&cache.body));
         }
         cache.lines.clone()
+    }
+
+    pub(crate) fn wrapped_body_lines(&self, width: usize) -> Vec<(LineKind, String)> {
+        let Some((selected_key, body)) = self
+            .selected_row()
+            .map(|row| (row.key.clone(), row.body.clone()))
+        else {
+            let mut cache = self.body_wrap_cache.borrow_mut();
+            cache.selected_key = None;
+            cache.body.clear();
+            cache.lines.clear();
+            return Vec::new();
+        };
+        let body_lines = self.body_lines();
+
+        let mut cache = self.body_wrap_cache.borrow_mut();
+        if cache.selected_key.as_deref() != Some(selected_key.as_str())
+            || cache.body != body
+            || cache.width != width
+        {
+            cache.selected_key = Some(selected_key);
+            cache.body = body;
+            cache.width = width;
+            cache.lines = body_lines
+                .iter()
+                .flat_map(|(kind, text)| wrapped_body_line(kind, text, width))
+                .collect();
+            #[cfg(test)]
+            self.body_wrap_recompute_count
+                .set(self.body_wrap_recompute_count.get() + 1);
+        }
+        cache.lines.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn body_wrap_recompute_count(&self) -> usize {
+        self.body_wrap_recompute_count.get()
     }
 
     pub(crate) fn begin_action(&mut self, key: &str, verb: &str) {
@@ -1034,10 +1088,11 @@ impl AppState {
     fn handle_filter_key(&mut self, key: KeyInput) -> Outcome {
         match key {
             KeyInput::Esc => {
+                let before_key = self.selected_key_owned();
                 self.filter.clear();
                 self.mode = Mode::List;
                 self.status_line = self.list_status_line();
-                self.clamp_selection();
+                self.clamp_selection_after_visible_rows_changed(before_key);
             }
             KeyInput::Enter => {
                 self.mode = Mode::List;
@@ -1046,12 +1101,14 @@ impl AppState {
             KeyInput::Down => self.move_down(),
             KeyInput::Up => self.move_up(),
             KeyInput::Backspace => {
+                let before_key = self.selected_key_owned();
                 self.filter.pop();
-                self.clamp_selection();
+                self.clamp_selection_after_visible_rows_changed(before_key);
             }
             KeyInput::Char(ch) => {
+                let before_key = self.selected_key_owned();
                 self.filter.push(ch);
-                self.clamp_selection();
+                self.clamp_selection_after_visible_rows_changed(before_key);
             }
             KeyInput::PageUp | KeyInput::PageDown => {}
         }
@@ -1222,6 +1279,17 @@ impl AppState {
         self.sidebar_scroll = 0;
     }
 
+    fn selected_key_owned(&self) -> Option<String> {
+        self.selected_row().map(|row| row.key.clone())
+    }
+
+    fn clamp_selection_after_visible_rows_changed(&mut self, before_key: Option<String>) {
+        self.clamp_selection();
+        if self.selected_key_owned() != before_key {
+            self.reset_detail_scroll();
+        }
+    }
+
     fn clamp_selection(&mut self) {
         let len = self.visible_rows().len();
         let before = self.selected_index;
@@ -1385,6 +1453,47 @@ fn progress_label_for(verb: &str) -> String {
 
 fn sanitize_body_for_markup(body: &str) -> String {
     strip_terminal_sequences(body).replace('\t', " ")
+}
+
+fn wrapped_body_line(kind: &LineKind, text: &str, width: usize) -> Vec<(LineKind, String)> {
+    wrap_body_text(&body_display_text(kind, text), width)
+        .into_iter()
+        .map(|line| (kind.clone(), line))
+        .collect()
+}
+
+fn body_display_text(kind: &LineKind, text: &str) -> String {
+    match kind {
+        LineKind::Checkbox(checked) => {
+            let marker = if *checked { "☑ " } else { "☐ " };
+            format!("{marker}{text}")
+        }
+        LineKind::Heading | LineKind::Plain | LineKind::Code => text.to_string(),
+    }
+}
+
+fn wrap_body_text(text: &str, width: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0;
+
+    for ch in text.chars() {
+        let ch_width = measure_text_width(&ch.to_string());
+        if current_width > 0 && current_width + ch_width > width {
+            lines.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += ch_width;
+    }
+
+    lines.push(current);
+    lines
 }
 
 fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
@@ -1735,6 +1844,19 @@ mod tests {
         assert_eq!(app.sidebar_scroll(), 10);
 
         app.handle(KeyInput::PageUp);
+        assert_eq!(app.sidebar_scroll(), 0);
+    }
+
+    #[test]
+    fn filter_change_to_different_selected_row_resets_sidebar_scroll() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+        app.handle(KeyInput::PageDown);
+        assert_eq!(app.sidebar_scroll(), 10);
+
+        app.handle(KeyInput::Char('/'));
+        app.handle(KeyInput::Char('b'));
+
+        assert_eq!(app.selected_key(), Some("b"));
         assert_eq!(app.sidebar_scroll(), 0);
     }
 
