@@ -481,6 +481,12 @@ fn command_failure(stderr: &str, stdout: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn origin_only_import_id_preserves_case() {
+        assert_eq!(origin_only_import_id("linear:WT-142"), "WT-142");
+        assert_eq!(origin_only_import_id("github:#182"), "182");
+    }
     use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CmdOutput, CommandRunner, Ctx, CtxOptions, OutputMode, UserInterface};

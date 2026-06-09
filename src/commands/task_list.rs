@@ -116,14 +116,22 @@ pub(crate) fn origin_only_rows(
     issues
         .into_iter()
         .filter_map(|issue| {
-            let (_, id) = normalize_origin_key(&provider, &issue.identifier);
+            // 정규화 id는 매칭/중복 제거 전용. 표시·import dispatch에는 provider가
+            // 돌려준 원본 대소문자를 보존한다 (Linear `WT-142` 등 case-sensitive id).
+            let (_, normalized_id) = normalize_origin_key(&provider, &issue.identifier);
+            let import_id = issue
+                .identifier
+                .trim()
+                .trim_start_matches('#')
+                .trim()
+                .to_string();
             let import_key = task::safe_task_key(&issue.identifier);
-            if local_origin_keys.contains(&(provider.clone(), id.clone()))
+            if local_origin_keys.contains(&(provider.clone(), normalized_id))
                 || local_task_keys.contains(&import_key)
             {
                 return None;
             }
-            let key = format!("{provider}:{id}");
+            let key = format!("{provider}:{import_id}");
             let body = issue.hint.unwrap_or_default();
             Some(crate::tui::app::BrowserRow {
                 key,
@@ -136,7 +144,7 @@ pub(crate) fn origin_only_rows(
                 size: None,
                 branch: None,
                 source: "provider-origin".into(),
-                preview_lines: origin_issue_preview_lines(&provider, &id, &body),
+                preview_lines: origin_issue_preview_lines(&provider, &import_id, &body),
                 body,
                 menu: OriginActionMenu::for_origin_issue_placeholder("Provider issue"),
             })
@@ -1084,7 +1092,41 @@ mod tests {
         let rows = origin_only_rows(issues, &local_origin_keys, &local_task_keys, "linear");
 
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
-        assert_eq!(keys, vec!["linear:proj-124"]);
+        assert_eq!(keys, vec!["linear:PROJ-124"]);
+    }
+
+    #[test]
+    fn origin_only_rows_preserves_identifier_case_in_key() {
+        use std::collections::HashSet;
+
+        let local_origin_keys: HashSet<(String, String)> =
+            [normalize_origin_key("linear", "WT-142")]
+                .into_iter()
+                .collect();
+        let local_task_keys = HashSet::new();
+        let issues = vec![
+            IssueListItem {
+                identifier: "WT-142".into(),
+                title: "Already imported".into(),
+                display: "linear WT-142".into(),
+                hint: None,
+            },
+            IssueListItem {
+                identifier: "WT-143".into(),
+                title: "Provider only".into(),
+                display: "linear WT-143".into(),
+                hint: None,
+            },
+        ];
+
+        let rows = origin_only_rows(issues, &local_origin_keys, &local_task_keys, "linear");
+
+        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["linear:WT-143"],
+            "중복 제거는 case-insensitive로 유지하되 key는 원본 대소문자를 보존해야 한다"
+        );
     }
 
     #[test]
