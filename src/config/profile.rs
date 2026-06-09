@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::merge::append_prompt_blocks;
 use super::schema::{AGENT_PROMPT_WORKFLOW_SCOPE, PROMPT_COMMON_SCOPE};
-use super::{Config, CopyAsEntry};
+use super::{Config, PathSpec};
 
 pub(super) fn apply_profile_conventions(
     profile_dir: &Path,
@@ -46,8 +46,8 @@ pub(super) fn apply_profile_conventions(
         }
     }
 
-    push_copy_as_if_exists(
-        &mut config.worktree.copy_as,
+    push_scaffold_copy_if_exists(
+        &mut config.worktree.copy,
         &profile_dir.join("scaffold"),
         ".",
     );
@@ -68,14 +68,14 @@ fn reject_legacy_branch_prompt_files(profile_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn push_copy_as_if_exists(copy_as: &mut Vec<CopyAsEntry>, from: &Path, to: &str) {
+fn push_scaffold_copy_if_exists(copy: &mut Vec<PathSpec>, from: &Path, to: &str) {
     if !from.exists() {
         return;
     }
-    if copy_as.iter().any(|entry| entry.to == to) {
+    if copy.iter().any(|entry| entry.to() == to) {
         return;
     }
-    copy_as.push(CopyAsEntry {
+    copy.push(PathSpec::Rename {
         from: from.display().to_string(),
         to: to.into(),
     });

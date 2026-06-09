@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn copy_files_copies_copy_as_directory_to_worktree_root() {
-        use crate::config::CopyAsEntry;
+        use crate::config::PathSpec;
         use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
 
@@ -471,7 +471,7 @@ mod tests {
         .unwrap();
 
         let mut config = Config::default();
-        config.worktree.copy_as = vec![CopyAsEntry {
+        config.worktree.copy = vec![PathSpec::Rename {
             from: ".wt/config/profiles/codex/scaffold".into(),
             to: ".".into(),
         }];
@@ -494,6 +494,44 @@ mod tests {
             fs::read_to_string(wt.join(".codex/skills/start/SKILL.md")).unwrap(),
             "start skill\n"
         );
+    }
+
+    #[test]
+    fn link_files_creates_renamed_symlink() {
+        use crate::config::PathSpec;
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let wt = dir.path().join("worktree");
+        fs::create_dir_all(repo.join(".local/skills")).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(repo.join(".local/skills/SKILL.md"), "x\n").unwrap();
+
+        let mut config = Config::default();
+        config.worktree.link = vec![PathSpec::Rename {
+            from: ".local/skills".into(),
+            to: ".codex/skills".into(),
+        }];
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        link_files(&ctx, &ctx.config, &wt).unwrap();
+
+        let dest = wt.join(".codex/skills");
+        assert!(dest.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            fs::read_link(&dest).unwrap(),
+            fs::canonicalize(repo.join(".local/skills")).unwrap()
+        );
+        assert_eq!(fs::read_to_string(dest.join("SKILL.md")).unwrap(), "x\n");
     }
 
     #[test]

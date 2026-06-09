@@ -1,7 +1,7 @@
 use crate::config::{
-    AgentCli, AgentConfig, Config, ConfigSource, EditorPlacement, IssueProviderType, ReadyMode,
-    ReviewCodexBasePolicy, SetupConfig, SiteProvider, SubmitMode, WorkflowDefaultLandingPolicy,
-    WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
+    AgentCli, AgentConfig, Config, ConfigSource, EditorPlacement, IssueProviderType, PathSpec,
+    ReadyMode, ReviewCodexBasePolicy, SetupConfig, SiteProvider, SubmitMode,
+    WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
 };
 use crate::config_render::render_effective_config;
 use crate::context::{
@@ -1043,18 +1043,9 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
             ProfileSummary {
                 name: profile.name,
                 path: relative_path(ctx, &profile.path),
-                copy: profile.config.worktree.copy.clone(),
-                copy_as: profile
-                    .config
-                    .worktree
-                    .copy_as
-                    .iter()
-                    .map(|entry| CopyAsSummary {
-                        from: entry.from.clone(),
-                        to: entry.to.clone(),
-                    })
-                    .collect(),
-                link: profile.config.worktree.link.clone(),
+                copy: same_pathspecs(&profile.config.worktree.copy),
+                copy_as: copy_as_summary(&profile.config.worktree.copy),
+                link: same_pathspecs(&profile.config.worktree.link),
                 agent,
                 has_site,
                 worktree,
@@ -1434,22 +1425,38 @@ fn agent_summary(agent: Option<&AgentConfig>) -> Option<AgentSummary> {
     })
 }
 
+fn same_pathspecs(specs: &[PathSpec]) -> Vec<String> {
+    specs
+        .iter()
+        .filter_map(|spec| match spec {
+            PathSpec::Same(value) => Some(value.clone()),
+            PathSpec::Rename { .. } => None,
+        })
+        .collect()
+}
+
+fn copy_as_summary(specs: &[PathSpec]) -> Vec<CopyAsSummary> {
+    specs
+        .iter()
+        .filter_map(|spec| match spec {
+            PathSpec::Same(_) => None,
+            PathSpec::Rename { from, to } => Some(CopyAsSummary {
+                from: from.clone(),
+                to: to.clone(),
+            }),
+        })
+        .collect()
+}
+
 fn worktree_summary(worktree: &WorktreeConfig) -> Option<WorktreeSummary> {
     if *worktree == WorktreeConfig::default() {
         return None;
     }
     Some(WorktreeSummary {
         path: worktree.path.clone(),
-        copy: worktree.copy.clone(),
-        copy_as: worktree
-            .copy_as
-            .iter()
-            .map(|entry| CopyAsSummary {
-                from: entry.from.clone(),
-                to: entry.to.clone(),
-            })
-            .collect(),
-        link: worktree.link.clone(),
+        copy: same_pathspecs(&worktree.copy),
+        copy_as: copy_as_summary(&worktree.copy),
+        link: same_pathspecs(&worktree.link),
         inject_local_context: worktree.inject_local_context.is_some(),
         naming: worktree
             .naming
@@ -1824,7 +1831,7 @@ mod tests {
         write_profile(
             dir.path(),
             "codex",
-            "[worktree]\ncopy = [\".env\", \".linear.toml\"]\ncopy_as = [{ from = \".local/profiles/codex/scaffold\", to = \".\" }]\nlink = [\".local\"]\n\n[agent]\ncli = \"codex\"\n",
+            "[worktree]\ncopy = [\".env\", \".linear.toml\", { from = \".local/profiles/codex/scaffold\", to = \".\" }]\nlink = [\".local\"]\n\n[agent]\ncli = \"codex\"\n",
         );
         write_profile(dir.path(), "bad name", "[agent]\ncli = \"codex\"\n");
         write_retrospec(

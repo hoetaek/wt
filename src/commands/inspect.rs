@@ -1130,7 +1130,7 @@ fn is_configured_link_status_line(ctx: &Ctx, line: &str) -> bool {
         .worktree
         .link
         .iter()
-        .map(|linked| linked.trim_end_matches('/'))
+        .map(|linked| linked.to().trim_end_matches('/'))
         .any(|linked| path == linked || path.starts_with(&format!("{linked}/")))
 }
 

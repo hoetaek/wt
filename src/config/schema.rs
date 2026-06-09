@@ -279,21 +279,81 @@ fn legacy_review_landing_value() -> String {
     format!("after_{}", "review")
 }
 
-#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorktreeConfig {
     pub path: Option<String>,
-    pub copy: Vec<String>,
-    pub copy_as: Vec<CopyAsEntry>,
-    pub link: Vec<String>,
+    pub copy: Vec<PathSpec>,
+    pub link: Vec<PathSpec>,
     pub inject_local_context: Option<String>,
     pub naming: Option<WorktreeNamingConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct CopyAsEntry {
-    pub from: String,
-    pub to: String,
+#[serde(untagged)]
+pub enum PathSpec {
+    Same(String),
+    Rename { from: String, to: String },
+}
+
+impl PathSpec {
+    pub fn from(&self) -> &str {
+        match self {
+            Self::Same(value) => value,
+            Self::Rename { from, .. } => from,
+        }
+    }
+
+    pub fn to(&self) -> &str {
+        match self {
+            Self::Same(value) => value,
+            Self::Rename { to, .. } => to,
+        }
+    }
+}
+
+impl From<String> for PathSpec {
+    fn from(value: String) -> Self {
+        Self::Same(value)
+    }
+}
+
+impl From<&str> for PathSpec {
+    fn from(value: &str) -> Self {
+        Self::Same(value.into())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+struct WorktreeConfigRaw {
+    path: Option<String>,
+    copy: Vec<PathSpec>,
+    link: Vec<PathSpec>,
+    inject_local_context: Option<String>,
+    naming: Option<WorktreeNamingConfig>,
+    copy_as: Option<toml::Value>,
+}
+
+impl<'de> Deserialize<'de> for WorktreeConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = WorktreeConfigRaw::deserialize(deserializer)?;
+        if raw.copy_as.is_some() {
+            return Err(D::Error::custom(
+                "[worktree].copy_as is no longer supported; use [worktree].copy with { from, to } entries",
+            ));
+        }
+
+        Ok(Self {
+            path: raw.path,
+            copy: raw.copy,
+            link: raw.link,
+            inject_local_context: raw.inject_local_context,
+            naming: raw.naming,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]

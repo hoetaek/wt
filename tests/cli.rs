@@ -7339,8 +7339,27 @@ CODEX_MODE = "1"
     let config: wt::config::Config = toml::from_str(&rendered).unwrap();
 
     assert!(config.profile.is_none());
-    assert_eq!(config.worktree.copy, vec![".env.example", ".env"]);
-    assert_eq!(config.worktree.link, vec!["storage"]);
+    assert!(
+        config
+            .worktree
+            .copy
+            .iter()
+            .any(|entry| entry.from() == ".env.example" && entry.to() == ".env.example")
+    );
+    assert!(
+        config
+            .worktree
+            .copy
+            .iter()
+            .any(|entry| entry.from() == ".env" && entry.to() == ".env")
+    );
+    assert!(
+        config
+            .worktree
+            .link
+            .iter()
+            .any(|entry| entry.from() == "storage" && entry.to() == "storage")
+    );
     assert_eq!(config.setup.env.get("APP_ENV").unwrap(), "local");
     assert_eq!(config.setup.env.get("LOG_LEVEL").unwrap(), "debug");
     assert_eq!(config.setup.env.get("PRIVATE_TOKEN").unwrap(), "secret");
@@ -7384,9 +7403,8 @@ CODEX_MODE = "1"
     assert_eq!(workspace.colors.get("branch").unwrap(), "green");
     assert_eq!(workspace.colors.get("pr").unwrap(), "magenta");
 
-    let copy_as = config.worktree.copy_as;
-    assert!(copy_as.iter().any(|entry| {
-        Path::new(&entry.from).ends_with(".wt/config/profiles/codex/scaffold") && entry.to == "."
+    assert!(config.worktree.copy.iter().any(|entry| {
+        Path::new(entry.from()).ends_with(".wt/config/profiles/codex/scaffold") && entry.to() == "."
     }));
 }
 

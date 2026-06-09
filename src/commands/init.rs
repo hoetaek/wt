@@ -1,6 +1,6 @@
 use crate::cli::{InitAgent, InitIssueProvider, InitSiteProvider};
 use crate::config::{
-    AgentCli, AgentConfig, Config, CopyAsEntry, OriginPolicy, ReviewCodexBasePolicy,
+    AgentCli, AgentConfig, Config, OriginPolicy, PathSpec, ReviewCodexBasePolicy,
     ReviewDefaultPolicy, WORKSPACE_DEFAULT_COLORS, WorkflowDefaultLandingPolicy,
     WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode, WorkspaceBrowserMode,
 };
@@ -109,9 +109,8 @@ impl InitSection {
 #[derive(Debug, Clone, Default)]
 struct InitCommonConfig {
     worktree_path: Option<String>,
-    worktree_copy: Vec<String>,
-    worktree_copy_as: Vec<CopyAsEntry>,
-    worktree_link: Vec<String>,
+    worktree_copy: Vec<PathSpec>,
+    worktree_link: Vec<PathSpec>,
     inject_local_context: Option<String>,
     worktree_naming: bool,
     setup_deps: Vec<InitCommand>,
@@ -223,7 +222,6 @@ impl InitCommonConfig {
         let mut common = InitCommonConfig {
             worktree_path: config.worktree.path.clone(),
             worktree_copy: config.worktree.copy.clone(),
-            worktree_copy_as: config.worktree.copy_as.clone(),
             worktree_link: config.worktree.link.clone(),
             inject_local_context: config.worktree.inject_local_context.clone(),
             worktree_naming: config.worktree.naming.is_some(),
@@ -1159,7 +1157,6 @@ fn append_active_common_config(
 ) {
     if common.worktree_path.is_some()
         || !common.worktree_copy.is_empty()
-        || !common.worktree_copy_as.is_empty()
         || !common.worktree_link.is_empty()
         || common.inject_local_context.is_some()
     {
@@ -1169,21 +1166,16 @@ fn append_active_common_config(
             s.push_str(&format!("path = {}\n", toml_quote(path)));
         }
         if !common.worktree_copy.is_empty() {
-            s.push_str(&format!("copy = {}\n", toml_array(&common.worktree_copy)));
-        }
-        if !common.worktree_copy_as.is_empty() {
-            s.push_str("copy_as = [\n");
-            for entry in &common.worktree_copy_as {
-                s.push_str(&format!(
-                    "    {{ from = {}, to = {} }},\n",
-                    toml_quote(&entry.from),
-                    toml_quote(&entry.to)
-                ));
-            }
-            s.push_str("]\n");
+            s.push_str(&format!(
+                "copy = {}\n",
+                render_pathspec_array(&common.worktree_copy)
+            ));
         }
         if !common.worktree_link.is_empty() {
-            s.push_str(&format!("link = {}\n", toml_array(&common.worktree_link)));
+            s.push_str(&format!(
+                "link = {}\n",
+                render_pathspec_array(&common.worktree_link)
+            ));
         }
         if let Some(context) = common.inject_local_context.as_deref() {
             append_multiline_string(s, "inject_local_context", context);
@@ -1438,9 +1430,13 @@ fn detected_project_common_config(
     };
     InitCommonConfig {
         worktree_copy,
-        worktree_copy_as: Vec::new(),
         worktree_link: if local_target {
-            detected.local_links.clone()
+            detected
+                .local_links
+                .iter()
+                .cloned()
+                .map(PathSpec::Same)
+                .collect()
         } else {
             Vec::new()
         },
@@ -1621,14 +1617,16 @@ fn resolve_worktree_path(ctx: &Ctx, default: Option<&str>) -> Result<Option<Stri
 
 fn resolve_worktree_copy(
     ctx: &Ctx,
-    current: &[String],
+    current: &[PathSpec],
     detected: &DetectedRepo,
-) -> Result<Vec<String>> {
-    if !detected.has_env_file && current.is_empty() {
-        return Ok(Vec::new());
+) -> Result<Vec<PathSpec>> {
+    let mut renamed = renamed_pathspecs(current);
+    let current_same = same_pathspecs(current);
+    if !detected.has_env_file && current_same.is_empty() {
+        return Ok(renamed);
     }
 
-    let mut recommended = current.to_vec();
+    let mut recommended = current_same;
     if detected.has_env_file && !recommended.iter().any(|path| path == ".env") {
         recommended.push(".env".into());
     }
@@ -1641,19 +1639,26 @@ fn resolve_worktree_copy(
             default.as_str()
         }),
     )?;
-    Ok(split_list(&input))
+    let mut resolved = split_list(&input)
+        .into_iter()
+        .map(PathSpec::Same)
+        .collect::<Vec<_>>();
+    resolved.append(&mut renamed);
+    Ok(resolved)
 }
 
 fn resolve_worktree_link(
     ctx: &Ctx,
-    current: &[String],
+    current: &[PathSpec],
     detected: &DetectedRepo,
-) -> Result<Vec<String>> {
-    if detected.local_links.is_empty() && current.is_empty() {
-        return Ok(Vec::new());
+) -> Result<Vec<PathSpec>> {
+    let mut renamed = renamed_pathspecs(current);
+    let current_same = same_pathspecs(current);
+    if detected.local_links.is_empty() && current_same.is_empty() {
+        return Ok(renamed);
     }
 
-    let mut recommended = current.to_vec();
+    let mut recommended = current_same;
     for link in &detected.local_links {
         if !recommended.contains(link) {
             recommended.push(link.clone());
@@ -1668,7 +1673,32 @@ fn resolve_worktree_link(
             default.as_str()
         }),
     )?;
-    Ok(split_list(&input))
+    let mut resolved = split_list(&input)
+        .into_iter()
+        .map(PathSpec::Same)
+        .collect::<Vec<_>>();
+    resolved.append(&mut renamed);
+    Ok(resolved)
+}
+
+fn same_pathspecs(specs: &[PathSpec]) -> Vec<String> {
+    specs
+        .iter()
+        .filter_map(|spec| match spec {
+            PathSpec::Same(value) => Some(value.clone()),
+            PathSpec::Rename { .. } => None,
+        })
+        .collect()
+}
+
+fn renamed_pathspecs(specs: &[PathSpec]) -> Vec<PathSpec> {
+    specs
+        .iter()
+        .filter_map(|spec| match spec {
+            PathSpec::Same(_) => None,
+            PathSpec::Rename { .. } => Some(spec.clone()),
+        })
+        .collect()
 }
 
 fn resolve_workspace_tabs(
@@ -2785,6 +2815,20 @@ fn toml_array(values: &[String]) -> String {
     format!("[{rendered}]")
 }
 
+fn render_pathspec_array(specs: &[PathSpec]) -> String {
+    let rendered = specs
+        .iter()
+        .map(|spec| match spec {
+            PathSpec::Same(value) => toml_quote(value),
+            PathSpec::Rename { from, to } => {
+                format!("{{ from = {}, to = {} }}", toml_quote(from), toml_quote(to))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{rendered}]")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2793,6 +2837,10 @@ mod tests {
     };
     use crate::context::mock::{MockRunner, MockUi};
     use std::sync::Arc;
+
+    fn pathspec_pairs(specs: &[PathSpec]) -> Vec<(&str, &str)> {
+        specs.iter().map(|spec| (spec.from(), spec.to())).collect()
+    }
 
     fn local_target(dir: &tempfile::TempDir) -> InitTarget {
         InitTarget {
@@ -2911,7 +2959,10 @@ mod tests {
         .unwrap();
 
         let config = Config::load_file(&dir.path().join(".wt/config/local.toml")).unwrap();
-        assert_eq!(config.worktree.link, vec![".local"]);
+        assert_eq!(
+            pathspec_pairs(&config.worktree.link),
+            vec![(".local", ".local")]
+        );
         assert!(dir.path().join(".wt/execution").is_dir());
     }
 
@@ -3421,8 +3472,10 @@ origin_policy = "local-only"
         let config: Config = toml::from_str(&plan.content).unwrap();
 
         assert!(plan.content.contains("[worktree]\n"));
-        assert_eq!(config.worktree.copy, vec![".env"]);
-        assert!(config.worktree.copy_as.is_empty());
+        assert_eq!(
+            pathspec_pairs(&config.worktree.copy),
+            vec![(".env", ".env")]
+        );
         assert_eq!(
             config.worktree.inject_local_context.as_deref(),
             Some(DEFAULT_INJECT_LOCAL_CONTEXT)
@@ -3432,8 +3485,12 @@ origin_policy = "local-only"
         assert!(plan.content.contains("- worktree: {{worktree_path}}"));
         assert!(plan.content.contains("- parent: {{parent_branch}}"));
         assert_eq!(
-            config.worktree.link,
-            vec![".local", ".linear.toml", "CLAUDE.local.md"]
+            pathspec_pairs(&config.worktree.link),
+            vec![
+                (".local", ".local"),
+                (".linear.toml", ".linear.toml"),
+                ("CLAUDE.local.md", "CLAUDE.local.md")
+            ]
         );
         let naming = config.worktree.naming.unwrap();
         assert_eq!(naming.command, "claude -p");
