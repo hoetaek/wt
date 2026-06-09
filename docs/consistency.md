@@ -1523,9 +1523,13 @@ workflow preparation will use.
 `wt init` does not write a commented optional `[workflow]` tutorial block; generated config
 writes an explicit starter `[workflow]` policy with `pull_request = "none"` and `landing = "manual"`
 unless it is preserving an existing explicit workflow policy from the target config.
-It writes `[review]` only when preserving an existing explicit review policy, so local
-init does not materialize `codex_base = "none"` as an accidental override of a shared
-or root requirement.
+Interactive `wt init` asks for the `[review]` codex_base policy in a dedicated
+prompt. Selecting `advisory` or `required` writes `[review]` with that value;
+selecting `none` writes nothing, so local init never materializes
+`codex_base = "none"` as an accidental override of a shared or root
+`required`/`advisory` requirement. It also writes `[review]` when preserving an
+existing explicit review policy. `wt init --yes` does not prompt, preserves any
+existing policy, and adds no init CLI flag for this.
 `wt workflow show` displays the prepared policy snapshot from the workflow file, not the
 current `.wt.toml` value.
 
