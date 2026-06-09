@@ -1620,12 +1620,15 @@ Workflow, origin snapshot 같은 디스크 상태만 읽는다. 액션 메뉴는
 발견 가능해야 한다.
 
 Task list 브라우저의 source view는 출처 축을 보는 TUI 전용 presentation filter다.
-`SourceView { All, LocalOnly, OriginOnly }`는 상태줄에 `[view: all]`,
-`[view: local-only]`, `[view: origin-only]`로 표시되고, task browser에서만 `h`/`l`로
-wrap rotate된다. Workflow 브라우저에는 source view를 노출하지 않는다. Source view는
-`source = "local" | "provider-origin"` predicate이며 run-status 숨김 축(`wt task list
---all`)과 독립적으로 AND 합성된다. 이 개념의 canonical 이름은 source view다. Source view는 `.wt/` storage owner인 bucket, config/message ownership을 뜻하는 scope와 다른 개념이므로
-그 단어들을 재사용하지 않는다.
+`SourceView { All, Local, Published, OriginOnly }`는 상태줄에 `[view: all]`,
+`[view: local]`, `[view: published]`, `[view: origin-only]`로 표시되고, task
+browser에서만 `h`/`l`로 wrap rotate된다. Workflow 브라우저에는 source view를 노출하지 않는다.
+Source view는 Local=`source == "local"`, Published=`source == "provider-origin"` predicate이며
+run-status 숨김 축(`wt task list --all`)과 독립적으로 AND 합성된다. OriginOnly는 로컬
+TaskDocument가 없는 provider 이슈를 보는 view다. 이 슬라이스(S1)에서는 빈 placeholder이며
+fetch/reconcile/import는 후속 슬라이스에서 채운다. 이 개념의 canonical 이름은 source view다.
+Source view는 `.wt/` storage owner인 bucket, config/message ownership을 뜻하는 scope와 다른
+개념이므로 그 단어들을 재사용하지 않는다.
 
 액션 실행은 브라우저 안의 dispatch 계약을 따른다. Browser action menu의 모든 origin
 변경 액션(diff, fetch, pull, push, publish, attach)과 task browser archive action은
