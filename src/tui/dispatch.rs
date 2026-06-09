@@ -1,4 +1,5 @@
 use crate::commands;
+use crate::config::IssueProviderType;
 use crate::context::{Ctx, CtxOptions, UserInterface};
 use crate::origin_action_menu::OriginAction;
 use crate::origin_snapshot::{read_task_snapshot, read_workflow_snapshot};
@@ -253,6 +254,11 @@ pub(crate) struct InFlightAction {
     pub(crate) done_rx: mpsc::Receiver<Result<()>>,
 }
 
+pub(crate) struct InFlightOriginFetch {
+    pub(crate) ui_rx: mpsc::Receiver<UiRequest>,
+    pub(crate) done_rx: mpsc::Receiver<Result<()>>,
+}
+
 /// Run one origin action through its output sink.
 ///
 /// Worker actions start an in-flight worker thread. Status-line actions return
@@ -285,6 +291,49 @@ pub(crate) fn dispatch(
                 .run_status_line(action, key)
                 .unwrap_or_else(|err| format!("error: {err:#}")),
         )),
+    }
+}
+
+pub(crate) fn spawn_origin_fetch(ctx: &Ctx) -> InFlightOriginFetch {
+    let (ui_tx, ui_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let provider = configured_issue_provider(ctx);
+    let worker_ui_tx = ui_tx.clone();
+    let worker_ctx = Ctx::new_with_options(
+        ctx.repo_root.clone(),
+        ctx.invocation_root.clone(),
+        ctx.config.clone(),
+        Box::new(crate::runner::RealRunner),
+        Box::new(TuiUi::new(ui_tx)),
+        CtxOptions {
+            base_config: ctx.base_config.clone(),
+            config_source: ctx.config_source.clone(),
+            storage_root: Some(ctx.storage_root.clone()),
+            output_mode: ctx.output_mode,
+            verbosity: ctx.verbosity,
+            quiet: ctx.quiet,
+            launcher_coordinator_id: ctx.launcher_coordinator_id.clone(),
+        },
+    );
+
+    std::thread::spawn(move || {
+        let result = commands::issue::build_provider(&worker_ctx)
+            .and_then(|provider| provider.list_issues())
+            .map_err(|err| format!("{err:#}"));
+        let send_result = worker_ui_tx
+            .send(UiRequest::OriginIssuesLoaded { provider, result })
+            .map_err(|_| anyhow::anyhow!("browser closed before origin issue fetch completed"));
+        let _ = done_tx.send(send_result);
+    });
+
+    InFlightOriginFetch { ui_rx, done_rx }
+}
+
+fn configured_issue_provider(ctx: &Ctx) -> String {
+    match ctx.config.issues.as_ref().map(|issues| &issues.provider) {
+        Some(IssueProviderType::Github) => "github".into(),
+        Some(IssueProviderType::Linear) => "linear".into(),
+        None => "provider".into(),
     }
 }
 
@@ -696,6 +745,42 @@ body = "Task body"
             message,
             "Archive is not available for workflow 2026-06-06-001; archive tasks from the task browser"
         );
+    }
+
+    #[test]
+    fn spawn_origin_fetch_reconciles_via_apply() {
+        use crate::services::issues::IssueListItem;
+        use std::collections::HashSet;
+
+        let local: HashSet<(String, String)> = HashSet::new();
+        let rows = crate::commands::task_list::origin_only_rows(
+            vec![IssueListItem {
+                identifier: "175".into(),
+                title: "A".into(),
+                display: "github #175".into(),
+                hint: None,
+            }],
+            &local,
+            "github",
+        );
+
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn spawn_origin_fetch_reports_missing_provider_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+
+        let inflight = spawn_origin_fetch(&ctx);
+
+        let UiRequest::OriginIssuesLoaded { provider, result } = inflight.ui_rx.recv().unwrap()
+        else {
+            panic!("expected origin issues loaded request");
+        };
+        assert_eq!(provider, "provider");
+        assert!(result.unwrap_err().contains("No [issues] section"));
+        assert!(inflight.done_rx.recv().unwrap().is_ok());
     }
 
     #[test]

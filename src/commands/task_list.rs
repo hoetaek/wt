@@ -2,12 +2,13 @@ use crate::config::{ColumnConfig, Config};
 use crate::context::Ctx;
 use crate::origin_action_menu::{OriginActionMenu, OriginLabel};
 use crate::origin_snapshot::{FieldSnapshot, OriginHealthSummary, read_task_snapshot};
+use crate::services::issues::IssueListItem;
 use crate::task::{self, TaskDocument};
 use crate::task_run;
 use anyhow::{Context, Result};
 use console::measure_text_width;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -67,6 +68,79 @@ pub(crate) fn browser_app(ctx: &Ctx, report: &TaskListReport) -> crate::tui::app
     let columns = default_task_list_columns(&ctx.config);
     let browser_columns = browser_columns(&columns, &rows);
     crate::tui::app::AppState::task_with_columns(rows, browser_diagnostics(report), browser_columns)
+}
+
+pub(crate) fn normalize_origin_key(provider: &str, id: &str) -> (String, String) {
+    (
+        provider.trim().to_ascii_lowercase(),
+        id.trim()
+            .trim_start_matches('#')
+            .trim()
+            .to_ascii_lowercase(),
+    )
+}
+
+pub(crate) fn local_origin_keys(ctx: &Ctx) -> Result<HashSet<(String, String)>> {
+    let mut keys = HashSet::new();
+    for path in task::task_document_paths(ctx)? {
+        let relative_path = task_relative_path(ctx, &path);
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read task: {relative_path}"))?;
+        let document: TaskDocument = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse task: {relative_path}"))?;
+        if let Some(origin) = document.origin {
+            keys.insert(normalize_origin_key(&origin.provider, &origin.id));
+        }
+    }
+    Ok(keys)
+}
+
+pub(crate) fn origin_only_rows(
+    issues: Vec<IssueListItem>,
+    local: &HashSet<(String, String)>,
+    provider: &str,
+) -> Vec<crate::tui::app::BrowserRow> {
+    let provider = provider.trim().to_ascii_lowercase();
+    issues
+        .into_iter()
+        .filter_map(|issue| {
+            let (_, id) = normalize_origin_key(&provider, &issue.identifier);
+            if local.contains(&(provider.clone(), id.clone())) {
+                return None;
+            }
+            let key = format!("{provider}:{id}");
+            let body = issue.hint.unwrap_or_default();
+            Some(crate::tui::app::BrowserRow {
+                key,
+                title: issue.title,
+                status: "origin-only".into(),
+                run_status: "-".into(),
+                origin_label: issue.display,
+                next_action: "import".into(),
+                duration: None,
+                size: None,
+                branch: None,
+                source: "provider-origin".into(),
+                preview_lines: origin_issue_preview_lines(&provider, &id, &body),
+                body,
+                menu: OriginActionMenu::for_origin_issue_placeholder("Provider issue"),
+            })
+        })
+        .collect()
+}
+
+fn origin_issue_preview_lines(provider: &str, id: &str, hint: &str) -> Vec<String> {
+    let mut lines = vec![
+        format!("Origin      {provider} {id}"),
+        "Source      provider-origin".into(),
+        "Local path  not imported".into(),
+        "Branch      not prepared".into(),
+        "Next        import".into(),
+    ];
+    if !hint.trim().is_empty() {
+        lines.push(format!("Hint        {}", one_line(hint)));
+    }
+    lines
 }
 
 #[derive(Debug, Serialize)]
@@ -873,6 +947,7 @@ mod tests {
     use super::*;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions, OutputMode};
+    use crate::services::issues::IssueListItem;
     use crate::task_run;
 
     fn ctx(root: &Path, output_mode: OutputMode) -> Ctx {
@@ -887,6 +962,52 @@ mod tests {
                 ..CtxOptions::default()
             },
         )
+    }
+
+    #[test]
+    fn normalize_origin_key_unifies_github_and_linear_forms() {
+        assert_eq!(
+            normalize_origin_key("github", "#182"),
+            normalize_origin_key("github", "182")
+        );
+        assert_ne!(
+            normalize_origin_key("github", "142"),
+            normalize_origin_key("linear", "WT-142")
+        );
+        assert_eq!(
+            normalize_origin_key("linear", "WT-142"),
+            normalize_origin_key("linear", "wt-142")
+        );
+    }
+
+    #[test]
+    fn origin_only_rows_excludes_locally_linked_issues() {
+        use std::collections::HashSet;
+
+        let local: HashSet<(String, String)> = [normalize_origin_key("github", "#182")]
+            .into_iter()
+            .collect();
+        let issues = vec![
+            IssueListItem {
+                identifier: "175".into(),
+                title: "A".into(),
+                display: "github #175".into(),
+                hint: None,
+            },
+            IssueListItem {
+                identifier: "182".into(),
+                title: "B".into(),
+                display: "github #182".into(),
+                hint: None,
+            },
+        ];
+
+        let rows = origin_only_rows(issues, &local, "github");
+
+        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, vec!["github:175"]);
+        assert_eq!(rows[0].source, "provider-origin");
+        assert!(rows[0].branch.is_none());
     }
 
     #[test]

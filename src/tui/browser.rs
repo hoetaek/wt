@@ -1,3 +1,4 @@
+use crate::commands::task_list;
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::tui::app::{AppState, BrowserRow, KeyInput, Outcome, PopupOutcome, PopupSpec};
@@ -29,7 +30,7 @@ pub(crate) fn run_browser(
     app: AppState,
     refresh: impl FnMut() -> Result<(Vec<BrowserRow>, Vec<String>)>,
 ) -> Result<()> {
-    run_browser_with_backend(app, refresh, CtxBackend::new(ctx))
+    run_browser_with_backend(app, refresh, CtxBackend::new(ctx), Some(ctx))
 }
 
 pub(crate) fn run_workflow_browser(
@@ -37,18 +38,20 @@ pub(crate) fn run_workflow_browser(
     app: AppState,
     refresh: impl FnMut() -> Result<(Vec<BrowserRow>, Vec<String>)>,
 ) -> Result<()> {
-    run_browser_with_backend(app, refresh, WorkflowCtxBackend::new(ctx))
+    run_browser_with_backend(app, refresh, WorkflowCtxBackend::new(ctx), None)
 }
 
 fn run_browser_with_backend(
     mut app: AppState,
     mut refresh: impl FnMut() -> Result<(Vec<BrowserRow>, Vec<String>)>,
     dispatch_backend: impl DispatchBackend,
+    origin_ctx: Option<&Ctx>,
 ) -> Result<()> {
     let _session = TerminalSession::new()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("open TUI browser terminal")?;
     let mut inflight: Option<InFlightAction> = None;
+    let mut origin_fetch: Option<dispatch::InFlightOriginFetch> = None;
     let mut pending_reply: Option<mpsc::Sender<UiReply>> = None;
     let mut ctrl_c_armed = false;
 
@@ -57,8 +60,10 @@ fn run_browser_with_backend(
             .draw(|frame| draw(frame, &mut app))
             .context("draw TUI browser")?;
 
+        poll_origin_fetch(&mut app, &mut origin_fetch, &mut pending_reply, origin_ctx);
+
         if let Some((key, verb, result)) =
-            poll_inflight(&mut app, &mut inflight, &mut pending_reply)
+            poll_inflight(&mut app, &mut inflight, &mut pending_reply, origin_ctx)
         {
             match result {
                 Ok(()) => {
@@ -80,7 +85,7 @@ fn run_browser_with_backend(
         }
 
         if !event::poll(Duration::from_millis(50)).context("poll TUI browser event")? {
-            if inflight.is_some() {
+            if inflight.is_some() || app.origin_fetching() {
                 app.tick_spinner();
             }
             continue;
@@ -116,6 +121,9 @@ fn run_browser_with_backend(
                     match app.handle(input) {
                         Outcome::Continue => {}
                         Outcome::Quit => break,
+                        Outcome::FetchOriginIssues => {
+                            start_origin_fetch(&mut app, &mut origin_fetch, origin_ctx);
+                        }
                         Outcome::Dispatch { key, action } => {
                             if app.action_in_flight() {
                                 app.show_dispatch_message(
@@ -147,15 +155,74 @@ fn run_browser_with_backend(
     Ok(())
 }
 
+fn start_origin_fetch(
+    app: &mut AppState,
+    origin_fetch: &mut Option<dispatch::InFlightOriginFetch>,
+    origin_ctx: Option<&Ctx>,
+) {
+    let Some(ctx) = origin_ctx else {
+        app.apply_origin_fetch(Err("origin issue fetch is unavailable here".into()), "");
+        return;
+    };
+    if origin_fetch.is_some() {
+        app.show_dispatch_message("origin issue fetch already in progress".into());
+        return;
+    }
+    *origin_fetch = Some(dispatch::spawn_origin_fetch(ctx));
+}
+
+fn poll_origin_fetch(
+    app: &mut AppState,
+    origin_fetch: &mut Option<dispatch::InFlightOriginFetch>,
+    pending_reply: &mut Option<mpsc::Sender<UiReply>>,
+    origin_ctx: Option<&Ctx>,
+) {
+    let Some(current) = origin_fetch.as_mut() else {
+        return;
+    };
+    loop {
+        match current.ui_rx.try_recv() {
+            Ok(request) => handle_ui_request(app, request, pending_reply, origin_ctx),
+            Err(mpsc::TryRecvError::Empty) => break,
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+    }
+
+    match current.done_rx.try_recv() {
+        Ok(Ok(())) => {
+            *origin_fetch = None;
+        }
+        Ok(Err(err)) => {
+            if app.origin_fetching() {
+                app.apply_origin_fetch(Err(format!("{err:#}")), "");
+            }
+            *origin_fetch = None;
+        }
+        Err(mpsc::TryRecvError::Empty) => {}
+        Err(mpsc::TryRecvError::Disconnected) => {
+            if app.origin_fetching() {
+                app.apply_origin_fetch(
+                    Err(
+                        "origin issue fetch worker disconnected before reporting completion".into(),
+                    ),
+                    "",
+                );
+            }
+            *origin_fetch = None;
+        }
+    }
+}
+
 fn poll_inflight(
     app: &mut AppState,
     inflight: &mut Option<InFlightAction>,
     pending_reply: &mut Option<mpsc::Sender<UiReply>>,
+    origin_ctx: Option<&Ctx>,
 ) -> Option<(String, &'static str, Result<()>)> {
     let current = inflight.as_mut()?;
     loop {
         match current.ui_rx.try_recv() {
-            Ok(request) => handle_ui_request(app, request, pending_reply),
+            Ok(request) => handle_ui_request(app, request, pending_reply, origin_ctx),
             Err(mpsc::TryRecvError::Empty) => break,
             Err(mpsc::TryRecvError::Disconnected) => break,
         }
@@ -176,6 +243,7 @@ fn handle_ui_request(
     app: &mut AppState,
     request: UiRequest,
     pending_reply: &mut Option<mpsc::Sender<UiReply>>,
+    origin_ctx: Option<&Ctx>,
 ) {
     match request {
         UiRequest::Print { kind, line } => app.push_output(kind, line),
@@ -219,7 +287,22 @@ fn handle_ui_request(
             app.open_popup(PopupSpec::Input { prompt, default });
             *pending_reply = Some(reply);
         }
+        UiRequest::OriginIssuesLoaded { provider, result } => {
+            let result = reconcile_origin_issues(origin_ctx, &provider, result);
+            app.apply_origin_fetch(result, "just now");
+        }
     }
+}
+
+fn reconcile_origin_issues(
+    origin_ctx: Option<&Ctx>,
+    provider: &str,
+    result: std::result::Result<Vec<crate::services::issues::IssueListItem>, String>,
+) -> std::result::Result<Vec<BrowserRow>, String> {
+    let issues = result?;
+    let ctx = origin_ctx.ok_or_else(|| "origin issue fetch is unavailable here".to_string())?;
+    let local = task_list::local_origin_keys(ctx).map_err(|err| format!("{err:#}"))?;
+    Ok(task_list::origin_only_rows(issues, &local, provider))
 }
 
 fn reply_for(outcome: PopupOutcome) -> UiReply {

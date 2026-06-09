@@ -110,6 +110,19 @@ impl OriginActionMenu {
         }
     }
 
+    pub fn for_origin_issue_placeholder(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            items: vec![OriginActionItem::disabled(
+                OriginAction::Attach,
+                "Import as task",
+                "i",
+                "import is handled by a follow-up task",
+            )],
+            child_origins: Vec::new(),
+        }
+    }
+
     pub fn for_workflow(
         _id: impl Into<String>,
         title: impl Into<String>,

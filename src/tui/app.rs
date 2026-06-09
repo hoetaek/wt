@@ -127,6 +127,7 @@ pub(crate) enum Mode {
 pub(crate) enum Outcome {
     Continue,
     Quit,
+    FetchOriginIssues,
     Dispatch { key: String, action: OriginAction },
 }
 
@@ -207,12 +208,28 @@ struct RunningAction {
     spinner_frame: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OriginOnlyState {
+    NotFetched,
+    Fetching {
+        spinner_frame: usize,
+    },
+    Loaded {
+        rows: Vec<BrowserRow>,
+        fetched_at_label: String,
+    },
+    Error {
+        message: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct AppState {
     rows: Vec<BrowserRow>,
     diagnostics: Vec<String>,
     filter: String,
     source_view: SourceView,
+    origin_only: OriginOnlyState,
     selected_index: usize,
     menu_selected_index: usize,
     mode: Mode,
@@ -302,6 +319,7 @@ impl AppState {
             diagnostics,
             filter: String::new(),
             source_view: SourceView::All,
+            origin_only: OriginOnlyState::NotFetched,
             selected_index: 0,
             menu_selected_index: 0,
             mode: Mode::List,
@@ -458,7 +476,17 @@ impl AppState {
     }
 
     pub(crate) fn spinner_frame(&self) -> Option<usize> {
-        self.running.as_ref().map(|running| running.spinner_frame)
+        self.running
+            .as_ref()
+            .map(|running| running.spinner_frame)
+            .or_else(|| match &self.origin_only {
+                OriginOnlyState::Fetching { spinner_frame }
+                    if self.source_view == SourceView::OriginOnly =>
+                {
+                    Some(*spinner_frame)
+                }
+                _ => None,
+            })
     }
 
     pub(crate) fn running_status_line(&self) -> Option<String> {
@@ -470,6 +498,9 @@ impl AppState {
     pub(crate) fn tick_spinner(&mut self) {
         if let Some(running) = self.running.as_mut() {
             running.spinner_frame = running.spinner_frame.saturating_add(1);
+        }
+        if let OriginOnlyState::Fetching { spinner_frame } = &mut self.origin_only {
+            *spinner_frame = spinner_frame.saturating_add(1);
         }
     }
 
@@ -490,15 +521,22 @@ impl AppState {
     #[cfg(test)]
     pub(crate) fn set_source_view_for_test(&mut self, view: SourceView) {
         self.source_view = view;
+        self.status_line = self.list_status_line();
         self.clamp_selection();
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.rows.is_empty()
+        match (&self.source_view, &self.origin_only) {
+            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows.is_empty(),
+            _ => self.rows.is_empty(),
+        }
     }
 
     pub(crate) fn row_count(&self) -> usize {
-        self.rows.len()
+        match (&self.source_view, &self.origin_only) {
+            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows.len(),
+            _ => self.rows.len(),
+        }
     }
 
     pub(crate) fn diagnostics(&self) -> &[String] {
@@ -525,16 +563,21 @@ impl AppState {
         if !self.visible_rows().is_empty() {
             return None;
         }
-        if self.rows.is_empty() {
-            Some(self.empty_inventory_message().to_string())
-        } else if !self.filter.is_empty() {
+        if !self.filter.is_empty() {
             Some(self.copy.filter_miss_message.to_string())
+        } else if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
+            match &self.origin_only {
+                OriginOnlyState::NotFetched => Some("origin-only - not fetched".into()),
+                OriginOnlyState::Fetching { .. } => Some("fetching origin issues...".into()),
+                OriginOnlyState::Loaded { .. } => Some("no origin issues to import".into()),
+                OriginOnlyState::Error { message } => Some(message.clone()),
+            }
+        } else if self.rows.is_empty() {
+            Some(self.empty_inventory_message().to_string())
         } else if self.copy.source_view_enabled && self.source_view == SourceView::Local {
             Some("no local tasks".into())
         } else if self.copy.source_view_enabled && self.source_view == SourceView::Published {
             Some("no published tasks".into())
-        } else if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
-            Some("origin-only - not fetched".into())
         } else {
             Some(self.empty_inventory_message().to_string())
         }
@@ -562,13 +605,21 @@ impl AppState {
     }
 
     pub(crate) fn visible_rows(&self) -> Vec<&BrowserRow> {
-        self.rows
-            .iter()
-            .filter(|row| {
-                row_matches_filter(row, &self.filter)
-                    && row_matches_source_view(row, self.source_view)
-            })
-            .collect()
+        match (&self.source_view, &self.origin_only) {
+            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows
+                .iter()
+                .filter(|row| row_matches_filter(row, &self.filter))
+                .collect(),
+            (SourceView::OriginOnly, _) => Vec::new(),
+            _ => self
+                .rows
+                .iter()
+                .filter(|row| {
+                    row_matches_filter(row, &self.filter)
+                        && row_matches_source_view(row, self.source_view)
+                })
+                .collect(),
+        }
     }
 
     pub(crate) fn columns(&self) -> &[BrowserColumn] {
@@ -621,16 +672,53 @@ impl AppState {
         self.clamp_body_scroll();
     }
 
+    pub(crate) fn origin_only_needs_fetch(&self) -> bool {
+        matches!(self.origin_only, OriginOnlyState::NotFetched)
+    }
+
+    pub(crate) fn origin_fetching(&self) -> bool {
+        matches!(self.origin_only, OriginOnlyState::Fetching { .. })
+    }
+
+    pub(crate) fn begin_origin_fetch(&mut self) {
+        self.origin_only = OriginOnlyState::Fetching { spinner_frame: 0 };
+        self.selected_index = 0;
+        self.clamp_selection();
+        self.status_line = self.list_status_line();
+    }
+
+    pub(crate) fn apply_origin_fetch(
+        &mut self,
+        result: Result<Vec<BrowserRow>, String>,
+        fetched_at_label: &str,
+    ) {
+        self.origin_only = match result {
+            Ok(rows) => OriginOnlyState::Loaded {
+                rows,
+                fetched_at_label: fetched_at_label.to_string(),
+            },
+            Err(message) => OriginOnlyState::Error { message },
+        };
+        self.clamp_selection();
+        self.select_first_enabled_menu_item();
+        self.clamp_body_scroll();
+        if self.mode == Mode::List {
+            self.status_line = self.list_status_line();
+        }
+    }
+
     pub(crate) fn origin_status_counts(&self) -> Vec<(&str, usize)> {
         let mut counts = Vec::<(&str, usize)>::new();
-        for row in &self.rows {
-            if let Some((_, count)) = counts
-                .iter_mut()
-                .find(|(status, _)| *status == row.status.as_str())
-            {
-                *count += 1;
-            } else {
-                counts.push((row.status.as_str(), 1));
+        match (&self.source_view, &self.origin_only) {
+            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => {
+                for row in rows {
+                    push_origin_status_count(&mut counts, row);
+                }
+            }
+            _ => {
+                for row in &self.rows {
+                    push_origin_status_count(&mut counts, row);
+                }
             }
         }
         counts
@@ -641,6 +729,12 @@ impl AppState {
             KeyInput::Down | KeyInput::Char('j') => self.move_down(),
             KeyInput::Up | KeyInput::Char('k') => self.move_up(),
             KeyInput::Char('v') => self.open_body_view(),
+            KeyInput::Char('r')
+                if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly =>
+            {
+                self.begin_origin_fetch();
+                return Outcome::FetchOriginIssues;
+            }
             KeyInput::Char('/') => {
                 self.mode = Mode::FilterInput;
                 self.status_line = "type to filter; Esc clears filter".into();
@@ -649,8 +743,12 @@ impl AppState {
                 self.open_menu();
             }
             KeyInput::Char('q') => return Outcome::Quit,
-            KeyInput::Char('l') if self.copy.source_view_enabled => self.rotate_source_view(true),
-            KeyInput::Char('h') if self.copy.source_view_enabled => self.rotate_source_view(false),
+            KeyInput::Char('l') if self.copy.source_view_enabled => {
+                return self.rotate_source_view(true);
+            }
+            KeyInput::Char('h') if self.copy.source_view_enabled => {
+                return self.rotate_source_view(false);
+            }
             KeyInput::Char(ch) => {
                 if let Some((key, action)) = self.shortcut_dispatch(ch) {
                     return Outcome::Dispatch { key, action };
@@ -726,7 +824,7 @@ impl AppState {
         self.status_line = self.list_status_line();
     }
 
-    fn rotate_source_view(&mut self, forward: bool) {
+    fn rotate_source_view(&mut self, forward: bool) -> Outcome {
         self.source_view = if forward {
             self.source_view.next()
         } else {
@@ -735,17 +833,40 @@ impl AppState {
         self.selected_index = 0;
         self.clamp_selection();
         self.status_line = self.list_status_line();
+        if self.source_view == SourceView::OriginOnly && self.origin_only_needs_fetch() {
+            self.begin_origin_fetch();
+            return Outcome::FetchOriginIssues;
+        }
+        Outcome::Continue
     }
 
     fn list_status_line(&self) -> String {
         if self.copy.source_view_enabled {
-            format!(
+            let mut line = format!(
                 "{}  [view: {}]",
                 self.copy.default_status_line,
                 self.source_view().label()
-            )
+            );
+            if self.source_view == SourceView::OriginOnly {
+                if let Some(status) = self.origin_only_status_label() {
+                    line.push_str(&format!("  [origin: {status}]"));
+                }
+            }
+            line
         } else {
             self.copy.default_status_line.to_string()
+        }
+    }
+
+    fn origin_only_status_label(&self) -> Option<String> {
+        match &self.origin_only {
+            OriginOnlyState::NotFetched => Some("not fetched".into()),
+            OriginOnlyState::Fetching { .. } => Some("fetching".into()),
+            OriginOnlyState::Loaded {
+                fetched_at_label, ..
+            } if !fetched_at_label.trim().is_empty() => Some(format!("fetched {fetched_at_label}")),
+            OriginOnlyState::Loaded { .. } => Some("fetched".into()),
+            OriginOnlyState::Error { message } => Some(format!("error: {message}")),
         }
     }
 
@@ -975,6 +1096,17 @@ fn row_matches_source_view(row: &BrowserRow, view: SourceView) -> bool {
     }
 }
 
+fn push_origin_status_count<'a>(counts: &mut Vec<(&'a str, usize)>, row: &'a BrowserRow) {
+    if let Some((_, count)) = counts
+        .iter_mut()
+        .find(|(status, _)| *status == row.status.as_str())
+    {
+        *count += 1;
+    } else {
+        counts.push((row.status.as_str(), 1));
+    }
+}
+
 #[cfg(test)]
 fn default_task_columns() -> Vec<BrowserColumn> {
     vec![
@@ -1027,6 +1159,12 @@ mod tests {
     fn source_row(key: &str, source: &str) -> BrowserRow {
         let mut r = row(key, key, "stale");
         r.source = source.into();
+        r
+    }
+
+    fn origin_row(key: &str) -> BrowserRow {
+        let mut r = source_row(key, "provider-origin");
+        r.key = key.into();
         r
     }
 
@@ -1319,6 +1457,65 @@ mod tests {
         ]);
         app.set_source_view_for_test(SourceView::OriginOnly);
         assert!(app.visible_keys().is_empty());
+    }
+
+    #[test]
+    fn origin_only_view_shows_loaded_cache_not_local_rows() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(
+            Ok(vec![origin_row("github:175"), origin_row("github:178")]),
+            "just now",
+        );
+
+        assert_eq!(app.visible_keys(), vec!["github:175", "github:178"]);
+        assert!(app.status_line().contains("just now"));
+    }
+
+    #[test]
+    fn origin_only_error_shows_message_and_empty() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Err("github not authenticated".into()), "");
+
+        assert!(app.visible_keys().is_empty());
+        assert!(app.status_line().contains("not authenticated"));
+    }
+
+    #[test]
+    fn origin_only_nav_noop_when_empty() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+
+        app.handle(KeyInput::Char('j'));
+
+        assert!(app.selected_row().is_none());
+    }
+
+    #[test]
+    fn origin_only_cache_persists_on_reentry_no_refetch_flag() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+        app.set_source_view_for_test(SourceView::Local);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+
+        assert!(!app.origin_only_needs_fetch());
+        assert_eq!(app.visible_keys(), vec!["github:175"]);
+    }
+
+    #[test]
+    fn entering_origin_only_requests_fetch_once_until_refetch() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+
+        assert_eq!(app.handle(KeyInput::Char('l')), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('l')), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('l')), Outcome::FetchOriginIssues);
+        assert!(app.origin_fetching());
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+        assert_eq!(app.handle(KeyInput::Char('h')), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('l')), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('r')), Outcome::FetchOriginIssues);
     }
 
     #[test]
