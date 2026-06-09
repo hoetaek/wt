@@ -53,6 +53,7 @@ impl DispatchBackend for CtxBackend<'_> {
             | OriginAction::Push
             | OriginAction::Publish
             | OriginAction::Attach
+            | OriginAction::Import
             | OriginAction::Archive => OutputSink::Worker,
             OriginAction::KeepLocal | OriginAction::OpenInBrowser | OriginAction::CopyReference => {
                 OutputSink::StatusLine
@@ -68,6 +69,7 @@ impl DispatchBackend for CtxBackend<'_> {
             OriginAction::Push => "push",
             OriginAction::Publish => "publish",
             OriginAction::Attach => "attach",
+            OriginAction::Import => "import",
             OriginAction::Archive => "archive",
             OriginAction::KeepLocal | OriginAction::OpenInBrowser | OriginAction::CopyReference => {
                 "run"
@@ -86,6 +88,10 @@ impl DispatchBackend for CtxBackend<'_> {
                 Box::new(move |ctx| commands::task_origin::publish(ctx, &[key]))
             }
             OriginAction::Attach => Box::new(move |ctx| attach_origin(ctx, &key)),
+            OriginAction::Import => {
+                let issue = origin_only_import_id(&key);
+                Box::new(move |ctx| commands::task_origin::import(ctx, &[issue]))
+            }
             OriginAction::Archive => {
                 Box::new(move |ctx| commands::task_archive::archive(ctx, &[key]))
             }
@@ -127,6 +133,7 @@ impl DispatchBackend for CtxBackend<'_> {
             | OriginAction::Push
             | OriginAction::Publish
             | OriginAction::Attach
+            | OriginAction::Import
             | OriginAction::Archive => bail!("{action:?} is a worker action"),
         }
     }
@@ -150,10 +157,11 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             | OriginAction::Pull
             | OriginAction::Push
             | OriginAction::Attach => OutputSink::Worker,
-            // Publish, KeepLocal, and Archive answer with a one-line
-            // unsupported notice for workflows, so they stay in the browser.
+            // Unsupported task-only actions answer with a one-line notice for
+            // workflows, so they stay in the browser.
             OriginAction::Publish
             | OriginAction::KeepLocal
+            | OriginAction::Import
             | OriginAction::Archive
             | OriginAction::OpenInBrowser
             | OriginAction::CopyReference => OutputSink::StatusLine,
@@ -169,6 +177,7 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             OriginAction::Attach => "attach",
             OriginAction::Publish
             | OriginAction::KeepLocal
+            | OriginAction::Import
             | OriginAction::Archive
             | OriginAction::OpenInBrowser
             | OriginAction::CopyReference => "run",
@@ -193,6 +202,7 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             OriginAction::Attach => Box::new(move |ctx| attach_workflow_origin(ctx, &key)),
             OriginAction::Publish
             | OriginAction::KeepLocal
+            | OriginAction::Import
             | OriginAction::Archive
             | OriginAction::OpenInBrowser
             | OriginAction::CopyReference => {
@@ -228,6 +238,9 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             OriginAction::KeepLocal => Ok(format!(
                 "Keep local-only is not available for workflow {key}; workflow origins are optional by omission"
             )),
+            OriginAction::Import => Ok(format!(
+                "Import is not available for workflow {key}; import provider issues from the task browser"
+            )),
             OriginAction::Archive => Ok(format!(
                 "Archive is not available for workflow {key}; archive tasks from the task browser"
             )),
@@ -240,6 +253,15 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             | OriginAction::Attach => bail!("{action:?} is a worker action"),
         }
     }
+}
+
+fn origin_only_import_id(key: &str) -> String {
+    key.split_once(':')
+        .map(|(_, id)| id)
+        .unwrap_or(key)
+        .trim()
+        .trim_start_matches('#')
+        .to_string()
 }
 
 pub(crate) enum DispatchStart {
@@ -459,16 +481,32 @@ fn command_failure(stderr: &str, stdout: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::mock::{MockRunner, MockUi};
-    use crate::context::{Ctx, CtxOptions, OutputMode, UserInterface};
+    use crate::context::{CmdOutput, CommandRunner, Ctx, CtxOptions, OutputMode, UserInterface};
     use crate::error::WtError;
     use crate::origin_action_menu::OriginAction;
     use crate::origin_snapshot::{FieldSnapshot, OriginRef, OriginSnapshot, write_snapshot};
+    use crate::task;
     use crate::tui::remote_ui::{UiReply, UiRequest};
+    use std::path::Path;
     use std::sync::Arc;
 
     struct FakeJobBackend;
+
+    struct SharedRunner {
+        inner: Arc<MockRunner>,
+    }
+
+    impl CommandRunner for SharedRunner {
+        fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+            self.inner.run(cmd, args, cwd)
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            self.inner.has_command(cmd)
+        }
+    }
 
     impl DispatchBackend for FakeJobBackend {
         fn output_sink(&self, action: OriginAction) -> OutputSink {
@@ -573,6 +611,27 @@ mod tests {
         )
     }
 
+    fn github_config() -> Config {
+        Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Github,
+                gh_user: None,
+                origin_policy: Default::default(),
+            }),
+            ..Config::default()
+        }
+    }
+
+    fn test_ctx_with_runner(dir: &std::path::Path, config: Config, runner: Arc<MockRunner>) -> Ctx {
+        Ctx::new(
+            dir.to_path_buf(),
+            dir.to_path_buf(),
+            config,
+            Box::new(SharedRunner { inner: runner }),
+            Box::new(MockUi::new()),
+        )
+    }
+
     fn write_task(root: &std::path::Path, key: &str) {
         let tasks_dir = root.join(".wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -602,6 +661,19 @@ body = "Task body"
     }
 
     #[test]
+    fn import_is_a_worker_action_with_verb() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let backend = CtxBackend::new(&ctx);
+
+        assert_eq!(
+            backend.output_sink(OriginAction::Import),
+            OutputSink::Worker
+        );
+        assert_eq!(backend.verb(OriginAction::Import), "import");
+    }
+
+    #[test]
     fn archive_worker_job_calls_task_archive_backend() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = test_ctx_with_confirm(dir.path(), true);
@@ -620,6 +692,47 @@ body = "Task body"
     }
 
     #[test]
+    fn import_worker_job_calls_task_origin_import_with_origin_only_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"number":52,"title":"Fix editor","body":"Long issue body","url":"https://github.com/acme/repo/issues/52"}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("https://github.com/acme/repo/tree/52-fix-editor", true);
+        let runner = Arc::new(runner);
+        let ctx = test_ctx_with_runner(dir.path(), github_config(), Arc::clone(&runner));
+        let backend = CtxBackend::new(&ctx);
+
+        let job = backend.worker_job(OriginAction::Import, "github:52");
+        job(&ctx).unwrap();
+
+        let document = task::read_task_document(&ctx, "52").unwrap();
+        assert_eq!(document.title, "Fix editor");
+        let origin = document.origin.unwrap();
+        assert_eq!(origin.provider, "github");
+        assert_eq!(origin.id, "#52");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "issue".to_string(),
+                "view".to_string(),
+                "52".to_string(),
+                "--json".to_string(),
+                "number,title,body,url".to_string(),
+            ]
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|(_, args, _)| { !args.iter().any(|arg| arg == "github:52") })
+        );
+    }
+
+    #[test]
     fn task_backend_classifies_actions_by_worker_need() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = test_ctx(dir.path());
@@ -633,6 +746,7 @@ body = "Task body"
             OriginAction::Publish,
             OriginAction::Attach,
             OriginAction::Archive,
+            OriginAction::Import,
         ] {
             assert_eq!(
                 backend.output_sink(action),
@@ -678,6 +792,7 @@ body = "Task body"
             OriginAction::Archive,
             OriginAction::OpenInBrowser,
             OriginAction::CopyReference,
+            OriginAction::Import,
         ] {
             assert_eq!(
                 backend.output_sink(action),
@@ -744,6 +859,22 @@ body = "Task body"
         assert_eq!(
             message,
             "Archive is not available for workflow 2026-06-06-001; archive tasks from the task browser"
+        );
+    }
+
+    #[test]
+    fn workflow_import_returns_unsupported_status_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let backend = WorkflowCtxBackend::new(&ctx);
+
+        let message = backend
+            .run_status_line(OriginAction::Import, "2026-06-06-001")
+            .unwrap();
+
+        assert_eq!(
+            message,
+            "Import is not available for workflow 2026-06-06-001; import provider issues from the task browser"
         );
     }
 

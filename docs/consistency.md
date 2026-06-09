@@ -1635,8 +1635,8 @@ worker가 `build_provider(ctx).list_issues()`를 자동 실행하고, 세션 캐
 OriginOnly reconcile은 provider 이슈를 row로 만들기 전에 로컬 TaskDocument의 정규화된
 `(provider, id)` origin 참조와 실제 import 경로의 would-be key
 (`task::safe_task_key(issue.identifier)`) 충돌을 모두 거른다. 통과한 row는
-`source == "provider-origin"`이지만 local path/branch가 없고, import action은 S3까지
-비활성 placeholder다. OriginOnly cache는 AppState 세션 메모리에만 있고 디스크에
+`source == "provider-origin"`이지만 local path/branch가 없고, action menu에는
+`Import to local`만 노출된다. OriginOnly cache는 AppState 세션 메모리에만 있고 디스크에
 영속하지 않는다. Fetch 적용 시점에 staleness label을 저장하며 render는 clock을 읽지
 않는다. State-changing action이 local rows를 갱신하면 OriginOnly cache는 NotFetched로
 무효화된다. OriginOnly 상태는 loading spinner, 미설정/미인증/network error를 담는

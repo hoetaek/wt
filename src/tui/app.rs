@@ -662,7 +662,7 @@ impl AppState {
     ) {
         self.rows = rows;
         self.diagnostics = diagnostics;
-        self.origin_only = OriginOnlyState::NotFetched;
+        self.invalidate_origin_only();
         self.mode = Mode::List;
         self.status_line = self.list_status_line();
         self.selected_index = self
@@ -673,6 +673,10 @@ impl AppState {
         self.clamp_selection();
         self.select_first_enabled_menu_item();
         self.clamp_body_scroll();
+    }
+
+    pub(crate) fn invalidate_origin_only(&mut self) {
+        self.origin_only = OriginOnlyState::NotFetched;
     }
 
     pub(crate) fn origin_only_needs_fetch(&self) -> bool {
@@ -738,6 +742,16 @@ impl AppState {
             {
                 self.begin_origin_fetch();
                 return Outcome::FetchOriginIssues;
+            }
+            KeyInput::Char('i')
+                if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly =>
+            {
+                if let Some(row) = self.selected_row() {
+                    return Outcome::Dispatch {
+                        key: row.key.clone(),
+                        action: OriginAction::Import,
+                    };
+                }
             }
             KeyInput::Char('/') => {
                 self.mode = Mode::FilterInput;
@@ -1169,6 +1183,8 @@ mod tests {
     fn origin_row(key: &str) -> BrowserRow {
         let mut r = source_row(key, "provider-origin");
         r.key = key.into();
+        r.status = "origin-only".into();
+        r.menu = OriginActionMenu::for_origin_issue_placeholder("Provider issue");
         r
     }
 
@@ -1525,6 +1541,18 @@ mod tests {
     }
 
     #[test]
+    fn invalidate_origin_only_resets_loaded_origin_cache() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+
+        app.invalidate_origin_only();
+
+        assert!(app.origin_only_needs_fetch());
+        assert!(app.visible_keys().is_empty());
+    }
+
+    #[test]
     fn origin_only_non_loaded_header_inventory_is_empty() {
         let mut app = AppState::new(vec![source_row("local-a", "local")]);
         app.set_source_view_for_test(SourceView::OriginOnly);
@@ -1556,6 +1584,46 @@ mod tests {
         assert_eq!(app.handle(KeyInput::Char('h')), Outcome::Continue);
         assert_eq!(app.handle(KeyInput::Char('l')), Outcome::Continue);
         assert_eq!(app.handle(KeyInput::Char('r')), Outcome::FetchOriginIssues);
+    }
+
+    #[test]
+    fn i_key_requests_import_for_selected_origin_only_row() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+
+        assert_eq!(
+            app.handle(KeyInput::Char('i')),
+            Outcome::Dispatch {
+                key: "github:175".into(),
+                action: OriginAction::Import,
+            }
+        );
+    }
+
+    #[test]
+    fn i_key_ignored_in_local_view() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.set_source_view_for_test(SourceView::Local);
+
+        assert_eq!(app.handle(KeyInput::Char('i')), Outcome::Continue);
+    }
+
+    #[test]
+    fn import_refresh_can_show_imported_issue_as_published_row() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+
+        app.replace_rows_preserving_selection(
+            vec![source_row("175", "provider-origin")],
+            Vec::new(),
+            "github:175",
+        );
+        app.set_source_view_for_test(SourceView::Published);
+
+        assert!(app.origin_only_needs_fetch());
+        assert_eq!(app.visible_keys(), vec!["175"]);
     }
 
     #[test]

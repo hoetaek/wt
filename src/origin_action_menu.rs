@@ -8,6 +8,7 @@ pub enum OriginAction {
     Push,
     Publish,
     Attach,
+    Import,
     KeepLocal,
     Archive,
     OpenInBrowser,
@@ -113,11 +114,10 @@ impl OriginActionMenu {
     pub fn for_origin_issue_placeholder(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
-            items: vec![OriginActionItem::disabled(
-                OriginAction::Attach,
-                "Import as task",
+            items: vec![OriginActionItem::enabled(
+                OriginAction::Import,
+                "Import to local",
                 "i",
-                "import is handled by a follow-up task",
             )],
             child_origins: Vec::new(),
         }
@@ -677,6 +677,25 @@ mod tests {
             origin.action_for("Archive task"),
             Some(OriginAction::Archive)
         );
+
+        let origin_issue = OriginActionMenu::for_origin_issue_placeholder("Provider issue");
+        assert_eq!(
+            origin_issue.action_for("Import to local"),
+            Some(OriginAction::Import)
+        );
+    }
+
+    #[test]
+    fn origin_issue_placeholder_only_offers_import() {
+        let menu = OriginActionMenu::for_origin_issue_placeholder("Provider issue");
+
+        assert_eq!(menu.items().len(), 1);
+        let item = &menu.items()[0];
+        assert_eq!(item.action(), OriginAction::Import);
+        assert_eq!(item.label(), "Import to local");
+        assert_eq!(item.shortcut(), "i");
+        assert!(item.is_enabled());
+        assert_eq!(menu.action_for_shortcut("i"), Some(OriginAction::Import));
     }
 
     #[test]
