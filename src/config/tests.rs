@@ -829,6 +829,37 @@ fn workflow_policy_rejects_boolean_pull_request_values() {
 }
 
 #[test]
+fn profile_link_specs_dedupe_by_destination() {
+    let base: Config = toml::from_str(
+        r#"
+[worktree]
+link = [{ from = ".local/default-skills", to = ".codex/skills" }]
+"#,
+    )
+    .unwrap();
+    let profile: Config = toml::from_str(
+        r#"
+[worktree]
+link = [
+    { from = ".local/user-skills", to = ".codex/skills" },
+    { from = ".local/bin", to = ".codex/bin" },
+]
+"#,
+    )
+    .unwrap();
+
+    let merged = merge_config(&base, profile);
+
+    assert_eq!(
+        pathspec_pairs(&merged.worktree.link),
+        vec![
+            (".local/default-skills", ".codex/skills"),
+            (".local/bin", ".codex/bin")
+        ]
+    );
+}
+
+#[test]
 fn local_editor_config_overrides_command_and_preserves_placement() {
     let base: Config = toml::from_str(
         r#"

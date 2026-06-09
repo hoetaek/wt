@@ -881,7 +881,8 @@ layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 
 | 섹션 / 필드 | 동작 | 의미 |
 |---|---|---|
 | `worktree.path`, `worktree.inject_local_context`, `worktree.naming` | REPLACE (later wins if set) | 단일 값. 윗 layer가 명시하면 아랫 layer를 덮어쓴다. |
-| `worktree.copy`, `worktree.link` | extend, `(from, to)` 쌍 dedupe | 문자열 항목은 같은 이름(`from == to`)으로 materialize하고, `{ from, to }` 항목은 rename한다. 같은 from/to 쌍은 한 번만 나온다. |
+| `worktree.copy` | extend, `(from, to)` 쌍 dedupe | 문자열 항목은 같은 이름(`from == to`)으로 복사하고, `{ from, to }` 항목은 rename 복사한다. 같은 from/to 쌍은 한 번만 나온다. |
+| `worktree.link` | extend, `to` destination dedupe | 문자열 항목은 같은 이름(`from == to`)으로 symlink하고, `{ from, to }` 항목은 rename symlink한다. 하나의 destination에는 symlink 하나만 만들 수 있으므로 같은 `to`는 아랫 layer의 첫 항목이 유지된다. |
 | `workspace.tabs`, `workspace.post_deps_tabs` | extend, value-level dedupe | 윗 layer가 항목을 추가한다. 같은 문자열은 한 번만 나온다. |
 | `setup.deps` | extend (현재 dedupe 없음) | 같은 dep을 두 layer가 적으면 두 번 실행된다. dep script는 idempotent하게 짠다. |
 | `setup.env`, `setup.env_files[path]`, `workspace.colors` | HashMap extend (key-level overwrite) | 같은 key를 윗 layer가 덮어쓴다. |
