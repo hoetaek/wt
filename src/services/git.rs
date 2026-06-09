@@ -237,9 +237,11 @@ impl<'a> GitService<'a> {
     }
 
     pub fn status_porcelain(&self, cwd: &Path) -> Result<String> {
-        let out = self
-            .runner
-            .run("git", &["status", "--porcelain"], Some(cwd))?;
+        let out = self.runner.run(
+            "git",
+            &["status", "--porcelain", "--untracked-files=all"],
+            Some(cwd),
+        )?;
         if !out.success {
             bail!(
                 "git status --porcelain failed: {}",
@@ -733,6 +735,23 @@ branch refs/heads/main
         });
 
         assert!(!runner.overlapped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn status_porcelain_requests_full_untracked_paths() {
+        let mut runner = MockRunner::new();
+        runner.add_response("?? .codex/skills", true);
+        let cwd = PathBuf::from("/home/dev/sample-app-worktree");
+        let git = GitService::new(&runner, None);
+
+        assert_eq!(git.status_porcelain(&cwd).unwrap(), "?? .codex/skills");
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["status", "--porcelain", "--untracked-files=all"]
+        );
+        assert_eq!(calls[0].2.as_ref(), Some(&cwd));
     }
 
     #[test]

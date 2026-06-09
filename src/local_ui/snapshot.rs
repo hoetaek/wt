@@ -160,16 +160,9 @@ struct IssuesSummary {
 struct WorktreeSummary {
     path: Option<String>,
     copy: Vec<String>,
-    copy_as: Vec<CopyAsSummary>,
     link: Vec<String>,
     inject_local_context: bool,
     naming: Option<WorktreeNamingSummary>,
-}
-
-#[derive(Debug, Serialize)]
-struct CopyAsSummary {
-    from: String,
-    to: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -449,7 +442,6 @@ struct ProfileSummary {
     name: String,
     path: String,
     copy: Vec<String>,
-    copy_as: Vec<CopyAsSummary>,
     link: Vec<String>,
     agent: String,
     has_site: bool,
@@ -1043,8 +1035,7 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
             ProfileSummary {
                 name: profile.name,
                 path: relative_path(ctx, &profile.path),
-                copy: same_pathspecs(&profile.config.worktree.copy),
-                copy_as: copy_as_summary(&profile.config.worktree.copy),
+                copy: pathspec_summary_values(&profile.config.worktree.copy),
                 link: pathspec_summary_values(&profile.config.worktree.link),
                 agent,
                 has_site,
@@ -1425,20 +1416,6 @@ fn agent_summary(agent: Option<&AgentConfig>) -> Option<AgentSummary> {
     })
 }
 
-fn same_pathspecs(specs: &[PathSpec]) -> Vec<String> {
-    specs
-        .iter()
-        .filter_map(|spec| match spec {
-            PathSpec::Same(value) => Some(value.clone()),
-            PathSpec::Rename { .. } => None,
-        })
-        .collect()
-}
-
-fn copy_as_summary(specs: &[PathSpec]) -> Vec<CopyAsSummary> {
-    rename_pathspec_summary(specs)
-}
-
 fn pathspec_summary_values(specs: &[PathSpec]) -> Vec<String> {
     specs
         .iter()
@@ -1449,27 +1426,13 @@ fn pathspec_summary_values(specs: &[PathSpec]) -> Vec<String> {
         .collect()
 }
 
-fn rename_pathspec_summary(specs: &[PathSpec]) -> Vec<CopyAsSummary> {
-    specs
-        .iter()
-        .filter_map(|spec| match spec {
-            PathSpec::Same(_) => None,
-            PathSpec::Rename { from, to } => Some(CopyAsSummary {
-                from: from.clone(),
-                to: to.clone(),
-            }),
-        })
-        .collect()
-}
-
 fn worktree_summary(worktree: &WorktreeConfig) -> Option<WorktreeSummary> {
     if *worktree == WorktreeConfig::default() {
         return None;
     }
     Some(WorktreeSummary {
         path: worktree.path.clone(),
-        copy: same_pathspecs(&worktree.copy),
-        copy_as: copy_as_summary(&worktree.copy),
+        copy: pathspec_summary_values(&worktree.copy),
         link: pathspec_summary_values(&worktree.link),
         inject_local_context: worktree.inject_local_context.is_some(),
         naming: worktree
@@ -2013,10 +1976,12 @@ mod tests {
         let profile = snapshot.profiles.items.first().unwrap();
         assert_eq!(
             profile.copy,
-            vec![".env".to_string(), ".linear.toml".to_string()]
+            vec![
+                ".env".to_string(),
+                ".linear.toml".to_string(),
+                ".local/profiles/codex/scaffold -> .".to_string()
+            ]
         );
-        assert_eq!(profile.copy_as[0].from, ".local/profiles/codex/scaffold");
-        assert_eq!(profile.copy_as[0].to, ".");
         assert_eq!(
             profile.link,
             vec![
