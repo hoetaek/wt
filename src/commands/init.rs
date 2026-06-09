@@ -2484,7 +2484,7 @@ fn resolve_review_policy(
         // explicit none을 가진 경우만 그 명시 의도를 보존한다.
         let had_explicit_none =
             matches!(existing, Some(policy) if policy.codex_base == ReviewCodexBasePolicy::None);
-        Ok(had_explicit_none.then(|| ReviewDefaultPolicy {
+        Ok(had_explicit_none.then_some(ReviewDefaultPolicy {
             codex_base: ReviewCodexBasePolicy::None,
         }))
     } else {
@@ -5432,6 +5432,74 @@ colors = { task = "", issue = "cyan" }
                 codex_base: ReviewCodexBasePolicy::None,
             }),
             "기존 explicit none 수락은 섹션을 보존해야 한다"
+        );
+    }
+
+    #[test]
+    fn init_yes_force_rerun_preserves_required_review_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+        let config_path = ctx.storage_root.config_toml();
+        let mut content = std::fs::read_to_string(&config_path).unwrap();
+        content.push_str("\n[review]\ncodex_base = \"required\"\n");
+        std::fs::write(&config_path, &content).unwrap();
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                force: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let rewritten = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            rewritten.contains("codex_base = \"required\""),
+            "--yes --force 재실행은 기존 review 정책을 보존해야 한다: {rewritten}"
+        );
+    }
+
+    #[test]
+    fn init_yes_force_rerun_preserves_explicit_none_review_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+        let config_path = ctx.storage_root.config_toml();
+        let mut content = std::fs::read_to_string(&config_path).unwrap();
+        content.push_str("\n[review]\ncodex_base = \"none\"\n");
+        std::fs::write(&config_path, &content).unwrap();
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                force: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let rewritten = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            rewritten.contains("codex_base = \"none\""),
+            "--yes --force 재실행은 explicit none도 보존해야 한다: {rewritten}"
         );
     }
 
