@@ -1140,6 +1140,7 @@ fn is_configured_link_status_line(ctx: &Ctx, line: &str) -> bool {
     let Some(path) = porcelain_status_path(line) else {
         return false;
     };
+    let path = path.as_ref();
     ctx.config
         .worktree
         .link
@@ -1161,7 +1162,7 @@ fn status_line_may_hide_configured_link(ctx: &Ctx, line: &str) -> bool {
     let Some(path) = porcelain_status_path(line) else {
         return false;
     };
-    let path = path.trim_end_matches('/');
+    let path = path.as_ref().trim_end_matches('/');
     ctx.config
         .worktree
         .link
@@ -1170,10 +1171,57 @@ fn status_line_may_hide_configured_link(ctx: &Ctx, line: &str) -> bool {
         .any(|linked| linked != path && linked.starts_with(&format!("{path}/")))
 }
 
-fn porcelain_status_path(line: &str) -> Option<&str> {
+fn porcelain_status_path(line: &str) -> Option<std::borrow::Cow<'_, str>> {
     let path = line.get(3..)?.trim();
     let path = path.rsplit(" -> ").next().unwrap_or(path);
-    Some(path.trim_matches('"'))
+    Some(unquote_git_path(path))
+}
+
+/// `git status --porcelain`은 core.quotePath에 따라 특수문자/비ASCII 경로를
+/// C-style 문자열(따옴표 + backslash escape + octal byte)로 인용한다. 인용을
+/// 풀지 않으면 configured link 경로 비교가 항상 실패한다.
+fn unquote_git_path(path: &str) -> std::borrow::Cow<'_, str> {
+    let Some(inner) = path
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return std::borrow::Cow::Borrowed(path);
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(inner.len());
+    let mut bytes = inner.bytes().peekable();
+    while let Some(byte) = bytes.next() {
+        if byte != b'\\' {
+            out.push(byte);
+            continue;
+        }
+        match bytes.next() {
+            Some(b'"') => out.push(b'"'),
+            Some(b'\\') => out.push(b'\\'),
+            Some(b'a') => out.push(0x07),
+            Some(b'b') => out.push(0x08),
+            Some(b'f') => out.push(0x0c),
+            Some(b'n') => out.push(b'\n'),
+            Some(b'r') => out.push(b'\r'),
+            Some(b't') => out.push(b'\t'),
+            Some(b'v') => out.push(0x0b),
+            Some(digit @ b'0'..=b'7') => {
+                let mut value = u32::from(digit - b'0');
+                for _ in 0..2 {
+                    match bytes.peek() {
+                        Some(next @ b'0'..=b'7') => {
+                            value = value * 8 + u32::from(*next - b'0');
+                            bytes.next();
+                        }
+                        _ => break,
+                    }
+                }
+                out.push(value as u8);
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    std::borrow::Cow::Owned(String::from_utf8_lossy(&out).into_owned())
 }
 
 #[cfg(test)]
@@ -1805,5 +1853,57 @@ run = "run-unrelated"
             calls[1].1,
             vec!["status", "--porcelain", "--untracked-files=all"]
         );
+    }
+
+    #[test]
+    fn porcelain_status_path_returns_plain_paths() {
+        assert_eq!(
+            porcelain_status_path("?? src/app.rs").as_deref(),
+            Some("src/app.rs")
+        );
+        assert_eq!(
+            porcelain_status_path("R  old.rs -> new.rs").as_deref(),
+            Some("new.rs")
+        );
+    }
+
+    #[test]
+    fn porcelain_status_path_unquotes_git_escaped_paths() {
+        assert_eq!(
+            porcelain_status_path(r#"?? "src/tab\there.txt""#).as_deref(),
+            Some("src/tab\there.txt")
+        );
+        assert_eq!(
+            porcelain_status_path(r#"?? "back\\slash""#).as_deref(),
+            Some("back\\slash")
+        );
+        assert_eq!(
+            porcelain_status_path(r#"?? "\355\225\234\352\270\200.md""#).as_deref(),
+            Some("한글.md")
+        );
+    }
+
+    #[test]
+    fn configured_link_detection_matches_git_quoted_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.worktree.link = vec![PathSpec::Same("한글".into())];
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        // git이 core.quotePath로 "한글/note.md"를 octal escape한 형태
+        assert!(
+            is_configured_link_status_line(&ctx, r#"?? "\355\225\234\352\270\200/note.md""#),
+            "escape된 configured link 경로도 link 라인으로 인식해야 한다"
+        );
+        assert!(!is_configured_link_status_line(
+            &ctx,
+            r#"?? "\355\225\234\352\270\200-else/note.md""#
+        ));
     }
 }
