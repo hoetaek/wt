@@ -369,6 +369,61 @@ fn parse_worktree_list(porcelain: &str) -> Result<Vec<WorktreeEntry>> {
     Ok(entries)
 }
 
+/// `git status --porcelain` 한 줄에서 경로를 추출한다. rename(`a -> b`)은 대상
+/// 경로를 취하고, core.quotePath가 인용한 경로는 unquote해 돌려준다.
+pub fn porcelain_status_path(line: &str) -> Option<std::borrow::Cow<'_, str>> {
+    let path = line.get(3..)?.trim();
+    let path = path.rsplit(" -> ").next().unwrap_or(path);
+    Some(unquote_git_path(path))
+}
+
+/// `git status --porcelain`은 core.quotePath에 따라 특수문자/비ASCII 경로를
+/// C-style 문자열(따옴표 + backslash escape + octal byte)로 인용한다. 인용을
+/// 풀지 않으면 configured link 경로 비교가 항상 실패한다.
+pub fn unquote_git_path(path: &str) -> std::borrow::Cow<'_, str> {
+    let Some(inner) = path
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return std::borrow::Cow::Borrowed(path);
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(inner.len());
+    let mut bytes = inner.bytes().peekable();
+    while let Some(byte) = bytes.next() {
+        if byte != b'\\' {
+            out.push(byte);
+            continue;
+        }
+        match bytes.next() {
+            Some(b'"') => out.push(b'"'),
+            Some(b'\\') => out.push(b'\\'),
+            Some(b'a') => out.push(0x07),
+            Some(b'b') => out.push(0x08),
+            Some(b'f') => out.push(0x0c),
+            Some(b'n') => out.push(b'\n'),
+            Some(b'r') => out.push(b'\r'),
+            Some(b't') => out.push(b'\t'),
+            Some(b'v') => out.push(0x0b),
+            Some(digit @ b'0'..=b'7') => {
+                let mut value = u32::from(digit - b'0');
+                for _ in 0..2 {
+                    match bytes.peek() {
+                        Some(next @ b'0'..=b'7') => {
+                            value = value * 8 + u32::from(*next - b'0');
+                            bytes.next();
+                        }
+                        _ => break,
+                    }
+                }
+                out.push(value as u8);
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    std::borrow::Cow::Owned(String::from_utf8_lossy(&out).into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
