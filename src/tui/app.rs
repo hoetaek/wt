@@ -724,8 +724,14 @@ impl AppState {
         self.reset_detail_scroll();
     }
 
+    // 헤더의 빈-상태 분기(empty_origin_summary)는 인벤토리가 진짜 비었을 때만.
+    // 필터/뷰로 0행이 된 경우는 총계 "0"을 보여줘야 표와 일관된다 (#198 리뷰).
     pub(crate) fn is_empty(&self) -> bool {
-        self.visible_rows().is_empty()
+        match (&self.source_view, &self.origin_only) {
+            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows.is_empty(),
+            (SourceView::OriginOnly, _) => true,
+            _ => self.rows.is_empty(),
+        }
     }
 
     // 헤더 총계도 status 분포와 같은 visible 행 집합을 센다 (표현 일치).
@@ -2063,8 +2069,11 @@ mod tests {
         assert!(!app.is_empty());
 
         app.filter = "no-such-row".into();
-        assert_eq!(app.row_count(), 0);
-        assert!(app.is_empty());
+        assert_eq!(app.row_count(), 0, "필터 미스는 0 총계로 표시");
+        assert!(
+            !app.is_empty(),
+            "인벤토리가 남아 있으면 빈-상태 분기가 아니라 0 총계를 보여야 한다"
+        );
     }
 
     #[test]
