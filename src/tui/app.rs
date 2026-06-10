@@ -725,19 +725,12 @@ impl AppState {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        match (&self.source_view, &self.origin_only) {
-            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows.is_empty(),
-            (SourceView::OriginOnly, _) => true,
-            _ => self.rows.is_empty(),
-        }
+        self.visible_rows().is_empty()
     }
 
+    // 헤더 총계도 status 분포와 같은 visible 행 집합을 센다 (표현 일치).
     pub(crate) fn row_count(&self) -> usize {
-        match (&self.source_view, &self.origin_only) {
-            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows.len(),
-            (SourceView::OriginOnly, _) => 0,
-            _ => self.rows.len(),
-        }
+        self.visible_rows().len()
     }
 
     pub(crate) fn diagnostics(&self) -> &[String] {
@@ -2052,6 +2045,26 @@ mod tests {
 
         assert!(app.origin_only_needs_fetch());
         assert!(app.visible_keys().is_empty());
+    }
+
+    #[test]
+    fn header_total_and_counts_share_visible_row_set() {
+        let mut app = AppState::new(vec![
+            source_row("local-a", "local"),
+            source_row("pub-b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::Published);
+
+        assert_eq!(
+            app.row_count(),
+            1,
+            "헤더 총계는 표와 같은 행 집합을 세야 한다"
+        );
+        assert!(!app.is_empty());
+
+        app.filter = "no-such-row".into();
+        assert_eq!(app.row_count(), 0);
+        assert!(app.is_empty());
     }
 
     #[test]
