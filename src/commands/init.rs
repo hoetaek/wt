@@ -1718,6 +1718,10 @@ fn pathspecs_with_resolved_same(current: &[PathSpec], resolved_same: Vec<String>
         }
     }
     merged.extend(same_values.map(PathSpec::Same));
+    // 같은 목적지를 겨냥하는 spec이 둘 이상이면 materialization이 모호해지므로
+    // (입력 중복, 보존된 rename 목적지와 새 입력 충돌) 첫 항목만 남긴다.
+    let mut seen_destinations = std::collections::HashSet::new();
+    merged.retain(|spec| seen_destinations.insert(spec.to().to_string()));
     merged
 }
 
@@ -2972,6 +2976,28 @@ mod tests {
                 (".local/skills", ".codex/skills"),
                 (".env.local", ".env.local")
             ]
+        );
+    }
+
+    #[test]
+    fn init_pathspec_same_resolution_dedupes_destinations() {
+        let current = vec![
+            PathSpec::Rename {
+                from: ".env.example".into(),
+                to: ".env".into(),
+            },
+            PathSpec::Same(".env.local".into()),
+        ];
+
+        let resolved = pathspecs_with_resolved_same(
+            &current,
+            vec![".env.local".into(), ".env".into(), ".env.local".into()],
+        );
+
+        assert_eq!(
+            pathspec_pairs(&resolved),
+            vec![(".env.example", ".env"), (".env.local", ".env.local")],
+            "같은 목적지를 겨냥하는 spec은 첫 항목만 남아야 한다"
         );
     }
 
