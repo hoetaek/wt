@@ -1817,6 +1817,24 @@ run = "run-unrelated"
     }
 
     #[test]
+    fn porcelain_status_path_splits_rename_only_for_rename_statuses() {
+        // 비rename 상태에서는 " -> "가 경로의 일부다 (git은 공백/화살표만으로는 인용하지 않음)
+        assert_eq!(
+            porcelain_status_path("?? a -> b.md").as_deref(),
+            Some("a -> b.md")
+        );
+        // rename은 따옴표 밖 첫 구분자에서 자르고 대상 경로를 취한다
+        assert_eq!(
+            porcelain_status_path(r#"R  "old -> x.md" -> "new -> y.md""#).as_deref(),
+            Some("new -> y.md")
+        );
+        assert_eq!(
+            porcelain_status_path("R  old.rs -> new.rs").as_deref(),
+            Some("new.rs")
+        );
+    }
+
+    #[test]
     fn porcelain_status_path_unquotes_git_escaped_paths() {
         assert_eq!(
             porcelain_status_path(r#"?? "src/tab\there.txt""#).as_deref(),

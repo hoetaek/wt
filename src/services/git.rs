@@ -372,9 +372,42 @@ fn parse_worktree_list(porcelain: &str) -> Result<Vec<WorktreeEntry>> {
 /// `git status --porcelain` 한 줄에서 경로를 추출한다. rename(`a -> b`)은 대상
 /// 경로를 취하고, core.quotePath가 인용한 경로는 unquote해 돌려준다.
 pub fn porcelain_status_path(line: &str) -> Option<std::borrow::Cow<'_, str>> {
+    let status = line.get(0..2)?;
     let path = line.get(3..)?.trim();
-    let path = path.rsplit(" -> ").next().unwrap_or(path);
+    // " -> "는 rename/copy 상태에서만 구분자다. git은 공백·화살표만으로는 경로를
+    // 인용하지 않으므로, 다른 상태에서 자르면 " -> "를 포함한 경로가 잘린다.
+    let is_rename_or_copy = status.bytes().any(|b| b == b'R' || b == b'C');
+    let path = if is_rename_or_copy {
+        rename_target_path(path)
+    } else {
+        path
+    };
     Some(unquote_git_path(path))
+}
+
+/// rename/copy 라인의 `old -> new`에서 대상 경로를 취한다. 인용된 경로 내부의
+/// " -> "는 건너뛰고, 따옴표 밖 첫 구분자에서 자른다.
+fn rename_target_path(path: &str) -> &str {
+    let bytes = path.as_bytes();
+    let mut in_quotes = false;
+    let mut escaped = false;
+    let mut i = 0usize;
+    while i + 3 < bytes.len() {
+        let byte = bytes[i];
+        if escaped {
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        match byte {
+            b'\\' if in_quotes => escaped = true,
+            b'"' => in_quotes = !in_quotes,
+            b' ' if !in_quotes && bytes[i..].starts_with(b" -> ") => return &path[i + 4..],
+            _ => {}
+        }
+        i += 1;
+    }
+    path
 }
 
 /// `git status --porcelain`은 core.quotePath에 따라 특수문자/비ASCII 경로를
