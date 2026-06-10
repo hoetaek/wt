@@ -1224,74 +1224,93 @@ fn sanitize_selector_text(value: &str) -> String {
     collapse_selector_whitespace(&strip_terminal_sequences(value))
 }
 
-fn strip_terminal_sequences(value: &str) -> String {
+pub(crate) fn strip_terminal_sequences(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
+    let chars = value.chars().collect::<Vec<_>>();
+    let mut index = 0;
 
-    while let Some(ch) = chars.next() {
+    while let Some(ch) = chars.get(index).copied() {
         match ch {
-            '\x1b' => skip_escape_sequence(&mut chars),
-            '\u{0080}'..='\u{009f}' => {}
-            ch if is_unsafe_control(ch) => {}
-            ch => output.push(ch),
+            '\x1b' => {
+                index = escape_sequence_end(&chars, index).unwrap_or(index + 1);
+            }
+            '\u{009b}' => {
+                index = csi_sequence_end(&chars, index + 1).unwrap_or(index + 1);
+            }
+            '\u{009d}' => {
+                index = control_string_end(&chars, index + 1).unwrap_or(index + 1);
+            }
+            '\u{0090}' | '\u{0098}' | '\u{009e}' | '\u{009f}' => {
+                index = control_string_end(&chars, index + 1).unwrap_or(index + 1);
+            }
+            '\u{0080}'..='\u{009f}' => {
+                index += 1;
+            }
+            ch if is_unsafe_control(ch) => {
+                index += 1;
+            }
+            ch => {
+                output.push(ch);
+                index += 1;
+            }
         }
     }
 
     output
 }
 
-fn skip_escape_sequence<I>(chars: &mut std::iter::Peekable<I>)
-where
-    I: Iterator<Item = char>,
-{
-    match chars.peek().copied() {
-        Some('[') => {
-            chars.next();
-            skip_csi_sequence(chars);
-        }
-        Some(']') => {
-            chars.next();
-            skip_control_string(chars);
-        }
-        Some('P' | 'X' | '^' | '_') => {
-            chars.next();
-            skip_control_string(chars);
-        }
-        Some(ch) if is_ascii_escape_byte(ch) => {
-            chars.next();
-        }
-        _ => {}
+fn escape_sequence_end(chars: &[char], index: usize) -> Option<usize> {
+    let next_index = index + 1;
+    match chars.get(next_index).copied()? {
+        '[' => csi_sequence_end(chars, next_index + 1),
+        ']' | 'P' | 'X' | '^' | '_' => control_string_end(chars, next_index + 1),
+        ch if is_ascii_escape_byte(ch) => Some(next_index + 1),
+        _ => None,
     }
 }
 
-fn skip_csi_sequence<I>(chars: &mut std::iter::Peekable<I>)
-where
-    I: Iterator<Item = char>,
-{
-    for ch in chars.by_ref() {
-        if is_csi_final_byte(ch) {
-            break;
-        }
+fn csi_sequence_end(chars: &[char], mut index: usize) -> Option<usize> {
+    while chars
+        .get(index)
+        .is_some_and(|ch| is_csi_parameter_byte(*ch))
+    {
+        index += 1;
     }
+    while chars
+        .get(index)
+        .is_some_and(|ch| is_csi_intermediate_byte(*ch))
+    {
+        index += 1;
+    }
+    chars
+        .get(index)
+        .is_some_and(|ch| is_csi_final_byte(*ch))
+        .then_some(index + 1)
 }
 
-fn skip_control_string<I>(chars: &mut std::iter::Peekable<I>)
-where
-    I: Iterator<Item = char>,
-{
-    while let Some(ch) = chars.next() {
-        if ch == '\x07' {
-            break;
+fn control_string_end(chars: &[char], mut index: usize) -> Option<usize> {
+    while let Some(ch) = chars.get(index).copied() {
+        if ch == '\x07' || ch == '\u{009c}' {
+            return Some(index + 1);
         }
-        if ch == '\x1b' && chars.peek() == Some(&'\\') {
-            chars.next();
-            break;
+        if ch == '\x1b' && chars.get(index + 1) == Some(&'\\') {
+            return Some(index + 2);
         }
+        index += 1;
     }
+    None
 }
 
 fn is_ascii_escape_byte(ch: char) -> bool {
     ('\u{0020}'..='\u{007e}').contains(&ch)
+}
+
+fn is_csi_parameter_byte(ch: char) -> bool {
+    ('\u{0030}'..='\u{003f}').contains(&ch)
+}
+
+fn is_csi_intermediate_byte(ch: char) -> bool {
+    ('\u{0020}'..='\u{002f}').contains(&ch)
 }
 
 fn is_csi_final_byte(ch: char) -> bool {
@@ -1742,6 +1761,14 @@ mod tests {
                 " alpha\tbeta\n\x1b[31mred\x1b[0m\x1b]0;title\x07\x1b7\u{009b}\x08omega "
             ),
             "alpha beta redomega"
+        );
+    }
+
+    #[test]
+    fn selector_text_sanitization_preserves_text_after_malformed_c1_sequences() {
+        assert_eq!(
+            strip_terminal_sequences("start\u{0090}c1 \u{009b}\x08omega end"),
+            "startc1 omega end"
         );
     }
 

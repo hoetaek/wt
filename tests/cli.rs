@@ -51,6 +51,20 @@ fn wt_command() -> Command {
     command
 }
 
+fn pin_english_locale(command: &mut Command) -> &mut Command {
+    command
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("LC_MESSAGES", "C")
+}
+
+fn pin_korean_locale(command: &mut Command) -> &mut Command {
+    command
+        .env("LANG", "ko_KR.UTF-8")
+        .env("LC_ALL", "ko_KR.UTF-8")
+        .env("LC_MESSAGES", "ko_KR.UTF-8")
+}
+
 fn wt_command_at(path: &Path) -> Command {
     let mut command = Command::new(path);
     for key in GIT_LOCAL_ENV_KEYS {
@@ -1404,6 +1418,10 @@ id = "PROJ-123"
     assert_eq!(no_run["branch"], "feature/no-run");
     assert_eq!(no_run["publish_state"], "local");
     assert_eq!(no_run["source"], "local");
+    assert_eq!(no_run["run_status"], "new");
+    assert!(no_run["duration"].is_null());
+    assert!(no_run["size"].is_null());
+    assert_eq!(no_run["body"], "Task body");
     assert!(no_run["origin"].is_null());
     assert_eq!(no_run["origin_health"]["status"], "local");
     assert_eq!(no_run["origin_health"]["origin_label"], "not published");
@@ -1417,6 +1435,8 @@ id = "PROJ-123"
     assert_eq!(provider["branch"], "alice/provider-task");
     assert_eq!(provider["publish_state"], "published");
     assert_eq!(provider["source"], "provider-origin");
+    assert_eq!(provider["run_status"], "new");
+    assert_eq!(provider["body"], "Imported provider task body");
     assert_eq!(provider["origin"]["provider"], "linear");
     assert_eq!(provider["origin"]["id"], "PROJ-123");
     assert_eq!(provider["origin_health"]["status"], "stale");
@@ -1510,10 +1530,10 @@ id = "PROJ-123"
         .stdout(predicate::str::contains("│ provider-origin"))
         .stdout(predicate::str::contains("│ local"))
         .stdout(predicate::str::contains(
-            "•  local  not published  local  task local  pub  branch feature/local",
+            "•  new  pub   -    local  task local  branch feature/local",
         ))
         .stdout(predicate::str::contains(
-            "•  stale  Linear PROJ-123  Provider task  task provider  fetch  branch alice/provider-task",
+            "•  new  fetch  -    Provider task  task provider  branch alice/provider-task",
         ))
         .stdout(predicate::str::contains(
             "2 tasks hidden; use wt task list --all to show the full inventory",
@@ -1607,7 +1627,7 @@ id = "PROJ-123"
         .stdout(predicate::str::contains("task running"))
         .stdout(predicate::str::contains("branch feature/running"))
         .stdout(predicate::str::contains(
-            "•  stale  Linear PROJ-123  Provider task  task provider  fetch  branch alice/provider-task",
+            "•  new  fetch  -    Provider task  task provider  branch alice/provider-task",
         ))
         .stdout(predicate::str::contains("tasks hidden").not())
         .stderr(predicate::str::contains(
@@ -5870,7 +5890,8 @@ fn doctor_missing_claude_hooks_names_wt_setup() {
     write_zsh_shell_integration(&zdotdir);
     let fake_bin = write_fake_agent(temp.path(), "claude");
 
-    wt_command()
+    let mut command = wt_command();
+    pin_english_locale(&mut command)
         .env("HOME", &home)
         .env("SHELL", "/bin/zsh")
         .env("ZDOTDIR", &zdotdir)
@@ -5896,7 +5917,8 @@ fn doctor_missing_codex_hooks_names_wt_setup() {
     write_zsh_shell_integration(&zdotdir);
     let fake_bin = write_fake_agent(temp.path(), "codex");
 
-    wt_command()
+    let mut command = wt_command();
+    pin_english_locale(&mut command)
         .env("HOME", &home)
         .env("CODEX_HOME", &codex_home)
         .env("SHELL", "/bin/zsh")
@@ -5922,7 +5944,8 @@ fn doctor_missing_shell_integration_names_wt_setup() {
     let codex_home = temp.path().join("codex-home");
     let fake_bin = write_fake_agent(temp.path(), "codex");
 
-    wt_command()
+    let mut command = wt_command();
+    pin_english_locale(&mut command)
         .env("HOME", &home)
         .env("CODEX_HOME", &codex_home)
         .env("SHELL", "/bin/zsh")
@@ -5937,12 +5960,78 @@ fn doctor_missing_shell_integration_names_wt_setup() {
 
 #[cfg(unix)]
 #[test]
+fn doctor_korean_locale_renders_wt_setup_hint_in_korean() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_repo_agent_config(temp.path(), "claude");
+    write_wt_core_dirs(temp.path());
+    let home = temp.path().join("home");
+    let zdotdir = temp.path().join("zdot");
+    write_zsh_shell_integration(&zdotdir);
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+
+    let mut command = wt_command();
+    pin_korean_locale(&mut command)
+        .env("HOME", &home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "doctor"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Claude wt inbox hook: 머신별 wt 통합을 설치하려면 `wt setup` 을 실행하세요.",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_json_stays_english_under_korean_locale() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_repo_agent_config(temp.path(), "claude");
+    write_wt_core_dirs(temp.path());
+    let home = temp.path().join("home");
+    let zdotdir = temp.path().join("zdot");
+    write_zsh_shell_integration(&zdotdir);
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+
+    let mut command = wt_command();
+    let output = pin_korean_locale(&mut command)
+        .env("HOME", &home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let check = value["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["name"] == "claude_wt_inbox_hook")
+        .expect("missing claude wt inbox hook check");
+    assert_eq!(check["status"], "warning");
+    assert_eq!(
+        check["message"],
+        "Run wt setup to install per-machine wt integration."
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn doctor_missing_repo_config_names_wt_init() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     write_wt_core_dirs(temp.path());
 
-    wt_command()
+    let mut command = wt_command();
+    pin_english_locale(&mut command)
         .env("HOME", temp.path().join("home"))
         .env("SHELL", "/bin/fish")
         .args(["-C", temp.path().to_str().unwrap(), "doctor"])
@@ -5959,7 +6048,8 @@ fn doctor_missing_core_dirs_names_wt_init() {
     git_init(temp.path());
     std::fs::write(temp.path().join(".wt.toml"), "").unwrap();
 
-    wt_command()
+    let mut command = wt_command();
+    pin_english_locale(&mut command)
         .env("HOME", temp.path().join("home"))
         .env("SHELL", "/bin/fish")
         .args(["-C", temp.path().to_str().unwrap(), "doctor"])
@@ -5967,6 +6057,26 @@ fn doctor_missing_core_dirs_names_wt_init() {
         .success()
         .stderr(predicate::str::contains("Core dirs: missing"))
         .stderr(predicate::str::contains("Run wt init"));
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_missing_core_dirs_names_wt_init_in_korean_locale() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::write(temp.path().join(".wt.toml"), "").unwrap();
+
+    let mut command = wt_command();
+    pin_korean_locale(&mut command)
+        .env("HOME", temp.path().join("home"))
+        .env("SHELL", "/bin/fish")
+        .args(["-C", temp.path().to_str().unwrap(), "doctor"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Core dirs: `"))
+        .stderr(predicate::str::contains(
+            "repo-local wt 설정을 만들려면 `wt init` 을 실행하세요.",
+        ));
 }
 
 #[cfg(unix)]
@@ -7229,8 +7339,27 @@ CODEX_MODE = "1"
     let config: wt::config::Config = toml::from_str(&rendered).unwrap();
 
     assert!(config.profile.is_none());
-    assert_eq!(config.worktree.copy, vec![".env.example", ".env"]);
-    assert_eq!(config.worktree.link, vec!["storage"]);
+    assert!(
+        config
+            .worktree
+            .copy
+            .iter()
+            .any(|entry| entry.from() == ".env.example" && entry.to() == ".env.example")
+    );
+    assert!(
+        config
+            .worktree
+            .copy
+            .iter()
+            .any(|entry| entry.from() == ".env" && entry.to() == ".env")
+    );
+    assert!(
+        config
+            .worktree
+            .link
+            .iter()
+            .any(|entry| entry.from() == "storage" && entry.to() == "storage")
+    );
     assert_eq!(config.setup.env.get("APP_ENV").unwrap(), "local");
     assert_eq!(config.setup.env.get("LOG_LEVEL").unwrap(), "debug");
     assert_eq!(config.setup.env.get("PRIVATE_TOKEN").unwrap(), "secret");
@@ -7274,9 +7403,8 @@ CODEX_MODE = "1"
     assert_eq!(workspace.colors.get("branch").unwrap(), "green");
     assert_eq!(workspace.colors.get("pr").unwrap(), "magenta");
 
-    let copy_as = config.worktree.copy_as;
-    assert!(copy_as.iter().any(|entry| {
-        Path::new(&entry.from).ends_with(".wt/config/profiles/codex/scaffold") && entry.to == "."
+    assert!(config.worktree.copy.iter().any(|entry| {
+        Path::new(entry.from()).ends_with(".wt/config/profiles/codex/scaffold") && entry.to() == "."
     }));
 }
 

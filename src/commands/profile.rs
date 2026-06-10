@@ -229,7 +229,7 @@ impl ProfileSummary {
     fn from_config(name: &str, config: &Config) -> Self {
         Self {
             name: name.to_string(),
-            copy_count: config.worktree.copy.len() + config.worktree.copy_as.len(),
+            copy_count: config.worktree.copy.len(),
             link_count: config.worktree.link.len(),
             agent: config
                 .agent

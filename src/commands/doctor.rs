@@ -20,13 +20,11 @@ const CODEX_HOOK_INSTALL_HINT: &str =
     "Run cmux hooks codex install --yes to enable reliable Codex status events.";
 const CODEX_WT_HOOK_INSTALL_HINT: &str =
     "Run wt setup to enable wt inbox delivery through detected agent hook dispatchers.";
-const WT_SETUP_HINT: &str = "Run wt setup to install per-machine wt integration.";
 const WT_INIT_HINT: &str = "Run wt init to create repo-local wt setup.";
 
 /// Typed, translatable catalog of doctor's human-facing prose. English is the
 /// source of truth; a missing Korean arm falls back to English. Variants carry
-/// their interpolation slots; slot values are never translated. Defined here
-/// for the i18n mechanism; NOT yet wired into doctor's output path.
+/// their interpolation slots; slot values are never translated.
 pub enum DoctorMsg {
     SectionDoctor,
     Profile {
@@ -42,39 +40,114 @@ pub enum DoctorMsg {
     SupervisorsScanFailed {
         err: String,
     },
+    ShellMissingLineIn {
+        line: String,
+        path: String,
+    },
+    ShellMissingPath {
+        path: String,
+    },
+    ShellCannotRead {
+        path: String,
+        err: String,
+    },
+    InboxHookErr {
+        err: String,
+    },
+    CoreDirsMissing {
+        paths: String,
+    },
     /// Pass-through for arbitrary external text that must never be translated.
     Raw(String),
 }
 
 impl DoctorMsg {
     pub fn render(&self, lang: Lang) -> String {
-        // English templates (source of truth). Korean arms are added in a later
-        // chunk; until then `Lang::Ko` falls through to the English template.
-        let en = match self {
-            DoctorMsg::SectionDoctor => return "Doctor".to_string(),
-            DoctorMsg::Profile { profile } => {
-                return fill("Profile: {profile}", &[("profile", profile)]);
+        match self {
+            DoctorMsg::SectionDoctor => "Doctor".to_string(),
+            DoctorMsg::Profile { profile } => fill("Profile: {profile}", &[("profile", profile)]),
+            DoctorMsg::WtSetupHint => match lang {
+                Lang::En => "Run wt setup to install per-machine wt integration.",
+                Lang::Ko => "머신별 wt 통합을 설치하려면 `wt setup` 을 실행하세요.",
             }
-            DoctorMsg::WtSetupHint => "Run wt setup to install per-machine wt integration.",
-            DoctorMsg::WtInitHint => "Run wt init to create repo-local wt setup.",
+            .to_string(),
+            DoctorMsg::WtInitHint => match lang {
+                Lang::En => "Run wt init to create repo-local wt setup.",
+                Lang::Ko => "repo-local wt 설정을 만들려면 `wt init` 을 실행하세요.",
+            }
+            .to_string(),
             DoctorMsg::CodexHookInstallHint => {
                 "Run cmux hooks codex install --yes to enable reliable Codex status events."
+                    .to_string()
             }
             DoctorMsg::CodexWtHookInstallHint => {
                 "Run wt setup to enable wt inbox delivery through detected agent hook dispatchers."
+                    .to_string()
             }
             DoctorMsg::IdentityAnchorsScanFailed { err } => {
-                return fill("Identity anchors: scan failed ({err})", &[("err", err)]);
+                let template = match lang {
+                    Lang::En => "Identity anchors: scan failed ({err})",
+                    Lang::Ko => "Identity anchors: 스캔 실패 ({err})",
+                };
+                fill(template, &[("err", err)])
             }
             DoctorMsg::SupervisorsScanFailed { err } => {
-                return fill("Supervisors: scan failed ({err})", &[("err", err)]);
+                let template = match lang {
+                    Lang::En => "Supervisors: scan failed ({err})",
+                    Lang::Ko => "Supervisors: 스캔 실패 ({err})",
+                };
+                fill(template, &[("err", err)])
             }
-            DoctorMsg::Raw(text) => return text.clone(),
-        };
-        // `lang` is accepted now so the wiring chunk needs no signature change;
-        // with no Korean arms yet, every language renders the English template.
-        let _ = lang;
-        en.to_string()
+            DoctorMsg::ShellMissingLineIn { line, path } => {
+                let line = line
+                    .strip_prefix('`')
+                    .and_then(|value| value.strip_suffix('`'))
+                    .unwrap_or(line);
+                let lead = match lang {
+                    Lang::En => fill(
+                        "missing `{line}` in {path}. ",
+                        &[("line", line), ("path", path)],
+                    ),
+                    Lang::Ko => fill(
+                        "`{path}` 에 `{line}` 가 없습니다. ",
+                        &[("line", line), ("path", path)],
+                    ),
+                };
+                lead + &DoctorMsg::WtSetupHint.render(lang)
+            }
+            DoctorMsg::ShellMissingPath { path } => {
+                let lead = match lang {
+                    Lang::En => fill("missing {path}. ", &[("path", path)]),
+                    Lang::Ko => fill("`{path}` 가 없습니다. ", &[("path", path)]),
+                };
+                lead + &DoctorMsg::WtSetupHint.render(lang)
+            }
+            DoctorMsg::ShellCannotRead { path, err } => {
+                let lead = match lang {
+                    Lang::En => fill(
+                        "cannot read {path}: {err}. ",
+                        &[("path", path), ("err", err)],
+                    ),
+                    Lang::Ko => fill(
+                        "`{path}` 를 읽을 수 없습니다: {err}. ",
+                        &[("path", path), ("err", err)],
+                    ),
+                };
+                lead + &DoctorMsg::WtSetupHint.render(lang)
+            }
+            DoctorMsg::InboxHookErr { err } => {
+                let lead = fill("{err}. ", &[("err", err)]);
+                lead + &DoctorMsg::WtSetupHint.render(lang)
+            }
+            DoctorMsg::CoreDirsMissing { paths } => {
+                let lead = match lang {
+                    Lang::En => fill("missing {paths}. ", &[("paths", paths)]),
+                    Lang::Ko => fill("`{paths}` 가 없습니다. ", &[("paths", paths)]),
+                };
+                lead + &DoctorMsg::WtInitHint.render(lang)
+            }
+            DoctorMsg::Raw(text) => text.clone(),
+        }
     }
 }
 
@@ -113,12 +186,20 @@ pub fn run(ctx: &Ctx, profile: Option<&str>, prune_env_anchors: Option<&str>) ->
     check_codex_hook_readiness(ctx, config);
     check_active_workflow_inventory(ctx);
     if let Err(err) = check_identity_anchors(ctx) {
-        ctx.ui
-            .print_warning(&format!("Identity anchors: scan failed ({err})"));
+        ctx.ui.print_warning(
+            &DoctorMsg::IdentityAnchorsScanFailed {
+                err: err.to_string(),
+            }
+            .render(ctx.lang()),
+        );
     }
     if let Err(err) = check_supervisors(ctx) {
-        ctx.ui
-            .print_warning(&format!("Supervisors: scan failed ({err})"));
+        ctx.ui.print_warning(
+            &DoctorMsg::SupervisorsScanFailed {
+                err: err.to_string(),
+            }
+            .render(ctx.lang()),
+        );
     }
     Ok(())
 }
@@ -186,6 +267,12 @@ fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorRepo
             }
         }
     };
+
+    for check in &mut checks {
+        if let Some(msg) = &check.msg {
+            check.message = Some(msg.render(Lang::En));
+        }
+    }
 
     DoctorReport {
         profile: profile.map(str::to_string),
@@ -262,6 +349,8 @@ struct DoctorCheck {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    #[serde(skip)]
+    msg: Option<DoctorMsg>,
 }
 
 impl DoctorCheck {
@@ -270,6 +359,7 @@ impl DoctorCheck {
             name: name.into(),
             status: "ok",
             message: message.into(),
+            msg: None,
         }
     }
 
@@ -278,6 +368,33 @@ impl DoctorCheck {
             name: name.into(),
             status: "warning",
             message: Some(message.into()),
+            msg: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn ok_msg(name: impl Into<String>, msg: DoctorMsg) -> Self {
+        Self {
+            name: name.into(),
+            status: "ok",
+            message: None,
+            msg: Some(msg),
+        }
+    }
+
+    fn warning_msg(name: impl Into<String>, msg: DoctorMsg) -> Self {
+        Self {
+            name: name.into(),
+            status: "warning",
+            message: None,
+            msg: Some(msg),
+        }
+    }
+
+    fn effective_message(&self, lang: Lang) -> Option<String> {
+        match &self.msg {
+            Some(msg) => Some(msg.render(lang)),
+            None => self.message.clone(),
         }
     }
 }
@@ -517,7 +634,10 @@ fn collect_shell_integration_check(config: &Config, checks: &mut Vec<DoctorCheck
     }
 
     let Some((path, line)) = shell_integration_target() else {
-        checks.push(DoctorCheck::warning("shell_integration", WT_SETUP_HINT));
+        checks.push(DoctorCheck::warning_msg(
+            "shell_integration",
+            DoctorMsg::WtSetupHint,
+        ));
         return;
     };
     match fs::read_to_string(&path) {
@@ -527,19 +647,27 @@ fn collect_shell_integration_check(config: &Config, checks: &mut Vec<DoctorCheck
                 Some(path.display().to_string()),
             ));
         }
-        Ok(_) => checks.push(DoctorCheck::warning(
+        Ok(_) => checks.push(DoctorCheck::warning_msg(
             "shell_integration",
-            format!("missing `{line}` in {}. {WT_SETUP_HINT}", path.display()),
+            DoctorMsg::ShellMissingLineIn {
+                line: line.to_string(),
+                path: path.display().to_string(),
+            },
         )),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            checks.push(DoctorCheck::warning(
+            checks.push(DoctorCheck::warning_msg(
                 "shell_integration",
-                format!("missing {}. {WT_SETUP_HINT}", path.display()),
+                DoctorMsg::ShellMissingPath {
+                    path: path.display().to_string(),
+                },
             ));
         }
-        Err(err) => checks.push(DoctorCheck::warning(
+        Err(err) => checks.push(DoctorCheck::warning_msg(
             "shell_integration",
-            format!("cannot read {}: {err}. {WT_SETUP_HINT}", path.display()),
+            DoctorMsg::ShellCannotRead {
+                path: path.display().to_string(),
+                err: err.to_string(),
+            },
         )),
     }
 }
@@ -573,10 +701,15 @@ fn collect_claude_hook_readiness_checks(ctx: &Ctx, config: &Config, checks: &mut
             "claude_wt_inbox_hook",
             Some("wt-managed inbox hooks installed".into()),
         )),
-        Ok(false) => checks.push(DoctorCheck::warning("claude_wt_inbox_hook", WT_SETUP_HINT)),
-        Err(err) => checks.push(DoctorCheck::warning(
+        Ok(false) => checks.push(DoctorCheck::warning_msg(
             "claude_wt_inbox_hook",
-            format!("{err:#}. {WT_SETUP_HINT}"),
+            DoctorMsg::WtSetupHint,
+        )),
+        Err(err) => checks.push(DoctorCheck::warning_msg(
+            "claude_wt_inbox_hook",
+            DoctorMsg::InboxHookErr {
+                err: format!("{err:#}"),
+            },
         )),
     }
 }
@@ -619,9 +752,11 @@ fn collect_repo_setup_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     if missing.is_empty() {
         checks.push(DoctorCheck::ok("core_dirs", Some("present".into())));
     } else {
-        checks.push(DoctorCheck::warning(
+        checks.push(DoctorCheck::warning_msg(
             "core_dirs",
-            format!("missing {}. {WT_INIT_HINT}", missing.join(", ")),
+            DoctorMsg::CoreDirsMissing {
+                paths: missing.join(", "),
+            },
         ));
     }
 
@@ -1526,7 +1661,8 @@ fn check_repo_setup(ctx: &Ctx) {
 fn print_named_checks(ctx: &Ctx, checks: &[DoctorCheck]) {
     for check in checks {
         let label = doctor_label(&check.name);
-        let message = check.message.as_deref().unwrap_or(check.status);
+        let rendered = check.effective_message(ctx.lang());
+        let message = rendered.as_deref().unwrap_or(check.status);
         if check.status == "ok" {
             ctx.ui.print_step(&format!("{label}: {message}"));
         } else {
@@ -1561,7 +1697,8 @@ fn check_codex_hook_readiness(ctx: &Ctx, config: &Config) {
 
     for check in checks {
         let label = codex_readiness_label(&check.name);
-        let message = check.message.as_deref().unwrap_or(check.status);
+        let rendered = check.effective_message(ctx.lang());
+        let message = rendered.as_deref().unwrap_or(check.status);
         if check.status == "ok" {
             ctx.ui.print_step(&format!("{label}: {message}"));
         } else {
@@ -1768,6 +1905,56 @@ mod tests {
     }
 
     #[test]
+    fn doctor_check_effective_message_prefers_msg_then_falls_back() {
+        // msg-based check renders via the catalog; lang flows through.
+        let c = DoctorCheck::warning_msg("shell_integration", DoctorMsg::WtSetupHint);
+        assert_eq!(
+            c.effective_message(Lang::En).as_deref(),
+            Some("Run wt setup to install per-machine wt integration.")
+        );
+        // string-based check is unchanged by language.
+        let s = DoctorCheck::warning("x", "plain english");
+        assert_eq!(
+            s.effective_message(Lang::Ko).as_deref(),
+            Some("plain english")
+        );
+    }
+
+    #[test]
+    fn json_message_is_english_regardless_of_language() {
+        fn normalized_json_for(configured_lang: Lang) -> String {
+            let mut check = DoctorCheck::warning_msg("shell_integration", DoctorMsg::WtSetupHint);
+            assert!(check.effective_message(configured_lang).is_some());
+            if let Some(msg) = &check.msg {
+                check.message = Some(msg.render(Lang::En));
+            }
+            serde_json::to_string(&check).unwrap()
+        }
+
+        let en_json = normalized_json_for(Lang::En);
+        let ko_json = normalized_json_for(Lang::Ko);
+
+        assert_eq!(en_json, ko_json);
+        assert_eq!(
+            en_json,
+            r#"{"name":"shell_integration","status":"warning","message":"Run wt setup to install per-machine wt integration."}"#
+        );
+    }
+
+    #[test]
+    fn human_render_is_korean_under_ko_and_english_under_en() {
+        let check = DoctorCheck::warning_msg("shell_integration", DoctorMsg::WtSetupHint);
+        assert_eq!(
+            check.effective_message(Lang::En).as_deref(),
+            Some("Run wt setup to install per-machine wt integration.")
+        );
+        assert_eq!(
+            check.effective_message(Lang::Ko).as_deref(),
+            Some("머신별 wt 통합을 설치하려면 `wt setup` 을 실행하세요.")
+        );
+    }
+
+    #[test]
     fn doctor_msg_renders_current_english_strings() {
         assert_eq!(
             DoctorMsg::WtSetupHint.render(Lang::En),
@@ -1808,11 +1995,86 @@ mod tests {
     }
 
     #[test]
-    fn doctor_msg_falls_back_to_english_when_korean_absent() {
-        // No Korean arm is defined yet in this chunk, so ko must fall back to en.
+    fn doctor_msg_renders_korean_for_translated_variants() {
         assert_eq!(
             DoctorMsg::WtSetupHint.render(Lang::Ko),
-            DoctorMsg::WtSetupHint.render(Lang::En)
+            "머신별 wt 통합을 설치하려면 `wt setup` 을 실행하세요."
+        );
+        assert_eq!(
+            DoctorMsg::IdentityAnchorsScanFailed { err: "boom".into() }.render(Lang::Ko),
+            "Identity anchors: 스캔 실패 (boom)"
+        );
+        assert_eq!(
+            DoctorMsg::SupervisorsScanFailed { err: "boom".into() }.render(Lang::Ko),
+            "Supervisors: 스캔 실패 (boom)"
+        );
+    }
+
+    #[test]
+    fn doctor_composite_messages_render_english_identical_to_today() {
+        assert_eq!(
+            DoctorMsg::ShellMissingLineIn {
+                line: "`eval`".into(),
+                path: "~/.zshrc".into()
+            }
+            .render(Lang::En),
+            "missing `eval` in ~/.zshrc. Run wt setup to install per-machine wt integration."
+        );
+        assert_eq!(
+            DoctorMsg::ShellMissingPath {
+                path: "~/.zshrc".into()
+            }
+            .render(Lang::En),
+            "missing ~/.zshrc. Run wt setup to install per-machine wt integration."
+        );
+        assert_eq!(
+            DoctorMsg::ShellCannotRead {
+                path: "~/.zshrc".into(),
+                err: "denied".into()
+            }
+            .render(Lang::En),
+            "cannot read ~/.zshrc: denied. Run wt setup to install per-machine wt integration."
+        );
+        assert_eq!(
+            DoctorMsg::InboxHookErr {
+                err: "broken".into()
+            }
+            .render(Lang::En),
+            "broken. Run wt setup to install per-machine wt integration."
+        );
+        assert_eq!(
+            DoctorMsg::CoreDirsMissing {
+                paths: ".wt/runtime".into()
+            }
+            .render(Lang::En),
+            "missing .wt/runtime. Run wt init to create repo-local wt setup."
+        );
+    }
+
+    #[test]
+    fn doctor_composite_messages_render_korean() {
+        assert_eq!(
+            DoctorMsg::CoreDirsMissing {
+                paths: ".wt/runtime".into()
+            }
+            .render(Lang::Ko),
+            "`.wt/runtime` 가 없습니다. repo-local wt 설정을 만들려면 `wt init` 을 실행하세요."
+        );
+        assert_eq!(
+            DoctorMsg::ShellCannotRead {
+                path: "~/.zshrc".into(),
+                err: "denied".into()
+            }
+            .render(Lang::Ko),
+            "`~/.zshrc` 를 읽을 수 없습니다: denied. 머신별 wt 통합을 설치하려면 `wt setup` 을 실행하세요."
+        );
+    }
+
+    #[test]
+    fn doctor_msg_untranslated_variant_falls_back_to_english_under_korean() {
+        assert_eq!(
+            DoctorMsg::CodexHookInstallHint.render(Lang::Ko),
+            DoctorMsg::CodexHookInstallHint.render(Lang::En)
         );
     }
 

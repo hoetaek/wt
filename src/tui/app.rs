@@ -1,25 +1,123 @@
 use crate::origin_action_menu::{OriginAction, OriginActionMenu};
+use crate::tui::body_markup::{self, LineKind};
 use crate::tui::remote_ui::PrintKind;
+use crate::ui::selector::strip_terminal_sequences;
+use console::measure_text_width;
+#[cfg(test)]
+use std::cell::Cell;
+use std::cell::RefCell;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserRow {
     pub(crate) key: String,
     pub(crate) title: String,
     pub(crate) status: String,
+    pub(crate) run_status: String,
     pub(crate) origin_label: String,
     pub(crate) next_action: String,
+    pub(crate) duration: Option<String>,
+    pub(crate) size: Option<String>,
+    pub(crate) branch: Option<String>,
+    pub(crate) source: String,
+    pub(crate) body: String,
     pub(crate) preview_lines: Vec<String>,
     pub(crate) menu: OriginActionMenu,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BrowserColumn {
+    pub(crate) title: String,
+    pub(crate) cell: BrowserCell,
+    pub(crate) width: BrowserColumnWidth,
+}
+
+impl BrowserColumn {
+    pub(crate) fn length(title: impl Into<String>, cell: BrowserCell, width: u16) -> Self {
+        Self {
+            title: title.into(),
+            cell,
+            width: BrowserColumnWidth::Length(width),
+        }
+    }
+
+    pub(crate) fn min(title: impl Into<String>, cell: BrowserCell, width: u16) -> Self {
+        Self {
+            title: title.into(),
+            cell,
+            width: BrowserColumnWidth::Min(width),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BrowserColumnWidth {
+    Length(u16),
+    Min(u16),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BrowserCell {
+    Status,
+    RunStatus,
+    OriginLabel,
+    Title,
+    Key,
+    NextAction,
+    Duration,
+    Size,
+    Branch,
+    Source,
+    OriginStatus,
+    Task,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeyInput {
     Up,
     Down,
+    PageUp,
+    PageDown,
     Enter,
     Esc,
     Backspace,
     Char(char),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceView {
+    All,
+    Local,
+    Published,
+    OriginOnly,
+}
+
+impl SourceView {
+    fn next(self) -> Self {
+        match self {
+            Self::All => Self::Local,
+            Self::Local => Self::Published,
+            Self::Published => Self::OriginOnly,
+            Self::OriginOnly => Self::All,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::All => Self::OriginOnly,
+            Self::OriginOnly => Self::Published,
+            Self::Published => Self::Local,
+            Self::Local => Self::All,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Local => "local",
+            Self::Published => "published",
+            Self::OriginOnly => "origin-only",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +131,7 @@ pub(crate) enum Mode {
 pub(crate) enum Outcome {
     Continue,
     Quit,
+    FetchOriginIssues,
     Dispatch { key: String, action: OriginAction },
 }
 
@@ -109,8 +208,23 @@ struct OutputPanel {
 #[derive(Debug, Clone)]
 struct RunningAction {
     key: String,
-    verb: String,
+    progress_label: String,
     spinner_frame: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OriginOnlyState {
+    NotFetched,
+    Fetching {
+        spinner_frame: usize,
+    },
+    Loaded {
+        rows: Vec<BrowserRow>,
+        fetched_at_label: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +232,8 @@ pub(crate) struct AppState {
     rows: Vec<BrowserRow>,
     diagnostics: Vec<String>,
     filter: String,
+    source_view: SourceView,
+    origin_only: OriginOnlyState,
     selected_index: usize,
     menu_selected_index: usize,
     mode: Mode,
@@ -126,6 +242,16 @@ pub(crate) struct AppState {
     popup: Option<PopupState>,
     output: OutputPanel,
     running: Option<RunningAction>,
+    columns: Vec<BrowserColumn>,
+    body_view_open: bool,
+    body_scroll: usize,
+    body_cache: RefCell<BodyLineCache>,
+    body_wrap_cache: RefCell<BodyWrapCache>,
+    #[cfg(test)]
+    body_wrap_recompute_count: Cell<usize>,
+    sidebar_open: bool,
+    sidebar_scroll: usize,
+    help_open: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -134,9 +260,10 @@ struct BrowserCopy {
     origin_count_label: &'static str,
     inventory_title: &'static str,
     empty_inventory_message: &'static str,
-    key_column_title: &'static str,
+    filter_miss_message: &'static str,
     no_selection_message: &'static str,
     no_selection_status: &'static str,
+    source_view_enabled: bool,
 }
 
 impl BrowserCopy {
@@ -145,9 +272,10 @@ impl BrowserCopy {
         origin_count_label: "actionable tasks",
         inventory_title: "Tasks",
         empty_inventory_message: "No actionable tasks",
-        key_column_title: "task",
+        filter_miss_message: "no matching tasks",
         no_selection_message: "No task selected",
         no_selection_status: "no task selected",
+        source_view_enabled: true,
     };
 
     const WORKFLOW: Self = Self {
@@ -155,10 +283,115 @@ impl BrowserCopy {
         origin_count_label: "saved workflows",
         inventory_title: "Workflows",
         empty_inventory_message: "No saved workflows",
-        key_column_title: "workflow",
+        filter_miss_message: "no matching workflows",
         no_selection_message: "No workflow selected",
         no_selection_status: "no workflow selected",
+        source_view_enabled: false,
     };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KeymapEntry {
+    key: &'static str,
+    desc: &'static str,
+    footer: bool,
+    task_only: bool,
+}
+
+const LIST_KEYMAP: &[KeymapEntry] = &[
+    KeymapEntry {
+        key: "j/k",
+        desc: "move",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "q",
+        desc: "quit",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "g/G",
+        desc: "first/last",
+        footer: false,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "/",
+        desc: "filter",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "h/l",
+        desc: "view",
+        footer: true,
+        task_only: true,
+    },
+    KeymapEntry {
+        key: "s",
+        desc: "sidebar",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "PageUp/Dn",
+        desc: "scroll detail",
+        footer: false,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "v",
+        desc: "body",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "Enter",
+        desc: "actions",
+        footer: false,
+        task_only: false,
+    },
+    KeymapEntry {
+        key: "a",
+        desc: "archive",
+        footer: true,
+        task_only: true,
+    },
+    KeymapEntry {
+        key: "i",
+        desc: "import origin-only",
+        footer: false,
+        task_only: true,
+    },
+    KeymapEntry {
+        key: "r",
+        desc: "refetch origin-only",
+        footer: false,
+        task_only: true,
+    },
+    KeymapEntry {
+        key: "?",
+        desc: "help",
+        footer: true,
+        task_only: false,
+    },
+];
+
+#[derive(Debug, Clone, Default)]
+struct BodyLineCache {
+    selected_key: Option<String>,
+    body: String,
+    lines: Vec<(LineKind, String)>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct BodyWrapCache {
+    selected_key: Option<String>,
+    body: String,
+    width: usize,
+    lines: Vec<(LineKind, String)>,
 }
 
 impl AppState {
@@ -167,34 +400,70 @@ impl AppState {
         Self::with_diagnostics(rows, Vec::new())
     }
 
+    #[cfg(test)]
     pub(crate) fn with_diagnostics(rows: Vec<BrowserRow>, diagnostics: Vec<String>) -> Self {
-        Self::with_copy(rows, diagnostics, BrowserCopy::TASK)
+        Self::with_copy(rows, diagnostics, BrowserCopy::TASK, default_task_columns())
+    }
+
+    pub(crate) fn task_with_columns(
+        rows: Vec<BrowserRow>,
+        diagnostics: Vec<String>,
+        columns: Vec<BrowserColumn>,
+    ) -> Self {
+        Self::with_copy(rows, diagnostics, BrowserCopy::TASK, columns)
     }
 
     pub(crate) fn workflow_with_diagnostics(
         rows: Vec<BrowserRow>,
         diagnostics: Vec<String>,
     ) -> Self {
-        Self::with_copy(rows, diagnostics, BrowserCopy::WORKFLOW)
+        Self::with_copy(rows, diagnostics, BrowserCopy::WORKFLOW, workflow_columns())
     }
 
-    fn with_copy(rows: Vec<BrowserRow>, diagnostics: Vec<String>, copy: BrowserCopy) -> Self {
-        Self {
+    fn with_copy(
+        rows: Vec<BrowserRow>,
+        diagnostics: Vec<String>,
+        copy: BrowserCopy,
+        columns: Vec<BrowserColumn>,
+    ) -> Self {
+        let mut state = Self {
             rows,
             diagnostics,
             filter: String::new(),
+            source_view: SourceView::All,
+            origin_only: OriginOnlyState::NotFetched,
             selected_index: 0,
             menu_selected_index: 0,
             mode: Mode::List,
-            status_line: default_status_line(),
+            status_line: String::new(),
             copy,
             popup: None,
             output: OutputPanel::default(),
             running: None,
-        }
+            columns,
+            body_view_open: false,
+            body_scroll: 0,
+            body_cache: RefCell::new(BodyLineCache::default()),
+            body_wrap_cache: RefCell::new(BodyWrapCache::default()),
+            #[cfg(test)]
+            body_wrap_recompute_count: Cell::new(0),
+            sidebar_open: true,
+            sidebar_scroll: 0,
+            help_open: false,
+        };
+        state.status_line = state.list_status_line();
+        state
     }
 
     pub(crate) fn handle(&mut self, key: KeyInput) -> Outcome {
+        if self.help_open {
+            return self.handle_help_key(key);
+        }
+
+        if self.body_view_open {
+            return self.handle_body_view_key(key);
+        }
+
         match self.mode {
             Mode::List => self.handle_list_key(key),
             Mode::FilterInput => self.handle_filter_key(key),
@@ -298,16 +567,83 @@ impl AppState {
         self.output.scroll
     }
 
+    pub(crate) fn body_view_open(&self) -> bool {
+        self.body_view_open
+    }
+
+    pub(crate) fn body_scroll(&self) -> usize {
+        self.body_scroll
+    }
+
+    pub(crate) fn body_lines(&self) -> Vec<(LineKind, String)> {
+        let Some((selected_key, body)) = self
+            .selected_row()
+            .map(|row| (row.key.clone(), row.body.clone()))
+        else {
+            let mut cache = self.body_cache.borrow_mut();
+            cache.selected_key = None;
+            cache.body.clear();
+            cache.lines.clear();
+            return Vec::new();
+        };
+
+        let mut cache = self.body_cache.borrow_mut();
+        if cache.selected_key.as_deref() != Some(selected_key.as_str()) || cache.body != body {
+            cache.selected_key = Some(selected_key);
+            cache.body = body;
+            cache.lines = body_markup::markup_body(&sanitize_body_for_markup(&cache.body));
+        }
+        cache.lines.clone()
+    }
+
+    pub(crate) fn wrapped_body_lines(&self, width: usize) -> Vec<(LineKind, String)> {
+        let Some((selected_key, body)) = self
+            .selected_row()
+            .map(|row| (row.key.clone(), row.body.clone()))
+        else {
+            let mut cache = self.body_wrap_cache.borrow_mut();
+            cache.selected_key = None;
+            cache.body.clear();
+            cache.lines.clear();
+            return Vec::new();
+        };
+        let body_lines = self.body_lines();
+
+        let mut cache = self.body_wrap_cache.borrow_mut();
+        if cache.selected_key.as_deref() != Some(selected_key.as_str())
+            || cache.body != body
+            || cache.width != width
+        {
+            cache.selected_key = Some(selected_key);
+            cache.body = body;
+            cache.width = width;
+            cache.lines = body_lines
+                .iter()
+                .flat_map(|(kind, text)| wrapped_body_line(kind, text, width))
+                .collect();
+            #[cfg(test)]
+            self.body_wrap_recompute_count
+                .set(self.body_wrap_recompute_count.get() + 1);
+        }
+        cache.lines.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn body_wrap_recompute_count(&self) -> usize {
+        self.body_wrap_recompute_count.get()
+    }
+
     pub(crate) fn begin_action(&mut self, key: &str, verb: &str) {
         if self.running.is_some() {
             return;
         }
+        let progress_label = progress_label_for(verb);
         self.running = Some(RunningAction {
             key: key.to_string(),
-            verb: verb.to_string(),
+            progress_label: progress_label.clone(),
             spinner_frame: 0,
         });
-        self.status_line = format!("{verb}ing {key}...");
+        self.status_line = format!("{progress_label} {key}...");
     }
 
     pub(crate) fn action_in_flight(&self) -> bool {
@@ -315,18 +651,31 @@ impl AppState {
     }
 
     pub(crate) fn spinner_frame(&self) -> Option<usize> {
-        self.running.as_ref().map(|running| running.spinner_frame)
+        self.running
+            .as_ref()
+            .map(|running| running.spinner_frame)
+            .or_else(|| match &self.origin_only {
+                OriginOnlyState::Fetching { spinner_frame }
+                    if self.source_view == SourceView::OriginOnly =>
+                {
+                    Some(*spinner_frame)
+                }
+                _ => None,
+            })
     }
 
     pub(crate) fn running_status_line(&self) -> Option<String> {
         self.running
             .as_ref()
-            .map(|running| format!("{}ing {}...", running.verb, running.key))
+            .map(|running| format!("{} {}...", running.progress_label, running.key))
     }
 
     pub(crate) fn tick_spinner(&mut self) {
         if let Some(running) = self.running.as_mut() {
             running.spinner_frame = running.spinner_frame.saturating_add(1);
+        }
+        if let OriginOnlyState::Fetching { spinner_frame } = &mut self.origin_only {
+            *spinner_frame = spinner_frame.saturating_add(1);
         }
     }
 
@@ -340,12 +689,55 @@ impl AppState {
         &self.filter
     }
 
+    #[cfg(test)]
+    pub(crate) fn source_view(&self) -> SourceView {
+        self.source_view
+    }
+
+    pub(crate) fn source_view_tabs(&self) -> Vec<(&'static str, Option<usize>, bool)> {
+        if !self.copy.source_view_enabled {
+            return Vec::new();
+        }
+
+        [
+            SourceView::All,
+            SourceView::Local,
+            SourceView::Published,
+            SourceView::OriginOnly,
+        ]
+        .into_iter()
+        .map(|view| {
+            (
+                view.label(),
+                self.source_view_count(view),
+                self.source_view == view,
+            )
+        })
+        .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_source_view_for_test(&mut self, view: SourceView) {
+        self.source_view = view;
+        self.status_line = self.list_status_line();
+        self.clamp_selection();
+        self.reset_detail_scroll();
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
-        self.rows.is_empty()
+        match (&self.source_view, &self.origin_only) {
+            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows.is_empty(),
+            (SourceView::OriginOnly, _) => true,
+            _ => self.rows.is_empty(),
+        }
     }
 
     pub(crate) fn row_count(&self) -> usize {
-        self.rows.len()
+        match (&self.source_view, &self.origin_only) {
+            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows.len(),
+            (SourceView::OriginOnly, _) => 0,
+            _ => self.rows.len(),
+        }
     }
 
     pub(crate) fn diagnostics(&self) -> &[String] {
@@ -364,12 +756,36 @@ impl AppState {
         self.copy.inventory_title
     }
 
+    pub(crate) fn inventory_title_line(&self) -> String {
+        self.inventory_title().to_string()
+    }
+
     pub(crate) fn empty_inventory_message(&self) -> &str {
         self.copy.empty_inventory_message
     }
 
-    pub(crate) fn key_column_title(&self) -> &str {
-        self.copy.key_column_title
+    pub(crate) fn empty_state_message(&self) -> Option<String> {
+        if !self.visible_rows().is_empty() {
+            return None;
+        }
+        if !self.filter.is_empty() {
+            Some(self.copy.filter_miss_message.to_string())
+        } else if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
+            match &self.origin_only {
+                OriginOnlyState::NotFetched => Some("origin-only - not fetched".into()),
+                OriginOnlyState::Fetching { .. } => Some("fetching origin issues...".into()),
+                OriginOnlyState::Loaded { .. } => Some("no origin issues to import".into()),
+                OriginOnlyState::Error { message } => Some(message.clone()),
+            }
+        } else if self.rows.is_empty() {
+            Some(self.empty_inventory_message().to_string())
+        } else if self.copy.source_view_enabled && self.source_view == SourceView::Local {
+            Some("no local tasks".into())
+        } else if self.copy.source_view_enabled && self.source_view == SourceView::Published {
+            Some("no published tasks".into())
+        } else {
+            Some(self.empty_inventory_message().to_string())
+        }
     }
 
     pub(crate) fn no_selection_message(&self) -> &str {
@@ -394,10 +810,25 @@ impl AppState {
     }
 
     pub(crate) fn visible_rows(&self) -> Vec<&BrowserRow> {
-        self.rows
-            .iter()
-            .filter(|row| row_matches_filter(row, &self.filter))
-            .collect()
+        match (&self.source_view, &self.origin_only) {
+            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows
+                .iter()
+                .filter(|row| row_matches_filter(row, &self.filter))
+                .collect(),
+            (SourceView::OriginOnly, _) => Vec::new(),
+            _ => self
+                .rows
+                .iter()
+                .filter(|row| {
+                    row_matches_filter(row, &self.filter)
+                        && row_matches_source_view(row, self.source_view)
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn columns(&self) -> &[BrowserColumn] {
+        &self.columns
     }
 
     pub(crate) fn selected_visible_index(&self) -> Option<usize> {
@@ -434,36 +865,165 @@ impl AppState {
     ) {
         self.rows = rows;
         self.diagnostics = diagnostics;
+        self.invalidate_origin_only();
         self.mode = Mode::List;
-        self.status_line = default_status_line();
+        self.status_line = self.list_status_line();
         self.selected_index = self
             .visible_rows()
             .iter()
             .position(|row| row.key == preferred_key)
             .unwrap_or(self.selected_index);
         self.clamp_selection();
+        self.reset_detail_scroll();
         self.select_first_enabled_menu_item();
+        self.clamp_body_scroll();
+    }
+
+    pub(crate) fn invalidate_origin_only(&mut self) {
+        self.origin_only = OriginOnlyState::NotFetched;
+    }
+
+    pub(crate) fn origin_only_needs_fetch(&self) -> bool {
+        matches!(self.origin_only, OriginOnlyState::NotFetched)
+    }
+
+    pub(crate) fn origin_fetching(&self) -> bool {
+        matches!(self.origin_only, OriginOnlyState::Fetching { .. })
+    }
+
+    pub(crate) fn begin_origin_fetch(&mut self) {
+        self.origin_only = OriginOnlyState::Fetching { spinner_frame: 0 };
+        self.selected_index = 0;
+        self.clamp_selection();
+        self.reset_detail_scroll();
+        self.status_line = self.list_status_line();
+    }
+
+    pub(crate) fn apply_origin_fetch(
+        &mut self,
+        result: Result<Vec<BrowserRow>, String>,
+        fetched_at_label: &str,
+    ) {
+        self.origin_only = match result {
+            Ok(rows) => OriginOnlyState::Loaded {
+                rows,
+                fetched_at_label: fetched_at_label.to_string(),
+            },
+            Err(message) => OriginOnlyState::Error { message },
+        };
+        self.clamp_selection();
+        self.reset_detail_scroll();
+        self.select_first_enabled_menu_item();
+        self.clamp_body_scroll();
+        if self.mode == Mode::List {
+            self.status_line = self.list_status_line();
+        }
     }
 
     pub(crate) fn origin_status_counts(&self) -> Vec<(&str, usize)> {
         let mut counts = Vec::<(&str, usize)>::new();
-        for row in &self.rows {
-            if let Some((_, count)) = counts
-                .iter_mut()
-                .find(|(status, _)| *status == row.status.as_str())
-            {
-                *count += 1;
-            } else {
-                counts.push((row.status.as_str(), 1));
+        match (&self.source_view, &self.origin_only) {
+            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => {
+                for row in rows {
+                    push_origin_status_count(&mut counts, row);
+                }
+            }
+            (SourceView::OriginOnly, _) => {}
+            _ => {
+                for row in &self.rows {
+                    push_origin_status_count(&mut counts, row);
+                }
             }
         }
         counts
+    }
+
+    fn source_view_count(&self, view: SourceView) -> Option<usize> {
+        match (view, &self.origin_only) {
+            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => Some(
+                rows.iter()
+                    .filter(|row| row_matches_filter(row, &self.filter))
+                    .count(),
+            ),
+            (SourceView::OriginOnly, _) => None,
+            _ => Some(
+                self.rows
+                    .iter()
+                    .filter(|row| {
+                        row_matches_filter(row, &self.filter) && row_matches_source_view(row, view)
+                    })
+                    .count(),
+            ),
+        }
+    }
+
+    fn keymap_entries(&self) -> Vec<KeymapEntry> {
+        LIST_KEYMAP
+            .iter()
+            .copied()
+            .filter(|entry| !entry.task_only || self.copy.source_view_enabled)
+            .collect()
+    }
+
+    fn footer_keymap_summary(&self) -> String {
+        self.keymap_entries()
+            .into_iter()
+            .filter(|entry| entry.footer)
+            .map(|entry| format!("{} {}", entry.key, entry.desc))
+            .collect::<Vec<_>>()
+            .join("  ")
+    }
+
+    pub(crate) fn sidebar_open(&self) -> bool {
+        self.sidebar_open
+    }
+
+    pub(crate) fn sidebar_scroll(&self) -> usize {
+        self.sidebar_scroll
+    }
+
+    pub(crate) fn clamp_sidebar_scroll_to(&mut self, max_scroll: usize) {
+        self.sidebar_scroll = self.sidebar_scroll.min(max_scroll);
+    }
+
+    pub(crate) fn help_open(&self) -> bool {
+        self.help_open
+    }
+
+    pub(crate) fn help_keymap(&self) -> Vec<(&'static str, &'static str)> {
+        self.keymap_entries()
+            .into_iter()
+            .map(|entry| (entry.key, entry.desc))
+            .collect()
     }
 
     fn handle_list_key(&mut self, key: KeyInput) -> Outcome {
         match key {
             KeyInput::Down | KeyInput::Char('j') => self.move_down(),
             KeyInput::Up | KeyInput::Char('k') => self.move_up(),
+            KeyInput::Char('g') => self.move_to_first(),
+            KeyInput::Char('G') => self.move_to_last(),
+            KeyInput::Char('v') => self.open_body_view(),
+            KeyInput::Char('s') => self.toggle_sidebar(),
+            KeyInput::PageDown => self.scroll_sidebar_down(10),
+            KeyInput::PageUp => self.scroll_sidebar_up(10),
+            KeyInput::Char('?') => self.toggle_help(),
+            KeyInput::Char('r')
+                if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly =>
+            {
+                self.begin_origin_fetch();
+                return Outcome::FetchOriginIssues;
+            }
+            KeyInput::Char('i')
+                if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly =>
+            {
+                if let Some(row) = self.selected_row() {
+                    return Outcome::Dispatch {
+                        key: row.key.clone(),
+                        action: OriginAction::Import,
+                    };
+                }
+            }
             KeyInput::Char('/') => {
                 self.mode = Mode::FilterInput;
                 self.status_line = "type to filter; Esc clears filter".into();
@@ -472,6 +1032,12 @@ impl AppState {
                 self.open_menu();
             }
             KeyInput::Char('q') => return Outcome::Quit,
+            KeyInput::Char('l') if self.copy.source_view_enabled => {
+                return self.rotate_source_view(true);
+            }
+            KeyInput::Char('h') if self.copy.source_view_enabled => {
+                return self.rotate_source_view(false);
+            }
             KeyInput::Char(ch) => {
                 if let Some((key, action)) = self.shortcut_dispatch(ch) {
                     return Outcome::Dispatch { key, action };
@@ -482,28 +1048,50 @@ impl AppState {
         Outcome::Continue
     }
 
+    fn handle_help_key(&mut self, key: KeyInput) -> Outcome {
+        match key {
+            KeyInput::Char('q') => return Outcome::Quit,
+            KeyInput::Esc | KeyInput::Char('?') => {
+                self.help_open = false;
+                self.status_line = self.list_status_line();
+            }
+            KeyInput::Up
+            | KeyInput::Down
+            | KeyInput::PageUp
+            | KeyInput::PageDown
+            | KeyInput::Enter
+            | KeyInput::Backspace
+            | KeyInput::Char(_) => {}
+        }
+        Outcome::Continue
+    }
+
     fn handle_filter_key(&mut self, key: KeyInput) -> Outcome {
         match key {
             KeyInput::Esc => {
+                let before_key = self.selected_key_owned();
                 self.filter.clear();
                 self.mode = Mode::List;
-                self.status_line = default_status_line();
-                self.clamp_selection();
+                self.status_line = self.list_status_line();
+                self.clamp_selection_after_visible_rows_changed(before_key);
             }
             KeyInput::Enter => {
                 self.mode = Mode::List;
-                self.status_line = default_status_line();
+                self.status_line = self.list_status_line();
             }
             KeyInput::Down => self.move_down(),
             KeyInput::Up => self.move_up(),
             KeyInput::Backspace => {
+                let before_key = self.selected_key_owned();
                 self.filter.pop();
-                self.clamp_selection();
+                self.clamp_selection_after_visible_rows_changed(before_key);
             }
             KeyInput::Char(ch) => {
+                let before_key = self.selected_key_owned();
                 self.filter.push(ch);
-                self.clamp_selection();
+                self.clamp_selection_after_visible_rows_changed(before_key);
             }
+            KeyInput::PageUp | KeyInput::PageDown => {}
         }
         Outcome::Continue
     }
@@ -512,34 +1100,178 @@ impl AppState {
         match key {
             KeyInput::Esc => {
                 self.mode = Mode::List;
-                self.status_line = default_status_line();
+                self.status_line = self.list_status_line();
             }
             KeyInput::Down | KeyInput::Char('j') => self.move_menu_down(),
             KeyInput::Up | KeyInput::Char('k') => self.move_menu_up(),
             KeyInput::Enter => return self.menu_enter(),
             KeyInput::Char('q') => return Outcome::Quit,
-            KeyInput::Char(_) | KeyInput::Backspace => {}
+            KeyInput::PageUp | KeyInput::PageDown | KeyInput::Char(_) | KeyInput::Backspace => {}
         }
         Outcome::Continue
+    }
+
+    fn handle_body_view_key(&mut self, key: KeyInput) -> Outcome {
+        match key {
+            KeyInput::Esc | KeyInput::Char('v') => self.close_body_view(),
+            KeyInput::Down | KeyInput::Char('j') => self.scroll_body_down(1),
+            KeyInput::Up | KeyInput::Char('k') => self.scroll_body_up(1),
+            KeyInput::PageDown => self.scroll_body_down(10),
+            KeyInput::PageUp => self.scroll_body_up(10),
+            KeyInput::Enter | KeyInput::Backspace | KeyInput::Char(_) => {}
+        }
+        Outcome::Continue
+    }
+
+    fn open_body_view(&mut self) {
+        self.body_view_open = true;
+        self.body_scroll = 0;
+        self.status_line = "j/k scroll  PgUp/PgDn page  v/Esc close".into();
+    }
+
+    fn close_body_view(&mut self) {
+        self.body_view_open = false;
+        self.status_line = self.list_status_line();
+    }
+
+    fn rotate_source_view(&mut self, forward: bool) -> Outcome {
+        self.source_view = if forward {
+            self.source_view.next()
+        } else {
+            self.source_view.prev()
+        };
+        self.selected_index = 0;
+        self.clamp_selection();
+        self.reset_detail_scroll();
+        self.status_line = self.list_status_line();
+        if self.source_view == SourceView::OriginOnly && self.origin_only_needs_fetch() {
+            self.begin_origin_fetch();
+            return Outcome::FetchOriginIssues;
+        }
+        Outcome::Continue
+    }
+
+    fn list_status_line(&self) -> String {
+        let controls = self.footer_keymap_summary();
+        if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
+            if let Some(status) = self.origin_only_status_label() {
+                return format!("{controls}  [origin: {status}]");
+            }
+        }
+        controls
+    }
+
+    fn origin_only_status_label(&self) -> Option<String> {
+        match &self.origin_only {
+            OriginOnlyState::NotFetched => Some("not fetched".into()),
+            OriginOnlyState::Fetching { .. } => Some("fetching".into()),
+            OriginOnlyState::Loaded {
+                fetched_at_label, ..
+            } if !fetched_at_label.trim().is_empty() => Some(format!("fetched {fetched_at_label}")),
+            OriginOnlyState::Loaded { .. } => Some("fetched".into()),
+            OriginOnlyState::Error { message } => Some(format!("error: {message}")),
+        }
+    }
+
+    fn scroll_body_down(&mut self, amount: usize) {
+        if !self.body_lines().is_empty() {
+            self.body_scroll = self.body_scroll.saturating_add(amount);
+        }
+    }
+
+    fn scroll_body_up(&mut self, amount: usize) {
+        self.body_scroll = self.body_scroll.saturating_sub(amount);
+    }
+
+    fn clamp_body_scroll(&mut self) {
+        if self.body_lines().is_empty() {
+            self.body_scroll = 0;
+        }
+    }
+
+    pub(crate) fn clamp_body_scroll_to(&mut self, max_scroll: usize) {
+        self.body_scroll = self.body_scroll.min(max_scroll);
+    }
+
+    fn toggle_sidebar(&mut self) {
+        self.sidebar_open = !self.sidebar_open;
+        self.sidebar_scroll = 0;
+        self.status_line = self.list_status_line();
+    }
+
+    fn scroll_sidebar_down(&mut self, amount: usize) {
+        if self.sidebar_open && (self.selected_row().is_some() || !self.diagnostics.is_empty()) {
+            self.sidebar_scroll = self.sidebar_scroll.saturating_add(amount);
+        }
+    }
+
+    fn scroll_sidebar_up(&mut self, amount: usize) {
+        self.sidebar_scroll = self.sidebar_scroll.saturating_sub(amount);
+    }
+
+    fn toggle_help(&mut self) {
+        self.help_open = !self.help_open;
+        self.status_line = self.list_status_line();
     }
 
     fn move_down(&mut self) {
         let len = self.visible_rows().len();
         if len > 0 {
-            self.selected_index = (self.selected_index + 1).min(len - 1);
+            self.set_selected_index((self.selected_index + 1).min(len - 1));
         }
     }
 
     fn move_up(&mut self) {
-        self.selected_index = self.selected_index.saturating_sub(1);
+        self.set_selected_index(self.selected_index.saturating_sub(1));
+    }
+
+    fn move_to_first(&mut self) {
+        if !self.visible_rows().is_empty() {
+            self.set_selected_index(0);
+        }
+    }
+
+    fn move_to_last(&mut self) {
+        let len = self.visible_rows().len();
+        if len > 0 {
+            self.set_selected_index(len.saturating_sub(1));
+        }
+    }
+
+    fn set_selected_index(&mut self, index: usize) {
+        if self.selected_index != index {
+            self.selected_index = index;
+            self.reset_detail_scroll();
+        } else {
+            self.selected_index = index;
+        }
+    }
+
+    fn reset_detail_scroll(&mut self) {
+        self.sidebar_scroll = 0;
+    }
+
+    fn selected_key_owned(&self) -> Option<String> {
+        self.selected_row().map(|row| row.key.clone())
+    }
+
+    fn clamp_selection_after_visible_rows_changed(&mut self, before_key: Option<String>) {
+        self.clamp_selection();
+        if self.selected_key_owned() != before_key {
+            self.reset_detail_scroll();
+        }
     }
 
     fn clamp_selection(&mut self) {
         let len = self.visible_rows().len();
+        let before = self.selected_index;
         if len == 0 {
             self.selected_index = 0;
         } else {
             self.selected_index = self.selected_index.min(len - 1);
+        }
+        if self.selected_index != before {
+            self.reset_detail_scroll();
         }
     }
 
@@ -622,7 +1354,12 @@ fn handle_confirm_popup_key(selected: &mut bool, key: KeyInput) -> Option<PopupO
             *selected = false;
             None
         }
-        KeyInput::Up | KeyInput::Down | KeyInput::Backspace | KeyInput::Char(_) => None,
+        KeyInput::Up
+        | KeyInput::Down
+        | KeyInput::PageUp
+        | KeyInput::PageDown
+        | KeyInput::Backspace
+        | KeyInput::Char(_) => None,
     }
 }
 
@@ -659,7 +1396,7 @@ fn handle_select_popup_key(
             }
             None
         }
-        KeyInput::Backspace | KeyInput::Char(_) => None,
+        KeyInput::PageUp | KeyInput::PageDown | KeyInput::Backspace | KeyInput::Char(_) => None,
     }
 }
 
@@ -675,12 +1412,60 @@ fn handle_input_popup_key(buffer: &mut String, key: KeyInput) -> Option<PopupOut
             buffer.push(ch);
             None
         }
-        KeyInput::Up | KeyInput::Down => None,
+        KeyInput::Up | KeyInput::Down | KeyInput::PageUp | KeyInput::PageDown => None,
     }
 }
 
-fn default_status_line() -> String {
-    "j/k move  / filter  Enter actions  q quit".into()
+fn progress_label_for(verb: &str) -> String {
+    match verb {
+        "archive" => "archiving".into(),
+        _ => format!("{verb}ing"),
+    }
+}
+
+fn sanitize_body_for_markup(body: &str) -> String {
+    strip_terminal_sequences(body).replace('\t', " ")
+}
+
+fn wrapped_body_line(kind: &LineKind, text: &str, width: usize) -> Vec<(LineKind, String)> {
+    wrap_body_text(&body_display_text(kind, text), width)
+        .into_iter()
+        .map(|line| (kind.clone(), line))
+        .collect()
+}
+
+fn body_display_text(kind: &LineKind, text: &str) -> String {
+    match kind {
+        LineKind::Checkbox(checked) => {
+            let marker = if *checked { "☑ " } else { "☐ " };
+            format!("{marker}{text}")
+        }
+        LineKind::Heading | LineKind::Plain | LineKind::Code => text.to_string(),
+    }
+}
+
+fn wrap_body_text(text: &str, width: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0;
+
+    for ch in text.chars() {
+        let ch_width = measure_text_width(&ch.to_string());
+        if current_width > 0 && current_width + ch_width > width {
+            lines.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += ch_width;
+    }
+
+    lines.push(current);
+    lines
 }
 
 fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
@@ -691,7 +1476,62 @@ fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
     let needle = filter.to_lowercase();
     row.key.to_lowercase().contains(&needle)
         || row.title.to_lowercase().contains(&needle)
+        || row.run_status.to_lowercase().contains(&needle)
         || row.origin_label.to_lowercase().contains(&needle)
+        || row.next_action.to_lowercase().contains(&needle)
+        || row
+            .duration
+            .as_deref()
+            .is_some_and(|duration| duration.to_lowercase().contains(&needle))
+        || row
+            .size
+            .as_deref()
+            .is_some_and(|size| size.to_lowercase().contains(&needle))
+        || row
+            .branch
+            .as_deref()
+            .is_some_and(|branch| branch.to_lowercase().contains(&needle))
+}
+
+fn row_matches_source_view(row: &BrowserRow, view: SourceView) -> bool {
+    match view {
+        SourceView::All => true,
+        SourceView::Local => row.source == "local",
+        SourceView::Published => row.source == "provider-origin",
+        SourceView::OriginOnly => false,
+    }
+}
+
+fn push_origin_status_count<'a>(counts: &mut Vec<(&'a str, usize)>, row: &'a BrowserRow) {
+    if let Some((_, count)) = counts
+        .iter_mut()
+        .find(|(status, _)| *status == row.status.as_str())
+    {
+        *count += 1;
+    } else {
+        counts.push((row.status.as_str(), 1));
+    }
+}
+
+#[cfg(test)]
+fn default_task_columns() -> Vec<BrowserColumn> {
+    vec![
+        BrowserColumn::length("status", BrowserCell::Status, 10),
+        BrowserColumn::length("origin", BrowserCell::OriginLabel, 18),
+        BrowserColumn::min("title", BrowserCell::Title, 18),
+        BrowserColumn::length("task", BrowserCell::Key, 24),
+        BrowserColumn::length("next", BrowserCell::NextAction, 8),
+    ]
+}
+
+fn workflow_columns() -> Vec<BrowserColumn> {
+    vec![
+        BrowserColumn::length("status", BrowserCell::Status, 10),
+        BrowserColumn::length("origin", BrowserCell::OriginLabel, 18),
+        BrowserColumn::min("title", BrowserCell::Title, 18),
+        BrowserColumn::length("workflow", BrowserCell::Key, 24),
+        BrowserColumn::length("next", BrowserCell::NextAction, 8),
+    ]
 }
 
 #[cfg(test)]
@@ -709,11 +1549,31 @@ mod tests {
             key: key.into(),
             title: title.into(),
             status: status.into(),
+            run_status: "new".into(),
             origin_label: "Linear WT-142".into(),
             next_action: "diff".into(),
+            duration: None,
+            size: None,
+            branch: Some(format!("feature/{key}")),
+            source: "provider-origin".into(),
+            body: String::new(),
             preview_lines: vec![format!("Origin      Linear WT-142")],
             menu,
         }
+    }
+
+    fn source_row(key: &str, source: &str) -> BrowserRow {
+        let mut r = row(key, key, "stale");
+        r.source = source.into();
+        r
+    }
+
+    fn origin_row(key: &str) -> BrowserRow {
+        let mut r = source_row(key, "provider-origin");
+        r.key = key.into();
+        r.status = "origin-only".into();
+        r.menu = OriginActionMenu::for_origin_issue_placeholder("Provider issue");
+        r
     }
 
     fn app() -> AppState {
@@ -722,6 +1582,12 @@ mod tests {
             row("workflow-docs", "Workflow origin docs", "stale"),
             row("scratch-clean", "Scratch cleanup", "local"),
         ])
+    }
+
+    fn app_with_body(body: &str) -> AppState {
+        let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
+        browser_row.body = body.into();
+        AppState::new(vec![browser_row])
     }
 
     #[test]
@@ -821,6 +1687,182 @@ mod tests {
     }
 
     #[test]
+    fn archive_running_action_uses_archiving_label() {
+        let mut app = app();
+
+        app.begin_action("origin-sync-tui", "archive");
+
+        assert_eq!(app.status_line(), "archiving origin-sync-tui...");
+        assert_eq!(
+            app.running_status_line(),
+            Some("archiving origin-sync-tui...".into())
+        );
+        assert!(!app.status_line().contains("archiveing"));
+    }
+
+    #[test]
+    fn v_key_toggles_body_view_and_esc_closes() {
+        let mut app = app();
+        assert!(!app.body_view_open());
+        app.handle(KeyInput::Char('v'));
+        assert!(app.body_view_open());
+        app.handle(KeyInput::Esc);
+        assert!(!app.body_view_open());
+    }
+
+    #[test]
+    fn body_view_scrolls_and_blocks_dispatch() {
+        let mut app = app_with_body("one\ntwo\nthree\nfour");
+        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Char('j'));
+        assert_eq!(app.body_scroll(), 1);
+
+        let outcome = app.handle(KeyInput::Enter);
+        assert_eq!(outcome, Outcome::Continue);
+        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.handle(KeyInput::Char('d')), Outcome::Continue);
+    }
+
+    #[test]
+    fn a_key_requests_archive_dispatch_for_selected() {
+        let mut app = app();
+
+        assert_eq!(
+            app.handle(KeyInput::Char('a')),
+            Outcome::Dispatch {
+                key: "origin-sync-tui".into(),
+                action: OriginAction::Archive
+            }
+        );
+    }
+
+    #[test]
+    fn a_key_ignored_during_body_view() {
+        let mut app = app();
+        app.handle(KeyInput::Char('v'));
+
+        assert_eq!(app.handle(KeyInput::Char('a')), Outcome::Continue);
+    }
+
+    #[test]
+    fn task_status_line_mentions_archive_shortcut() {
+        let app = app();
+
+        assert!(app.status_line().contains("a archive"));
+    }
+
+    #[test]
+    fn task_status_line_mentions_source_view_shortcut() {
+        let app = app();
+
+        assert!(app.status_line().contains("h/l view"));
+    }
+
+    #[test]
+    fn workflow_status_line_omits_archive_shortcut() {
+        let app = AppState::workflow_with_diagnostics(Vec::new(), Vec::new());
+
+        assert!(!app.status_line().contains("a archive"));
+        assert!(!app.status_line().contains("h/l view"));
+    }
+
+    #[test]
+    fn body_view_page_keys_scroll_by_larger_steps() {
+        let body = (0..20)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = app_with_body(&body);
+        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::PageDown);
+        assert_eq!(app.body_scroll(), 10);
+        app.handle(KeyInput::PageUp);
+        assert_eq!(app.body_scroll(), 0);
+    }
+
+    #[test]
+    fn s_toggles_sidebar_default_open() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        assert!(app.sidebar_open());
+
+        app.handle(KeyInput::Char('s'));
+        assert!(!app.sidebar_open());
+
+        app.handle(KeyInput::Char('s'));
+        assert!(app.sidebar_open());
+    }
+
+    #[test]
+    fn capital_p_dispatches_push_shortcut_for_origin_task() {
+        let mut app = app();
+
+        assert_eq!(
+            app.handle(KeyInput::Char('P')),
+            Outcome::Dispatch {
+                key: "origin-sync-tui".into(),
+                action: OriginAction::Push,
+            }
+        );
+    }
+
+    #[test]
+    fn capital_p_dispatches_push_shortcut_for_workflow_row() {
+        let mut app = AppState::workflow_with_diagnostics(
+            vec![row("publish-workflow", "Publish workflow", "stale")],
+            Vec::new(),
+        );
+
+        assert_eq!(
+            app.handle(KeyInput::Char('P')),
+            Outcome::Dispatch {
+                key: "publish-workflow".into(),
+                action: OriginAction::Push,
+            }
+        );
+    }
+
+    #[test]
+    fn pageup_pagedown_scroll_sidebar_when_open() {
+        let body = (0..20)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = app_with_body(&body);
+
+        app.handle(KeyInput::PageDown);
+        assert_eq!(app.sidebar_scroll(), 10);
+
+        app.handle(KeyInput::PageUp);
+        assert_eq!(app.sidebar_scroll(), 0);
+    }
+
+    #[test]
+    fn pagedown_scrolls_diagnostics_detail_without_selection() {
+        let diagnostics = (0..30)
+            .map(|index| format!("diagnostic line {index}"))
+            .collect::<Vec<_>>();
+        let mut app = AppState::with_diagnostics(Vec::new(), diagnostics);
+
+        assert!(app.selected_row().is_none());
+        app.handle(KeyInput::PageDown);
+
+        assert_eq!(app.sidebar_scroll(), 10);
+    }
+
+    #[test]
+    fn filter_change_to_different_selected_row_resets_sidebar_scroll() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+        app.handle(KeyInput::PageDown);
+        assert_eq!(app.sidebar_scroll(), 10);
+
+        app.handle(KeyInput::Char('/'));
+        app.handle(KeyInput::Char('b'));
+
+        assert_eq!(app.selected_key(), Some("b"));
+        assert_eq!(app.sidebar_scroll(), 0);
+    }
+
+    #[test]
     fn down_and_up_move_selection_within_bounds() {
         let mut app = app();
         assert_eq!(app.selected_key(), Some("origin-sync-tui"));
@@ -831,6 +1873,21 @@ mod tests {
         assert_eq!(app.selected_key(), Some("scratch-clean"));
         app.handle(KeyInput::Up);
         assert_eq!(app.selected_key(), Some("workflow-docs"));
+    }
+
+    #[test]
+    fn g_moves_to_first_capital_g_to_last() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+
+        app.handle(KeyInput::Char('G'));
+        assert_eq!(app.selected_key(), Some("c"));
+
+        app.handle(KeyInput::Char('g'));
+        assert_eq!(app.selected_key(), Some("a"));
     }
 
     #[test]
@@ -865,6 +1922,456 @@ mod tests {
         assert_eq!(app.visible_keys().len(), 3);
         app.handle(KeyInput::Backspace);
         assert_eq!(app.filter(), "", "빈 filter에서 backspace는 no-op");
+    }
+
+    #[test]
+    fn source_view_default_is_all_shows_every_row() {
+        let app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        assert_eq!(app.source_view(), SourceView::All);
+        assert_eq!(app.visible_keys(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn source_view_tabs_expose_label_count_and_active() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::Local);
+
+        let tabs = app.source_view_tabs();
+        let local = tabs.iter().find(|tab| tab.0 == "local").unwrap();
+        assert_eq!(local.1, Some(1));
+        assert!(local.2);
+
+        let all = tabs.iter().find(|tab| tab.0 == "all").unwrap();
+        assert_eq!(all.1, Some(2));
+        assert!(!all.2);
+    }
+
+    #[test]
+    fn workflow_browser_has_no_source_view_tabs() {
+        let app = AppState::workflow_with_diagnostics(vec![source_row("w", "local")], Vec::new());
+
+        assert!(app.source_view_tabs().is_empty());
+    }
+
+    #[test]
+    fn local_view_shows_only_local_source_rows() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::Local);
+        assert_eq!(app.visible_keys(), vec!["a"]);
+    }
+
+    #[test]
+    fn published_view_shows_only_provider_origin_rows() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::Published);
+        assert_eq!(app.visible_keys(), vec!["b"]);
+    }
+
+    #[test]
+    fn origin_only_view_is_empty_placeholder_in_s1() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        assert!(app.visible_keys().is_empty());
+    }
+
+    #[test]
+    fn origin_only_view_shows_loaded_cache_not_local_rows() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(
+            Ok(vec![origin_row("github:175"), origin_row("github:178")]),
+            "just now",
+        );
+
+        assert_eq!(app.visible_keys(), vec!["github:175", "github:178"]);
+        assert!(app.status_line().contains("just now"));
+    }
+
+    #[test]
+    fn origin_only_error_shows_message_and_empty() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Err("github not authenticated".into()), "");
+
+        assert!(app.visible_keys().is_empty());
+        assert!(app.status_line().contains("not authenticated"));
+    }
+
+    #[test]
+    fn origin_only_nav_noop_when_empty() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+
+        app.handle(KeyInput::Char('j'));
+
+        assert!(app.selected_row().is_none());
+    }
+
+    #[test]
+    fn origin_only_cache_persists_on_reentry_no_refetch_flag() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+        app.set_source_view_for_test(SourceView::Local);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+
+        assert!(!app.origin_only_needs_fetch());
+        assert_eq!(app.visible_keys(), vec!["github:175"]);
+    }
+
+    #[test]
+    fn replacing_local_rows_invalidates_loaded_origin_only_cache() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+
+        app.replace_rows_preserving_selection(
+            vec![source_row("local-b", "local")],
+            Vec::new(),
+            "local-b",
+        );
+
+        assert!(app.origin_only_needs_fetch());
+        assert!(app.visible_keys().is_empty());
+    }
+
+    #[test]
+    fn invalidate_origin_only_resets_loaded_origin_cache() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+
+        app.invalidate_origin_only();
+
+        assert!(app.origin_only_needs_fetch());
+        assert!(app.visible_keys().is_empty());
+    }
+
+    #[test]
+    fn origin_only_non_loaded_header_inventory_is_empty() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+
+        assert!(app.is_empty());
+        assert_eq!(app.row_count(), 0);
+        assert!(app.origin_status_counts().is_empty());
+
+        app.begin_origin_fetch();
+        assert!(app.is_empty());
+        assert_eq!(app.row_count(), 0);
+        assert!(app.origin_status_counts().is_empty());
+
+        app.apply_origin_fetch(Err("github not authenticated".into()), "");
+        assert!(app.is_empty());
+        assert_eq!(app.row_count(), 0);
+        assert!(app.origin_status_counts().is_empty());
+    }
+
+    #[test]
+    fn entering_origin_only_requests_fetch_once_until_refetch() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+
+        assert_eq!(app.handle(KeyInput::Char('l')), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('l')), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('l')), Outcome::FetchOriginIssues);
+        assert!(app.origin_fetching());
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+        assert_eq!(app.handle(KeyInput::Char('h')), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('l')), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('r')), Outcome::FetchOriginIssues);
+    }
+
+    #[test]
+    fn i_key_requests_import_for_selected_origin_only_row() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+
+        assert_eq!(
+            app.handle(KeyInput::Char('i')),
+            Outcome::Dispatch {
+                key: "github:175".into(),
+                action: OriginAction::Import,
+            }
+        );
+    }
+
+    #[test]
+    fn i_key_ignored_in_local_view() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.set_source_view_for_test(SourceView::Local);
+
+        assert_eq!(app.handle(KeyInput::Char('i')), Outcome::Continue);
+    }
+
+    #[test]
+    fn import_refresh_can_show_imported_issue_as_published_row() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+
+        app.replace_rows_preserving_selection(
+            vec![source_row("175", "provider-origin")],
+            Vec::new(),
+            "github:175",
+        );
+        app.set_source_view_for_test(SourceView::Published);
+
+        assert!(app.origin_only_needs_fetch());
+        assert_eq!(app.visible_keys(), vec!["175"]);
+    }
+
+    #[test]
+    fn empty_local_view_reports_view_specific_message() {
+        let mut app = AppState::new(vec![source_row("a", "provider-origin")]);
+        app.set_source_view_for_test(SourceView::Local);
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(app.empty_state_message().as_deref(), Some("no local tasks"));
+    }
+
+    #[test]
+    fn empty_published_view_reports_view_specific_message() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.set_source_view_for_test(SourceView::Published);
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no published tasks")
+        );
+    }
+
+    #[test]
+    fn empty_origin_only_view_reports_view_specific_message() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("origin-only - not fetched")
+        );
+    }
+
+    #[test]
+    fn empty_state_message_falls_back_to_inventory_when_no_rows() {
+        let app = AppState::new(vec![]);
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("No actionable tasks")
+        );
+    }
+
+    #[test]
+    fn empty_state_message_is_none_when_rows_are_visible() {
+        let app = AppState::new(vec![source_row("a", "local")]);
+        assert!(app.empty_state_message().is_none());
+    }
+
+    #[test]
+    fn empty_state_message_reports_filter_miss_in_all_view() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('/'));
+        for ch in "zzz".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no matching tasks")
+        );
+    }
+
+    #[test]
+    fn empty_state_message_reports_filter_miss_before_source_view_empty() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.set_source_view_for_test(SourceView::Local);
+        app.handle(KeyInput::Char('/'));
+        for ch in "zzz".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no matching tasks")
+        );
+    }
+
+    #[test]
+    fn workflow_empty_state_message_reports_workflow_filter_miss() {
+        let mut app =
+            AppState::workflow_with_diagnostics(vec![source_row("wf", "local")], Vec::new());
+        app.handle(KeyInput::Char('/'));
+        for ch in "zzz".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+
+        assert!(app.visible_keys().is_empty());
+        assert_eq!(
+            app.empty_state_message().as_deref(),
+            Some("no matching workflows")
+        );
+    }
+
+    #[test]
+    fn source_view_4way_next_prev_wrap() {
+        assert_eq!(SourceView::All.next(), SourceView::Local);
+        assert_eq!(SourceView::Local.next(), SourceView::Published);
+        assert_eq!(SourceView::Published.next(), SourceView::OriginOnly);
+        assert_eq!(SourceView::OriginOnly.next(), SourceView::All);
+        assert_eq!(SourceView::All.prev(), SourceView::OriginOnly);
+        assert_eq!(SourceView::OriginOnly.prev(), SourceView::Published);
+        assert_eq!(SourceView::Published.prev(), SourceView::Local);
+        assert_eq!(SourceView::Local.prev(), SourceView::All);
+    }
+
+    #[test]
+    fn source_view_labels_match_publish_state() {
+        assert_eq!(SourceView::All.label(), "all");
+        assert_eq!(SourceView::Local.label(), "local");
+        assert_eq!(SourceView::Published.label(), "published");
+        assert_eq!(SourceView::OriginOnly.label(), "origin-only");
+    }
+
+    #[test]
+    fn l_rotates_source_view_forward_wrapping() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('l'));
+        assert_eq!(app.source_view(), SourceView::Local);
+        app.handle(KeyInput::Char('l'));
+        assert_eq!(app.source_view(), SourceView::Published);
+        app.handle(KeyInput::Char('l'));
+        assert_eq!(app.source_view(), SourceView::OriginOnly);
+        app.handle(KeyInput::Char('l'));
+        assert_eq!(app.source_view(), SourceView::All);
+    }
+
+    #[test]
+    fn h_rotates_source_view_backward_wrapping() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('h'));
+        assert_eq!(app.source_view(), SourceView::OriginOnly);
+        app.handle(KeyInput::Char('h'));
+        assert_eq!(app.source_view(), SourceView::Published);
+        app.handle(KeyInput::Char('h'));
+        assert_eq!(app.source_view(), SourceView::Local);
+        app.handle(KeyInput::Char('h'));
+        assert_eq!(app.source_view(), SourceView::All);
+    }
+
+    #[test]
+    fn list_title_stays_plain_when_source_view_tabs_own_view_state() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('l'));
+
+        assert_eq!(app.inventory_title_line(), "Tasks");
+        assert!(!app.status_line().contains("[view:"));
+        assert!(app.status_line().contains("h/l view"));
+    }
+
+    #[test]
+    fn workflow_list_title_omits_source_view() {
+        let app = AppState::workflow_with_diagnostics(vec![source_row("wf", "local")], Vec::new());
+        assert_eq!(app.inventory_title_line(), "Workflows");
+    }
+
+    #[test]
+    fn source_view_and_text_filter_compose_as_and() {
+        let mut app = AppState::new(vec![
+            source_row("alpha", "local"),
+            source_row("beta", "local"),
+            source_row("alpine", "provider-origin"),
+        ]);
+        app.handle(KeyInput::Char('l'));
+        app.handle(KeyInput::Char('/'));
+        for ch in "alp".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+        assert_eq!(app.visible_keys(), vec!["alpha"]);
+    }
+
+    #[test]
+    fn filter_input_mode_hl_are_filter_text_not_rotation() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('/'));
+        app.handle(KeyInput::Char('h'));
+        app.handle(KeyInput::Char('l'));
+        assert_eq!(app.filter(), "hl");
+        assert_eq!(app.source_view(), SourceView::All);
+    }
+
+    #[test]
+    fn empty_source_view_does_not_crash_and_nav_is_noop() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        app.handle(KeyInput::Char('l'));
+        app.handle(KeyInput::Char('l'));
+        app.handle(KeyInput::Char('l'));
+        assert!(app.visible_keys().is_empty());
+        assert!(app.selected_row().is_none());
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('k'));
+        assert!(app.selected_row().is_none());
+    }
+
+    #[test]
+    fn workflow_browser_hl_does_not_rotate_source_view() {
+        let mut app =
+            AppState::workflow_with_diagnostics(vec![source_row("wf", "local")], Vec::new());
+        app.handle(KeyInput::Char('l'));
+        app.handle(KeyInput::Char('h'));
+        assert_eq!(app.source_view(), SourceView::All);
+        assert!(!app.status_line().contains("view:"));
+    }
+
+    #[test]
+    fn question_mark_toggles_help_overlay() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        assert!(!app.help_open());
+
+        app.handle(KeyInput::Char('?'));
+        assert!(app.help_open());
+
+        let keys = app.help_keymap();
+        assert!(keys.iter().any(|(key, _)| *key == "s"));
+        assert!(keys.iter().any(|(key, _)| *key == "h/l"));
+
+        app.handle(KeyInput::Char('?'));
+        assert!(!app.help_open());
+    }
+
+    #[test]
+    fn q_quits_while_help_overlay_is_open() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+
+        app.handle(KeyInput::Char('?'));
+        assert!(app.help_open());
+        assert_eq!(app.handle(KeyInput::Char('q')), Outcome::Quit);
+    }
+
+    #[test]
+    fn footer_hint_and_overlay_share_keymap_source() {
+        let app = AppState::new(vec![source_row("a", "local")]);
+        let keys = app.help_keymap();
+
+        assert!(keys.iter().any(|(key, _)| *key == "q"));
+        assert!(keys.iter().any(|(key, desc)| {
+            app.status_line().contains(*key) && app.status_line().contains(*desc)
+        }));
     }
 
     #[test]
@@ -919,10 +2426,37 @@ mod tests {
     }
 
     #[test]
+    fn menu_enter_on_archive_item_requests_dispatch() {
+        let mut app = app();
+        app.handle(KeyInput::Enter);
+        let item_count = app.selected_row().unwrap().menu.items().len();
+
+        for _ in 0..item_count {
+            if app
+                .selected_menu_item()
+                .is_some_and(|item| item.action() == OriginAction::Archive)
+            {
+                assert_eq!(
+                    app.handle(KeyInput::Enter),
+                    Outcome::Dispatch {
+                        key: "origin-sync-tui".into(),
+                        action: OriginAction::Archive
+                    }
+                );
+                return;
+            }
+            app.handle(KeyInput::Down);
+        }
+
+        panic!("archive item not found");
+    }
+
+    #[test]
     fn menu_enter_on_disabled_item_shows_reason_and_stays() {
         let mut app = app();
         app.handle(KeyInput::Enter);
-        for _ in 0..8 {
+        let item_count = app.selected_row().unwrap().menu.items().len();
+        for _ in 0..item_count {
             if app.menu_selection_is_disabled() {
                 app.handle(KeyInput::Enter);
                 if app.status_line().contains("already has origin") {

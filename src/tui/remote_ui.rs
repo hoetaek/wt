@@ -1,5 +1,6 @@
 use crate::context::UserInterface;
 use crate::error::WtError;
+use crate::services::issues::IssueListItem;
 use anyhow::{Result, bail};
 use std::sync::{Mutex, mpsc};
 
@@ -36,6 +37,10 @@ pub(crate) enum UiRequest {
     Print {
         kind: PrintKind,
         line: String,
+    },
+    OriginIssuesLoaded {
+        provider: String,
+        result: std::result::Result<Vec<IssueListItem>, String>,
     },
 }
 

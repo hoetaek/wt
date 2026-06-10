@@ -1,4 +1,5 @@
 use crate::commands;
+use crate::config::IssueProviderType;
 use crate::context::{Ctx, CtxOptions, UserInterface};
 use crate::origin_action_menu::OriginAction;
 use crate::origin_snapshot::{read_task_snapshot, read_workflow_snapshot};
@@ -51,7 +52,9 @@ impl DispatchBackend for CtxBackend<'_> {
             | OriginAction::Pull
             | OriginAction::Push
             | OriginAction::Publish
-            | OriginAction::Attach => OutputSink::Worker,
+            | OriginAction::Attach
+            | OriginAction::Import
+            | OriginAction::Archive => OutputSink::Worker,
             OriginAction::KeepLocal | OriginAction::OpenInBrowser | OriginAction::CopyReference => {
                 OutputSink::StatusLine
             }
@@ -66,6 +69,8 @@ impl DispatchBackend for CtxBackend<'_> {
             OriginAction::Push => "push",
             OriginAction::Publish => "publish",
             OriginAction::Attach => "attach",
+            OriginAction::Import => "import",
+            OriginAction::Archive => "archive",
             OriginAction::KeepLocal | OriginAction::OpenInBrowser | OriginAction::CopyReference => {
                 "run"
             }
@@ -83,6 +88,13 @@ impl DispatchBackend for CtxBackend<'_> {
                 Box::new(move |ctx| commands::task_origin::publish(ctx, &[key]))
             }
             OriginAction::Attach => Box::new(move |ctx| attach_origin(ctx, &key)),
+            OriginAction::Import => {
+                let issue = origin_only_import_id(&key);
+                Box::new(move |ctx| commands::task_origin::import(ctx, &[issue]))
+            }
+            OriginAction::Archive => {
+                Box::new(move |ctx| commands::task_archive::archive(ctx, &[key]))
+            }
             OriginAction::KeepLocal | OriginAction::OpenInBrowser | OriginAction::CopyReference => {
                 Box::new(move |_| bail!("{action:?} is a status-line action"))
             }
@@ -120,7 +132,9 @@ impl DispatchBackend for CtxBackend<'_> {
             | OriginAction::Pull
             | OriginAction::Push
             | OriginAction::Publish
-            | OriginAction::Attach => bail!("{action:?} is a worker action"),
+            | OriginAction::Attach
+            | OriginAction::Import
+            | OriginAction::Archive => bail!("{action:?} is a worker action"),
         }
     }
 }
@@ -143,10 +157,12 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             | OriginAction::Pull
             | OriginAction::Push
             | OriginAction::Attach => OutputSink::Worker,
-            // Publish and KeepLocal answer with a one-line unsupported notice
-            // for workflows, so they stay in the browser.
+            // Unsupported task-only actions answer with a one-line notice for
+            // workflows, so they stay in the browser.
             OriginAction::Publish
             | OriginAction::KeepLocal
+            | OriginAction::Import
+            | OriginAction::Archive
             | OriginAction::OpenInBrowser
             | OriginAction::CopyReference => OutputSink::StatusLine,
         }
@@ -161,6 +177,8 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             OriginAction::Attach => "attach",
             OriginAction::Publish
             | OriginAction::KeepLocal
+            | OriginAction::Import
+            | OriginAction::Archive
             | OriginAction::OpenInBrowser
             | OriginAction::CopyReference => "run",
         }
@@ -184,6 +202,8 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             OriginAction::Attach => Box::new(move |ctx| attach_workflow_origin(ctx, &key)),
             OriginAction::Publish
             | OriginAction::KeepLocal
+            | OriginAction::Import
+            | OriginAction::Archive
             | OriginAction::OpenInBrowser
             | OriginAction::CopyReference => {
                 Box::new(move |_| bail!("{action:?} is a status-line action"))
@@ -218,6 +238,12 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
             OriginAction::KeepLocal => Ok(format!(
                 "Keep local-only is not available for workflow {key}; workflow origins are optional by omission"
             )),
+            OriginAction::Import => Ok(format!(
+                "Import is not available for workflow {key}; import provider issues from the task browser"
+            )),
+            OriginAction::Archive => Ok(format!(
+                "Archive is not available for workflow {key}; archive tasks from the task browser"
+            )),
             OriginAction::OpenInBrowser => open_workflow_origin_url(self.ctx, key),
             OriginAction::CopyReference => copy_workflow_reference(self.ctx, key),
             OriginAction::Diff
@@ -229,6 +255,15 @@ impl DispatchBackend for WorkflowCtxBackend<'_> {
     }
 }
 
+fn origin_only_import_id(key: &str) -> String {
+    key.split_once(':')
+        .map(|(_, id)| id)
+        .unwrap_or(key)
+        .trim()
+        .trim_start_matches('#')
+        .to_string()
+}
+
 pub(crate) enum DispatchStart {
     Started(InFlightAction),
     Message(String),
@@ -237,6 +272,11 @@ pub(crate) enum DispatchStart {
 pub(crate) struct InFlightAction {
     pub(crate) key: String,
     pub(crate) verb: &'static str,
+    pub(crate) ui_rx: mpsc::Receiver<UiRequest>,
+    pub(crate) done_rx: mpsc::Receiver<Result<()>>,
+}
+
+pub(crate) struct InFlightOriginFetch {
     pub(crate) ui_rx: mpsc::Receiver<UiRequest>,
     pub(crate) done_rx: mpsc::Receiver<Result<()>>,
 }
@@ -273,6 +313,49 @@ pub(crate) fn dispatch(
                 .run_status_line(action, key)
                 .unwrap_or_else(|err| format!("error: {err:#}")),
         )),
+    }
+}
+
+pub(crate) fn spawn_origin_fetch(ctx: &Ctx) -> InFlightOriginFetch {
+    let (ui_tx, ui_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let provider = configured_issue_provider(ctx);
+    let worker_ui_tx = ui_tx.clone();
+    let worker_ctx = Ctx::new_with_options(
+        ctx.repo_root.clone(),
+        ctx.invocation_root.clone(),
+        ctx.config.clone(),
+        Box::new(crate::runner::RealRunner),
+        Box::new(TuiUi::new(ui_tx)),
+        CtxOptions {
+            base_config: ctx.base_config.clone(),
+            config_source: ctx.config_source.clone(),
+            storage_root: Some(ctx.storage_root.clone()),
+            output_mode: ctx.output_mode,
+            verbosity: ctx.verbosity,
+            quiet: ctx.quiet,
+            launcher_coordinator_id: ctx.launcher_coordinator_id.clone(),
+        },
+    );
+
+    std::thread::spawn(move || {
+        let result = commands::issue::build_provider(&worker_ctx)
+            .and_then(|provider| provider.list_issues())
+            .map_err(|err| format!("{err:#}"));
+        let send_result = worker_ui_tx
+            .send(UiRequest::OriginIssuesLoaded { provider, result })
+            .map_err(|_| anyhow::anyhow!("browser closed before origin issue fetch completed"));
+        let _ = done_tx.send(send_result);
+    });
+
+    InFlightOriginFetch { ui_rx, done_rx }
+}
+
+fn configured_issue_provider(ctx: &Ctx) -> String {
+    match ctx.config.issues.as_ref().map(|issues| &issues.provider) {
+        Some(IssueProviderType::Github) => "github".into(),
+        Some(IssueProviderType::Linear) => "linear".into(),
+        None => "provider".into(),
     }
 }
 
@@ -398,16 +481,32 @@ fn command_failure(stderr: &str, stdout: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::mock::{MockRunner, MockUi};
-    use crate::context::{Ctx, CtxOptions, OutputMode, UserInterface};
+    use crate::context::{CmdOutput, CommandRunner, Ctx, CtxOptions, OutputMode, UserInterface};
     use crate::error::WtError;
     use crate::origin_action_menu::OriginAction;
     use crate::origin_snapshot::{FieldSnapshot, OriginRef, OriginSnapshot, write_snapshot};
+    use crate::task;
     use crate::tui::remote_ui::{UiReply, UiRequest};
+    use std::path::Path;
     use std::sync::Arc;
 
     struct FakeJobBackend;
+
+    struct SharedRunner {
+        inner: Arc<MockRunner>,
+    }
+
+    impl CommandRunner for SharedRunner {
+        fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+            self.inner.run(cmd, args, cwd)
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            self.inner.has_command(cmd)
+        }
+    }
 
     impl DispatchBackend for FakeJobBackend {
         fn output_sink(&self, action: OriginAction) -> OutputSink {
@@ -492,6 +591,12 @@ mod tests {
         test_ctx_at(dir, Box::new(Arc::new(MockUi::new())))
     }
 
+    fn test_ctx_with_confirm(dir: &std::path::Path, confirmed: bool) -> Ctx {
+        let mut ui = MockUi::new();
+        ui.add_confirm(confirmed);
+        test_ctx_at(dir, Box::new(Arc::new(ui)))
+    }
+
     fn test_ctx_at(dir: &std::path::Path, ui: Box<dyn UserInterface>) -> Ctx {
         Ctx::new_with_options(
             dir.to_path_buf(),
@@ -504,6 +609,127 @@ mod tests {
                 ..CtxOptions::default()
             },
         )
+    }
+
+    fn github_config() -> Config {
+        Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Github,
+                gh_user: None,
+                origin_policy: Default::default(),
+            }),
+            ..Config::default()
+        }
+    }
+
+    fn test_ctx_with_runner(dir: &std::path::Path, config: Config, runner: Arc<MockRunner>) -> Ctx {
+        Ctx::new(
+            dir.to_path_buf(),
+            dir.to_path_buf(),
+            config,
+            Box::new(SharedRunner { inner: runner }),
+            Box::new(MockUi::new()),
+        )
+    }
+
+    fn write_task(root: &std::path::Path, key: &str) {
+        let tasks_dir = root.join(".wt/execution/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join(format!("{key}.toml")),
+            format!(
+                r#"title = "{key}"
+branch = "{key}"
+body = "Task body"
+"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn archive_is_a_worker_action_with_verb() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let backend = CtxBackend::new(&ctx);
+
+        assert_eq!(
+            backend.output_sink(OriginAction::Archive),
+            OutputSink::Worker
+        );
+        assert_eq!(backend.verb(OriginAction::Archive), "archive");
+    }
+
+    #[test]
+    fn import_is_a_worker_action_with_verb() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let backend = CtxBackend::new(&ctx);
+
+        assert_eq!(
+            backend.output_sink(OriginAction::Import),
+            OutputSink::Worker
+        );
+        assert_eq!(backend.verb(OriginAction::Import), "import");
+    }
+
+    #[test]
+    fn archive_worker_job_calls_task_archive_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx_with_confirm(dir.path(), true);
+        write_task(dir.path(), "demo");
+        let backend = CtxBackend::new(&ctx);
+
+        let job = backend.worker_job(OriginAction::Archive, "demo");
+        job(&ctx).unwrap();
+
+        assert!(
+            ctx.storage_root
+                .task_archive_dir("demo")
+                .join("demo.toml")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn import_worker_job_calls_task_origin_import_with_origin_only_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"number":52,"title":"Fix editor","body":"Long issue body","url":"https://github.com/acme/repo/issues/52"}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("https://github.com/acme/repo/tree/52-fix-editor", true);
+        let runner = Arc::new(runner);
+        let ctx = test_ctx_with_runner(dir.path(), github_config(), Arc::clone(&runner));
+        let backend = CtxBackend::new(&ctx);
+
+        let job = backend.worker_job(OriginAction::Import, "github:52");
+        job(&ctx).unwrap();
+
+        let document = task::read_task_document(&ctx, "52").unwrap();
+        assert_eq!(document.title, "Fix editor");
+        let origin = document.origin.unwrap();
+        assert_eq!(origin.provider, "github");
+        assert_eq!(origin.id, "#52");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "issue".to_string(),
+                "view".to_string(),
+                "52".to_string(),
+                "--json".to_string(),
+                "number,title,body,url".to_string(),
+            ]
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|(_, args, _)| { !args.iter().any(|arg| arg == "github:52") })
+        );
     }
 
     #[test]
@@ -519,6 +745,8 @@ mod tests {
             OriginAction::Push,
             OriginAction::Publish,
             OriginAction::Attach,
+            OriginAction::Archive,
+            OriginAction::Import,
         ] {
             assert_eq!(
                 backend.output_sink(action),
@@ -561,8 +789,10 @@ mod tests {
         for action in [
             OriginAction::Publish,
             OriginAction::KeepLocal,
+            OriginAction::Archive,
             OriginAction::OpenInBrowser,
             OriginAction::CopyReference,
+            OriginAction::Import,
         ] {
             assert_eq!(
                 backend.output_sink(action),
@@ -614,6 +844,76 @@ mod tests {
             message,
             "Publish is not available for workflow 2026-06-06-001; attach an existing workflow origin instead"
         );
+    }
+
+    #[test]
+    fn workflow_archive_returns_unsupported_status_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let backend = WorkflowCtxBackend::new(&ctx);
+
+        let message = backend
+            .run_status_line(OriginAction::Archive, "2026-06-06-001")
+            .unwrap();
+
+        assert_eq!(
+            message,
+            "Archive is not available for workflow 2026-06-06-001; archive tasks from the task browser"
+        );
+    }
+
+    #[test]
+    fn workflow_import_returns_unsupported_status_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let backend = WorkflowCtxBackend::new(&ctx);
+
+        let message = backend
+            .run_status_line(OriginAction::Import, "2026-06-06-001")
+            .unwrap();
+
+        assert_eq!(
+            message,
+            "Import is not available for workflow 2026-06-06-001; import provider issues from the task browser"
+        );
+    }
+
+    #[test]
+    fn spawn_origin_fetch_reconciles_via_apply() {
+        use crate::services::issues::IssueListItem;
+        use std::collections::HashSet;
+
+        let local_origins: HashSet<(String, String)> = HashSet::new();
+        let local_task_keys = HashSet::new();
+        let rows = crate::commands::task_list::origin_only_rows(
+            vec![IssueListItem {
+                identifier: "175".into(),
+                title: "A".into(),
+                display: "github #175".into(),
+                hint: None,
+            }],
+            &local_origins,
+            &local_task_keys,
+            "github",
+        );
+
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn spawn_origin_fetch_reports_missing_provider_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+
+        let inflight = spawn_origin_fetch(&ctx);
+
+        let UiRequest::OriginIssuesLoaded { provider, result } = inflight.ui_rx.recv().unwrap()
+        else {
+            panic!("expected origin issues loaded request");
+        };
+        assert_eq!(provider, "provider");
+        assert!(result.unwrap_err().contains("No [issues] section"));
+        assert!(inflight.done_rx.recv().unwrap().is_ok());
     }
 
     #[test]

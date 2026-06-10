@@ -1,4 +1,5 @@
 pub(crate) mod app;
+pub(crate) mod body_markup;
 pub(crate) mod browser;
 pub(crate) mod dispatch;
 pub(crate) mod remote_ui;

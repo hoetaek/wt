@@ -8,7 +8,9 @@ pub enum OriginAction {
     Push,
     Publish,
     Attach,
+    Import,
     KeepLocal,
+    Archive,
     OpenInBrowser,
     CopyReference,
 }
@@ -34,6 +36,7 @@ impl OriginActionMenu {
                     "Keep local-only for this task",
                     "L",
                 ),
+                OriginActionItem::enabled(OriginAction::Archive, "Archive task", "a"),
                 OriginActionItem::enabled(OriginAction::CopyReference, "Copy task key", "y"),
                 OriginActionItem::disabled(
                     OriginAction::Diff,
@@ -89,6 +92,7 @@ impl OriginActionMenu {
                     "Copy origin reference",
                     "y",
                 ),
+                OriginActionItem::enabled(OriginAction::Archive, "Archive task", "a"),
                 OriginActionItem::disabled(
                     OriginAction::Attach,
                     "Attach different origin",
@@ -103,6 +107,18 @@ impl OriginActionMenu {
                 )
                 .external_write(),
             ],
+            child_origins: Vec::new(),
+        }
+    }
+
+    pub fn for_origin_issue_placeholder(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            items: vec![OriginActionItem::enabled(
+                OriginAction::Import,
+                "Import to local",
+                "i",
+            )],
             child_origins: Vec::new(),
         }
     }
@@ -630,6 +646,10 @@ mod tests {
             Some(OriginAction::KeepLocal)
         );
         assert_eq!(
+            local.action_for("Archive task"),
+            Some(OriginAction::Archive)
+        );
+        assert_eq!(
             local.action_for("Copy task key"),
             Some(OriginAction::CopyReference)
         );
@@ -653,6 +673,29 @@ mod tests {
             origin.action_for("Open issue in browser"),
             Some(OriginAction::OpenInBrowser)
         );
+        assert_eq!(
+            origin.action_for("Archive task"),
+            Some(OriginAction::Archive)
+        );
+
+        let origin_issue = OriginActionMenu::for_origin_issue_placeholder("Provider issue");
+        assert_eq!(
+            origin_issue.action_for("Import to local"),
+            Some(OriginAction::Import)
+        );
+    }
+
+    #[test]
+    fn origin_issue_placeholder_only_offers_import() {
+        let menu = OriginActionMenu::for_origin_issue_placeholder("Provider issue");
+
+        assert_eq!(menu.items().len(), 1);
+        let item = &menu.items()[0];
+        assert_eq!(item.action(), OriginAction::Import);
+        assert_eq!(item.label(), "Import to local");
+        assert_eq!(item.shortcut(), "i");
+        assert!(item.is_enabled());
+        assert_eq!(menu.action_for_shortcut("i"), Some(OriginAction::Import));
     }
 
     #[test]
@@ -676,7 +719,9 @@ mod tests {
             OriginLabel::new("linear", "WT-142"),
         );
         assert_eq!(origin.action_for_shortcut("P"), Some(OriginAction::Push));
+        assert_eq!(origin.action_for_shortcut("a"), Some(OriginAction::Archive));
         let local = OriginActionMenu::for_local_task("scratch-clean", "Scratch cleanup");
+        assert_eq!(local.action_for_shortcut("a"), Some(OriginAction::Archive));
         assert_eq!(local.action_for_shortcut("P"), None);
     }
 

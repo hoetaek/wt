@@ -222,8 +222,14 @@ fn workflow_browser_row(row: &WorkflowListRow) -> crate::tui::app::BrowserRow {
         key: row.id.clone(),
         title: row.title.clone(),
         status: row.origin_health.status.clone(),
+        run_status: String::new(),
         origin_label: row.origin_health.origin_label.clone(),
         next_action: row.origin_health.next_action.clone(),
+        duration: None,
+        size: None,
+        branch: None,
+        source: "workflow".into(),
+        body: row.body.clone().unwrap_or_default(),
         preview_lines: workflow_browser_preview_lines(row),
         menu: row.origin_action_menu(),
     }
@@ -824,9 +830,9 @@ run = "run-{task}"
     fn workflow_browser_report_text(report: &WorkflowListReport) -> String {
         let backend = ratatui::backend::TestBackend::new(140, 18);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let app = workflow_browser_app(report);
+        let mut app = workflow_browser_app(report);
         terminal
-            .draw(|frame| crate::tui::render::draw(frame, &app))
+            .draw(|frame| crate::tui::render::draw(frame, &mut app))
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..18)

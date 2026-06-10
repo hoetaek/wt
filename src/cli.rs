@@ -807,12 +807,21 @@ pub enum InitSiteProvider {
 pub enum TaskCommand {
     /// List actionable local TaskDocument files
     #[command(
-        long_about = "List actionable <repo-root>/.wt/execution/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is passed or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nIn a TTY without --json or --quiet, opens the full-screen interactive browser. The initial browser render is read-only; choosing items from its interactive action menu can run task origin diff, fetch, pull, push, publish, and attach flows with the same previews and confirmation gates as the backend commands; pipes and --json keep the text/JSON output.\n\nThe passive text/JSON and initial-render surface reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
+        long_about = "List actionable <repo-root>/.wt/execution/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is passed or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nIn a TTY without --json or --quiet, opens the full-screen interactive browser. The initial browser render is read-only; choosing items from its interactive action menu can run task origin diff, fetch, pull, push, publish, and attach flows with the same previews and confirmation gates as the backend commands. The archive action runs wt task archive through the same backend-owned confirmation and safety gates; pipes and --json keep the text/JSON output.\n\nThe passive text/JSON and initial-render surface reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
     )]
     List {
         /// Show the full TaskDocument inventory, including passed and running tasks
         #[arg(long)]
         all: bool,
+    },
+    /// Move local TaskDocuments and linked direct TaskRuns into the task archive
+    #[command(
+        long_about = "Move TaskDocument(s) and linked direct TaskRuns into <repo-root>/.wt/execution/archive/tasks/<key>/.\n\nVisibility/retention action: archived tasks disappear from wt task list, and their direct TaskRuns leave the active TaskRun inventory. Recover by manually moving the files back. Rejects tasks whose latest TaskRun is running."
+    )]
+    Archive {
+        /// Local task keys from <repo-root>/.wt/execution/tasks/<task>.toml
+        #[arg(value_name = "TASK", num_args = 1.., required = true)]
+        tasks: Vec<String>,
     },
     /// Manage provider issue origin links for local TaskDocuments
     #[command(
@@ -1943,6 +1952,7 @@ mod tests {
         assert!(help.contains("full-screen interactive browser"));
         assert!(help.contains("pipes and --json keep the text/JSON output"));
         assert!(help.contains("interactive action menu"));
+        assert!(help.contains("wt task archive"));
     }
 
     #[test]
@@ -2027,6 +2037,41 @@ mod tests {
                 command: TaskCommand::Publish { ref tasks }
             }) if tasks == &vec!["add-profile-docs".to_string()]
         ));
+    }
+
+    #[test]
+    fn task_archive_parses_multiple_keys() {
+        let cli = parse(&["wt", "task", "archive", "a", "b"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Archive { ref tasks }
+            }) if tasks == &vec!["a".to_string(), "b".to_string()]
+        ));
+    }
+
+    #[test]
+    fn task_archive_rejects_missing_task_key_at_cli_boundary() {
+        let err = Cli::try_parse_from(["wt", "task", "archive"]).unwrap_err();
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert!(err.to_string().contains("<TASK>"));
+    }
+
+    #[test]
+    fn task_archive_help_renders_required_task_key() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("archive")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("<TASK>..."));
+        assert!(help.contains("linked direct TaskRuns"));
+        assert!(!help.contains("[TASK]"));
     }
 
     #[test]

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use super::schema::{PROMPT_COMMON_SCOPE, PROMPT_RUNTIME_MODES, prompt_append_mode};
 use super::{
-    AgentConfig, Config, CopyAsEntry, EditorConfig, ReviewConfig, SetupConfig, WorkflowConfig,
-    WorkspaceConfig, WorktreeConfig,
+    AgentConfig, ColumnConfig, Config, EditorConfig, PathSpec, ReviewConfig, SetupConfig,
+    TaskListConfig, WorkflowConfig, WorkspaceConfig, WorktreeConfig,
 };
 
 pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
@@ -20,6 +20,9 @@ pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
     }
     if profile.review != ReviewConfig::default() {
         merge_review_config(&mut merged.review, profile.review);
+    }
+    if profile.task_list != TaskListConfig::default() {
+        merge_task_list_config(&mut merged.task_list, profile.task_list);
     }
     if profile.profile.is_some() {
         merged.profile = profile.profile;
@@ -175,9 +178,8 @@ fn merge_worktree_config(base: &mut WorktreeConfig, profile: WorktreeConfig) {
     if profile.path.is_some() {
         base.path = profile.path;
     }
-    extend_unique(&mut base.copy, profile.copy);
-    extend_copy_as_unique(&mut base.copy_as, profile.copy_as);
-    extend_unique(&mut base.link, profile.link);
+    extend_pathspec_unique(&mut base.copy, profile.copy);
+    extend_link_pathspec_unique(&mut base.link, profile.link);
     if profile.inject_local_context.is_some() {
         base.inject_local_context = profile.inject_local_context;
     }
@@ -209,6 +211,29 @@ fn merge_review_config(base: &mut ReviewConfig, profile: ReviewConfig) {
     }
 }
 
+fn merge_task_list_config(base: &mut TaskListConfig, profile: TaskListConfig) {
+    merge_column_config(&mut base.columns.run, profile.columns.run);
+    merge_column_config(&mut base.columns.next, profile.columns.next);
+    merge_column_config(&mut base.columns.dur, profile.columns.dur);
+    merge_column_config(&mut base.columns.task, profile.columns.task);
+    merge_column_config(&mut base.columns.branch, profile.columns.branch);
+    merge_column_config(&mut base.columns.source, profile.columns.source);
+    merge_column_config(
+        &mut base.columns.origin_status,
+        profile.columns.origin_status,
+    );
+    merge_column_config(&mut base.columns.size, profile.columns.size);
+}
+
+fn merge_column_config(base: &mut ColumnConfig, profile: ColumnConfig) {
+    if profile.hidden.is_some() {
+        base.hidden = profile.hidden;
+    }
+    if profile.width.is_some() {
+        base.width = profile.width;
+    }
+}
+
 fn merge_workspace_config(base: &mut WorkspaceConfig, profile: WorkspaceConfig) {
     extend_unique(&mut base.tabs, profile.tabs);
     extend_unique(&mut base.post_deps_tabs, profile.post_deps_tabs);
@@ -235,12 +260,20 @@ fn extend_unique(target: &mut Vec<String>, additions: Vec<String>) {
     }
 }
 
-fn extend_copy_as_unique(target: &mut Vec<CopyAsEntry>, additions: Vec<CopyAsEntry>) {
+fn extend_pathspec_unique(target: &mut Vec<PathSpec>, additions: Vec<PathSpec>) {
     for value in additions {
         if !target
             .iter()
-            .any(|entry| entry.from == value.from && entry.to == value.to)
+            .any(|entry| entry.from() == value.from() && entry.to() == value.to())
         {
+            target.push(value);
+        }
+    }
+}
+
+fn extend_link_pathspec_unique(target: &mut Vec<PathSpec>, additions: Vec<PathSpec>) {
+    for value in additions {
+        if !target.iter().any(|entry| entry.to() == value.to()) {
             target.push(value);
         }
     }

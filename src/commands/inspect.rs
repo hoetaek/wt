@@ -29,7 +29,7 @@ pub fn run(ctx: &Ctx, target: Option<&str>, options: InspectOptions) -> Result<(
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
     let parent = git.get_branch_parent(&target.branch)?;
     let status = match target.worktree.as_deref() {
-        Some(path) => Some(git.status_porcelain(path)?),
+        Some(path) => Some(status_porcelain_for_configured_links(ctx, &git, path)?),
         None => None,
     };
     let task_runs = task_runs_for_target(ctx, target)?;
@@ -1102,6 +1102,18 @@ fn shell_arg(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+fn status_porcelain_for_configured_links(
+    ctx: &Ctx,
+    git: &GitService<'_>,
+    path: &Path,
+) -> Result<String> {
+    let status = git.status_porcelain(path)?;
+    if ctx.config.worktree.link.is_empty() || !status_may_hide_configured_link(ctx, &status) {
+        return Ok(status);
+    }
+    git.status_porcelain_untracked_files_all(path)
+}
+
 fn status_lines(status: &str) -> Vec<&str> {
     status
         .lines()
@@ -1125,19 +1137,49 @@ fn ignored_configured_link_lines<'a>(ctx: &Ctx, status: &'a str) -> Vec<&'a str>
 }
 
 fn is_configured_link_status_line(ctx: &Ctx, line: &str) -> bool {
-    let path = line.get(3..).unwrap_or("").trim();
+    let Some(path) = porcelain_status_path(line) else {
+        return false;
+    };
     ctx.config
         .worktree
         .link
         .iter()
-        .map(|linked| linked.trim_end_matches('/'))
+        .map(|linked| linked.to().trim_end_matches('/'))
         .any(|linked| path == linked || path.starts_with(&format!("{linked}/")))
+}
+
+fn status_may_hide_configured_link(ctx: &Ctx, status: &str) -> bool {
+    status_lines(status)
+        .into_iter()
+        .any(|line| status_line_may_hide_configured_link(ctx, line))
+}
+
+fn status_line_may_hide_configured_link(ctx: &Ctx, line: &str) -> bool {
+    if !line.starts_with("?? ") {
+        return false;
+    }
+    let Some(path) = porcelain_status_path(line) else {
+        return false;
+    };
+    let path = path.trim_end_matches('/');
+    ctx.config
+        .worktree
+        .link
+        .iter()
+        .map(|linked| linked.to().trim_end_matches('/'))
+        .any(|linked| linked != path && linked.starts_with(&format!("{path}/")))
+}
+
+fn porcelain_status_path(line: &str) -> Option<&str> {
+    let path = line.get(3..)?.trim();
+    let path = path.rsplit(" -> ").next().unwrap_or(path);
+    Some(path.trim_matches('"'))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, PathSpec};
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
     use std::sync::Arc;
@@ -1731,6 +1773,37 @@ run = "run-unrelated"
         assert_eq!(
             relevant_status_lines(&ctx, "?? tmp/shared-cache\n M src/lib.rs"),
             vec!["M src/lib.rs"]
+        );
+    }
+
+    #[test]
+    fn inspect_status_expands_untracked_paths_only_when_link_is_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.worktree.link = vec![PathSpec::Rename {
+            from: ".local/skills".into(),
+            to: ".codex/skills".into(),
+        }];
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let mut runner = MockRunner::new();
+        runner.add_response("?? .codex/", true);
+        runner.add_response("?? .codex/skills\n?? src/lib.rs", true);
+        let git = GitService::new(&runner, Some(&ctx.repo_root));
+
+        let status = status_porcelain_for_configured_links(&ctx, &git, dir.path()).unwrap();
+
+        assert_eq!(status, "?? .codex/skills\n?? src/lib.rs");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["status", "--porcelain"]);
+        assert_eq!(
+            calls[1].1,
+            vec!["status", "--porcelain", "--untracked-files=all"]
         );
     }
 }

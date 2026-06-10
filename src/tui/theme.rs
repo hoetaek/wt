@@ -21,6 +21,21 @@ pub(crate) fn status_color(status: &str) -> Option<Color> {
     }
 }
 
+pub(crate) fn run_status_color(status: &str) -> Option<Color> {
+    if !colors_active() {
+        return None;
+    }
+
+    match status {
+        "failed" => Some(Color::Red),
+        "running" => Some(Color::Yellow),
+        "passed" => Some(Color::Green),
+        "new" => Some(Color::Blue),
+        "prepared" | "skipped" => Some(Color::Indexed(245)),
+        _ => None,
+    }
+}
+
 pub(crate) fn external_write_style() -> Style {
     if colors_active() {
         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
@@ -99,9 +114,23 @@ mod tests {
     }
 
     #[test]
+    fn run_status_color_maps_task_run_semantics() {
+        with_colors(true, || {
+            assert_eq!(run_status_color("failed"), Some(Color::Red));
+            assert_eq!(run_status_color("running"), Some(Color::Yellow));
+            assert_eq!(run_status_color("passed"), Some(Color::Green));
+            assert_eq!(run_status_color("new"), Some(Color::Blue));
+            assert_eq!(run_status_color("prepared"), Some(Color::Indexed(245)));
+            assert_eq!(run_status_color("skipped"), Some(Color::Indexed(245)));
+            assert_eq!(run_status_color("local"), None);
+        });
+    }
+
+    #[test]
     fn all_theme_styles_are_plain_when_colors_disabled() {
         with_colors(false, || {
             assert_eq!(status_color("conflict"), None);
+            assert_eq!(run_status_color("failed"), None);
             assert_eq!(external_write_style().fg, None);
             assert_eq!(chrome_style().fg, None);
             assert_eq!(dim_style().fg, None);

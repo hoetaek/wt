@@ -85,6 +85,15 @@ branches, `stack` for dependent branch order, and `matrix` for one local
 TaskDocument across explicit profiles. For provider issues, use
 `wt workflow issue --mode <single|batch|stack> ...`.
 
+If `wt run` fails with an agent ready-marker timeout, do not immediately retry:
+a failed start leaves a partial worktree and a broken cmux workspace, and
+retrying on top of them makes every later start fail (`Worktree already exists`,
+then unreadable surfaces). First clean up — `git worktree remove <path>` and
+`git branch -D <branch>` for the partial branch, and `cmux workspace close` for
+the broken workspace(s) — then rerun. Empirically (2026-06 tui-in-app-dispatch /
+task-triage) three back-to-back launches failed purely from accumulated broken
+workspaces; the next attempt succeeded once they were closed.
+
 ### Capture Target
 
 After launch or when resuming an existing run, capture the inspect target:
@@ -263,17 +272,31 @@ Passing tests and a contract match are not proof of correctness — they only
 confirm the happy path the author chose to cover. For changes to a load-bearing
 path (a status filter, renderer, inventory scan, or any code several call sites
 depend on), do not stop at green tests: first enumerate the invariants that path
-must hold simultaneously, then adversarially try to break each one. Standing
-lenses to apply: malformed/corrupt input, ordering and precedence (newest vs
-older records), text-vs-TUI parity, O(N) re-scans, and selector/semantics
-agreement with the canonical command. Empirically (2026-06 task-triage), a
+must hold simultaneously, then adversarially try to break each one. The lenses
+are general, not CLI/TUI-specific — apply whichever fit the surface (CLI, TUI,
+web/`wt serve`, JSON/API, file artifact): input resilience (malformed, corrupt,
+empty, boundary); ordering, precedence, concurrency (newest-vs-older, TOCTOU);
+cross-representation parity (every rendering of the same value agrees — text,
+TUI, web, JSON); cost/scaling (no redundant N× work); semantic agreement
+with the canonical source of truth; and reference integrity (who else
+references, resolves, or shares this object or state — another command, a
+reader, a shared UI string, a workflow→task or run→task link — and whether this
+change orphans or contradicts that relationship). The reference-integrity lens
+is the one a contract author most reliably misses: 2026-06 task-triage shipped a
+trust-boundary hole (untrusted provider body rendered raw), a workflow-owned-task
+archive that broke `wt run workflow`, and a TaskRun orphan — all past green tests
+and coordinator self-review, all caught only by the independent base-diff gate.
+Empirically (2026-06 task-triage), a
 review that checked only "tests green + matches the contract I wrote" approved
 fixes that an independent base-diff review then found broke an adjacent
 invariant five rounds running — and each narrow fix introduced the next defect.
 Enumerating invariants up front and grilling against them catches most of that
 before the gate. An independent review gate still has irreducible value: a
 coordinator who co-authored the task contract is blind to gaps in their own
-spec, so the gate is not redundant with a rigorous self-review.
+spec, so the gate is not redundant with a rigorous self-review. When a
+`review.codex_base` gate blocks `wt workflow pass`, the failure message itself
+tells you how to satisfy it (run `codex review --base <parent>` yourself and
+record with `wt task review --codex-base`); follow that in-band guidance.
 
 Accumulate findings across one inspection pass and send one consolidated
 message. Do not drip one message per finding.

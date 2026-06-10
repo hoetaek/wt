@@ -20,10 +20,10 @@ pub(super) fn validate_required_codex_base_review(
     let status = codex_base_review_status(state, &parent);
     let accept_command = codex_base_review_accept_command(&state.run_id, &parent);
     bail!(
-        "Workflow task {} requires Codex base review evidence before pass; {status}. Send the review to the task agent's Codex surface with `{}`. For non-interactive runs, use `{}`. Then record acceptance with `{accept_command}` before running `wt workflow pass`.",
+        "Workflow task {} requires Codex base review evidence before pass; {status}. Run `{}` yourself against this task's worktree and read the verdict — background it and the completion notification wakes you; this keeps the review independent of the agent that wrote the code. Avoid delegating `{}` to the task agent's own surface (it then reviews its own work and is hard to detect as finished). If codex is not installed, skip and record manually; wt does not force a codex dependency. Then record acceptance with `{accept_command}` before running `wt workflow pass`.",
         workflow_task_label(&state.row),
-        codex_surface_review_command(&state.run_id, &parent),
-        codex_cli_review_command(&parent)
+        codex_cli_review_command(&parent),
+        codex_surface_review_command(&state.run_id, &parent)
     )
 }
 

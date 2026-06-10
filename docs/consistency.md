@@ -83,7 +83,12 @@ Canonical personal storage layout:
 │   ├── task-runs/
 │   │   └── <id>.toml
 │   ├── archive/
-│   │   └── workflows/<id>/
+│   │   ├── workflows/<id>/
+│   │   └── tasks/<key>/
+│   │       ├── <key>.toml
+│   │       ├── archive.toml
+│   │       └── task-runs/
+│   │           └── <id>.toml
 │   └── retrospectives/
 │       └── <slug>.md
 └── runtime/
@@ -876,8 +881,9 @@ layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 
 | 섹션 / 필드 | 동작 | 의미 |
 |---|---|---|
 | `worktree.path`, `worktree.inject_local_context`, `worktree.naming` | REPLACE (later wins if set) | 단일 값. 윗 layer가 명시하면 아랫 layer를 덮어쓴다. |
-| `worktree.copy`, `worktree.link`, `workspace.tabs`, `workspace.post_deps_tabs` | extend, value-level dedupe | 윗 layer가 항목을 추가한다. 같은 문자열은 한 번만 나온다. |
-| `worktree.copy_as` | extend, `(from, to)` 쌍 dedupe | 같은 from/to 쌍은 한 번만. 다른 from이면 둘 다 살아남는다. |
+| `worktree.copy` | extend, `(from, to)` 쌍 dedupe | 문자열 항목은 같은 이름(`from == to`)으로 복사하고, `{ from, to }` 항목은 rename 복사한다. 같은 from/to 쌍은 한 번만 나온다. |
+| `worktree.link` | extend, `to` destination dedupe | 문자열 항목은 같은 이름(`from == to`)으로 symlink하고, `{ from, to }` 항목은 rename symlink한다. 하나의 destination에는 symlink 하나만 만들 수 있으므로 같은 `to`는 아랫 layer의 첫 항목이 유지된다. |
+| `workspace.tabs`, `workspace.post_deps_tabs` | extend, value-level dedupe | 윗 layer가 항목을 추가한다. 같은 문자열은 한 번만 나온다. |
 | `setup.deps` | extend (현재 dedupe 없음) | 같은 dep을 두 layer가 적으면 두 번 실행된다. dep script는 idempotent하게 짠다. |
 | `setup.env`, `setup.env_files[path]`, `workspace.colors` | HashMap extend (key-level overwrite) | 같은 key를 윗 layer가 덮어쓴다. |
 | `workflow.pull_request`, `workflow.landing`, `review.codex_base`, `editor.command`, `editor.placement`, `workspace.browser` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. `workspace.browser.chrome_devtools`는 `workspace.browser`의 하위 설정이므로 browser section과 함께 교체된다. |
@@ -897,7 +903,7 @@ Named profile에는 profile.toml 외에 두 가지 convention이 더 있다.
 
 | 위치 | 동작 |
 |---|---|
-| `<profile>/scaffold/` | 디렉토리 존재만으로 `copy_as = [{from: <abs>, to: "."}]` 자동 push. 워크트리 생성 시 워크트리 루트에 복사된다. |
+| `<profile>/scaffold/` | 디렉토리 존재만으로 `copy = [{ from = "<abs>", to = "." }]` 자동 push. 워크트리 생성 시 워크트리 루트에 복사된다. |
 | `<profile>/prompts/<mode>.md` | `agent.prompt[mode]`를 **REPLACE**. profile.toml의 inline `[agent.prompt].<mode>`가 같이 있으면 파일이 이기고 stderr에 warning이 찍힌다. |
 | `<profile>/prompts/<mode>.append.md` | `agent.prompt[mode]`에 append. inline replace와 충돌이 아니다. |
 
@@ -1037,7 +1043,18 @@ setup deps, tests, workspace tabs, editor, agent runtime, agent prompt, issue pr
 
 Wizard step label은 구현 단계명이 아니라 사용자가 지금 결정하는 의미를 말해야 한다.
 `wt init`의 사람이 읽는 설명과 prompt는 한국어를 기본으로 쓰되, command, option, config key,
-TOML value 같은 protocol literal은 영어 원문을 유지한다. Canonical flow는 `설정 파일 위치`,
+TOML value 같은 protocol literal은 영어 원문을 유지한다.
+
+`language` config는 `.wt.toml` 또는 `<repo-root>/.wt/config/local.toml`에 둘 수 있고,
+값은 `auto`/`en`/`ko`이며 기본값은 `auto`다. `auto`는 OS locale (`LANG`/`LC_*`)에서
+`ko*`를 한국어로 보고 그 외에는 영어로 본다. 이 설정은 사람-facing 출력에만 적용하고,
+command, option, config key, path, agent id 같은 protocol literal과 모든 `--json` 출력은
+언어 설정과 무관하게 영어를 유지한다. `wt doctor`는 이 모델이 처음 연결된 명령으로,
+remediation hint와 scan-failed prose 일부만 language-aware하게 렌더링한다. 다른 명령과
+`wt init`/`wt scaffold`의 현재 한국어 기본 출력은 아직 `language`와 독립적으로 동작하는
+수렴 예정 gap이다.
+
+Canonical flow는 `설정 파일 위치`,
 `외부 도구 연결`, `개발 환경 설정`, `미리보기`, `쓰기 확인` 순서다.
 각 step 시작 전에는 빈 줄을 두고, step 설명은 prompt header와 구분되도록 들여써서 보여주며,
 작은 대비쌍은 bullet로 나눈다. 설명과 step 안의 질문 사이에도 빈 줄을 둔다. Step 안의 질문은
@@ -1148,29 +1165,71 @@ execution shape, size class, acceptance checks를 적는다. Provider issue impo
 
 `wt task list`는 `<repo-root>/.wt/execution/tasks/<task>.toml`에 저장된 TaskDocument file 중
 actionable working set을 보여주는 canonical read-only list다. Bare `wt task list`는
-`wt run task`의 selectable task semantics를 따른다. TaskRun이 없거나 latest TaskRun status가
-`prepared`, `failed`, `skipped`인 TaskDocument를 보여주고, latest status가 `passed` 또는
-`running`인 TaskDocument는 숨긴다. 숨겨진 TaskDocument가 있으면 text output은 count와
+valid latest TaskRun에 대해서만 `wt run task`의 selectable task semantics를 따른다. TaskRun이
+없거나 latest TaskRun status가 `prepared`, `failed`, `skipped`인 TaskDocument를 보여주고,
+latest status가 `passed` 또는 `running`인 TaskDocument는 숨긴다. Malformed TaskRun이나
+unrecognized status는 `wt task list` 전용 lossy inventory behavior다. Parseable invalid TaskRun
+TOML that still has a `task` field can be connected to that TaskDocument; if its status is
+unrecognized, the row status is `unknown`, bare `wt task list` hides it, and `--all` shows it.
+Syntactically broken TaskRun TOML cannot be connected to a task and is not an `unknown` row source, so
+it does not hide that TaskDocument from bare `wt task list`. `wt run task`는 strict TaskRun
+inventory를 읽으므로 malformed TaskRun file이 있으면 `unknown` row로 낮추지 않고 task selector를
+열기 전에 실패한다. 숨겨진 TaskDocument가 있으면 text output은 count와
 `wt task list --all` 안내를 보여주되 TaskDocument row를 dump하지 않는다. `wt task list --all`은
 full TaskDocument inventory mode이며 passed/running TaskDocument까지 포함한다. 두 mode 모두
 selector의 10-row visible cap을 적용하지 않는다. TTY에서 `--json`/`--quiet` 없이 실행되는
 `wt task list`는 단명 full-screen browser로 같은 TaskDocument rows와 origin health preview를
 보여준다. Browser의 initial render는 read-only이고, interactive action menu를 통한 변경은
 대응하는 `wt task origin diff|fetch|pull|push|publish|attach` backend command와 같은 동작,
-preview, confirmation gate를 따른다. Pipe, redirect, CI, `--quiet`, `--json`은 interactive
-browser를 시도하지 않고 기존 text/JSON contract를 유지한다. Text output은 selector와 같은
-TaskDocument display order인 title, origin/publish state, task key, branch를 bounded column으로
-나눠 보여주고, `provider-origin`과 `local` source group 아래에 둔다. Inventory-only field인
-source는 group으로 표현하고, path, raw origin, 짧은 body summary는 text에서 반복하지 않고 JSON
-output에 둔다. JSON output은 두 mode 모두 `{ "tasks": [...], "invalid_tasks": [...] }`
-top-level shape를 유지하며, TaskDocument의 key, path, title, branch, origin/publish state,
-local-vs-provider-origin source, 짧은 body summary를 stable shape로 보여준다. Bare JSON은
-actionable working set만 담고, `--all --json`은 full inventory를 담는다.
+preview, confirmation gate를 따른다. Task browser archive action은 `wt task archive <key>`
+backend command와 같은 confirmation/safety gate를 따르며, TUI가 별도 archive gate를 소유하지
+않는다. Pipe, redirect, CI, `--quiet`, `--json`은 interactive browser를 시도하지 않고 기존
+text/JSON contract를 유지한다. Human surfaces는 같은 bounded
+column model을 쓰지만 row ordering contract는 표면별로 다르다. Text output은
+`provider-origin`, `local` source group 순서로 보여주고 각 group 안에서는 collected row order를
+유지한다. TUI browser는 source group을 만들지 않고 collected TaskDocument row order를 그대로
+보여준다. 기본 visible column은 latest TaskRun에서 파생한 `run` status(`new`, `prepared`, `running`,
+`passed`, `failed`, `skipped`, `unknown`), origin health의 `next` action, `dur` expected duration,
+grow하는 `task` title/key, `branch`다. `dur`는 TaskDocument body의 `계획 (Planning)` section에서
+`예상 소요 (expected duration)` 값을 읽으며 값이 없으면 표시 전용 fallback을 쓴다.
+Effective managed config(`.wt.toml`, `<repo-root>/.wt/config/local.toml`, selected profile config
+merge)의 `[task_list.columns.<column>]`에서 각 column의 `hidden`과 `width`를 설정한다.
+`task` column은 남는 폭을 받는 grow column이고, 모든 column을 숨긴 설정은 빈 human row model을
+만들지 않도록 task column을 다시 보여준다. `source`, `origin_status`, `size`는 같은 column
+모델의 optional field이며, `size` class는 리뷰/회고용 Planning metadata라 기본 hidden이다.
+Inventory-only field인 source는 기본 text에서 group으로 표현하고, path, raw origin, 짧은 body
+summary는 text에서 반복하지 않고 JSON output에 둔다. JSON output은 두 mode 모두
+`{ "tasks": [...], "invalid_tasks": [...] }` top-level shape와 기존 row field를 유지한다.
+Duration이 human column으로 승격되어도 새 JSON top-level을 만들지 않고, full body 읽기는 TUI
+body 뷰가 소유한다. Bare JSON은 actionable working set만 담고, `--all --json`은 full
+inventory를 담는다.
 TaskDocument TOML parse/validation failure는 조용히 숨기지 않고 text warning 또는 JSON
 `invalid_tasks`로 보고한다. Non-interactive text/JSON output과 browser initial render는
 worktree, local branch, TaskRun, Workflow, provider issue, pull request, agent setup을 만들거나
 수정하지 않는다. Workflow inventory는 계속 `wt workflow list`, worktree/branch/site state는
 계속 `wt list`가 맡는다.
+
+Task list TUI에서 `v`는 선택된 TaskDocument body 전문을 browser를 떠나지 않고 읽는 body 뷰를
+연다. Body 뷰는 같은 terminal surface 안의 vertical band layout이며, 선택 task title과 scroll
+percent indicator를 함께 보여주고 `j`/`k`, PageUp/PageDown으로 스크롤한다. Local scaffold body는
+알려진 Planning template을 따를 수 있지만 provider issue import body는 외부 본문을 verbatim으로
+보존하므로 untrusted display input이다. Body 뷰는 terminal control sequence와 tab을 먼저
+sanitize해야 한다. 범용 Markdown renderer를 붙이지 않는 것은 trust boundary가 아니라 simplicity
+선택이며, heading, checkbox, fenced code, inline code/강조 표식 같은 알려진 line pattern만
+경량 styling으로 렌더한다. Body 뷰가 열려 있는 동안 Enter action menu, origin shortcut
+dispatch, archive 같은 row action 진입은 막히고, `v` 또는 Esc로 닫은 뒤에만 다시 list action을
+수행한다.
+
+`wt task archive <key...>`는 active TaskDocument를 `<repo-root>/.wt/execution/archive/tasks/<key>/`
+아래로 옮겨 active task inventory에서 감추는 visibility/retention command다. Workflow archive와
+같은 active-directory visibility pattern을 따르지만, command와 state directory는
+`wt workflow archive` / `archive/workflows/<id>/`와 분리한다. Archive directory에는 archived
+TaskDocument `<key>.toml`, `archive.toml` manifest, 그리고 해당 task의 linked direct TaskRun이
+있으면 `task-runs/<id>.toml`을 둔다. 복구는 사용자가 파일을 active directory로 직접 옮기는
+manual repair이며, 별도 restore command를 제공하지 않는다. Safety gate는 backend command가
+소유한다. Latest valid TaskRun이 `running`인 task, active(unarchived) Workflow가 참조하는
+task, legacy archive storage가 감지된 repository는 archive 전에 거부해야 하며 TUI는 이 gate를
+우회하지 않는다. Malformed/invalid latest TaskRun record는 running 판정에서 제외한다.
 
 TaskDocument origin은 runnable slice 하나가 provider issue 하나와 연결되는 durable link다.
 Workflow origin은 saved Workflow의 title/body/context가 provider issue 하나와 연결되는
@@ -1465,9 +1524,13 @@ workflow preparation will use.
 `wt init` does not write a commented optional `[workflow]` tutorial block; generated config
 writes an explicit starter `[workflow]` policy with `pull_request = "none"` and `landing = "manual"`
 unless it is preserving an existing explicit workflow policy from the target config.
-It writes `[review]` only when preserving an existing explicit review policy, so local
-init does not materialize `codex_base = "none"` as an accidental override of a shared
-or root requirement.
+Interactive `wt init` asks for the `[review]` codex_base policy in a dedicated
+prompt. Selecting `advisory` or `required` writes `[review]` with that value;
+selecting `none` writes nothing, so local init never materializes
+`codex_base = "none"` as an accidental override of a shared or root
+`required`/`advisory` requirement. It also writes `[review]` when preserving an
+existing explicit review policy. `wt init --yes` does not prompt, preserves any
+existing policy, and adds no init CLI flag for this.
 `wt workflow show` displays the prepared policy snapshot from the workflow file, not the
 current `.wt.toml` value.
 
@@ -1556,11 +1619,38 @@ Workflow, origin snapshot 같은 디스크 상태만 읽는다. 액션 메뉴는
 모델이 단일 소스이며, 단축키는 액셀러레이터일 뿐이다. 모든 액션은 Enter 메뉴에서
 발견 가능해야 한다.
 
+Task list 브라우저의 source view는 출처 축을 보는 TUI 전용 presentation filter다.
+`SourceView { All, Local, Published, OriginOnly }`는 **리스트 제목**에
+`Tasks — all` / `Tasks — local` / `Tasks — published` / `Tasks — origin-only`로
+(view STATE를 상단에) 표시되고, 상태줄에는 `h/l view` 조작 힌트와 OriginOnly의
+fetch staleness(`[origin: ...]`)만 둔다(STATE를 상태줄에 중복하지 않는다). task
+browser에서만 `h`/`l`로 wrap rotate된다. Workflow 브라우저에는 source view를 노출하지 않으며 제목도 plain `Workflows`다.
+Source view는 Local=`source == "local"`, Published=`source == "provider-origin"` predicate이며
+run-status 숨김 축(`wt task list --all`)과 독립적으로 AND 합성된다. OriginOnly는 로컬
+TaskDocument가 없는 provider 이슈를 보는 view다. Browser launch와 All/Local/Published
+view 렌더는 provider network를 호출하지 않는다. OriginOnly 진입 시 세션 캐시가 없으면
+worker가 `build_provider(ctx).list_issues()`를 자동 실행하고, 세션 캐시가 있으면 즉시
+그 캐시를 보여준다. OriginOnly에서 `r`은 같은 `list_issues()` 경로로 재fetch한다.
+이 provider는 이슈 선택과 같은 `build_provider(ctx)`가 만든 provider이므로 GitHub
+`gh_user`와 Linear `.linear.toml`/team scope를 그대로 상속한다.
+
+OriginOnly reconcile은 provider 이슈를 row로 만들기 전에 로컬 TaskDocument의 정규화된
+`(provider, id)` origin 참조와 실제 import 경로의 would-be key
+(`task::safe_task_key(issue.identifier)`) 충돌을 모두 거른다. 통과한 row는
+`source == "provider-origin"`이지만 local path/branch가 없고, action menu에는
+`Import to local`만 노출된다. OriginOnly cache는 AppState 세션 메모리에만 있고 디스크에
+영속하지 않는다. Fetch 적용 시점에 staleness label을 저장하며 render는 clock을 읽지
+않는다. State-changing action이 local rows를 갱신하면 OriginOnly cache는 NotFetched로
+무효화된다. OriginOnly 상태는 loading spinner, 미설정/미인증/network error를 담는
+상태줄, loaded staleness 표시를 갖는다. 이 개념의 canonical 이름은 source view다.
+Source view는 `.wt/` storage owner인 bucket, config/message ownership을 뜻하는 scope와 다른
+개념이므로 그 단어들을 재사용하지 않는다.
+
 액션 실행은 브라우저 안의 dispatch 계약을 따른다. Browser action menu의 모든 origin
-변경 액션(diff, fetch, pull, push, publish, attach)은 브라우저 화면을 떠나지 않고
-worker 실행으로 수행된다. 백엔드 command와 같은 함수, 같은 preview, 같은
-confirmation gate를 거치며 prompt는 popup으로, print 출력은 브라우저 하단 output
-panel로 나타난다. 실행은 한 번에 하나다. 실행 중 액션은 status line의 진행 표시(spinner)로
+변경 액션(diff, fetch, pull, push, publish, attach)과 task browser archive action은
+브라우저 화면을 떠나지 않고 worker 실행으로 수행된다. 백엔드 command와 같은 함수,
+같은 preview/confirmation/safety gate를 거치며 prompt는 popup으로, print 출력은 브라우저
+하단 output panel로 나타난다. 실행은 한 번에 하나다. 실행 중 액션은 status line의 진행 표시(spinner)로
 보이고, 새 액션 시도는 거절 안내를 받는다. popup의 Esc는 CLI prompt 취소와 같은
 의미다(cancelled, no side effects). 로컬에서 즉시 끝나고 결과가 한 줄인 액션 — keep
 local-only, copy reference, open in browser, workflow의 비지원 안내 — 는 기존대로
@@ -1569,7 +1659,8 @@ status line 한 줄로 끝난다. 분류는 backend별 exhaustive match가 단�
 플로우가 소유하며, TUI는 게이트를 추가하지도 우회하지도 않는다. popup select는 full
 selector 계약(10-row cap, section row 등)의 단순화 버전이며 selector를 대체하지 않는다.
 Workflow 브라우저의 child origin은 inspection 전용이고 workflow 액션으로 child
-TaskDocument origin을 수정하지 않는다.
+TaskDocument origin을 수정하지 않는다. Task archive는 task browser 전용 액션이며 workflow
+browser backend에서는 status-line 비지원 안내로 분류한다.
 
 `wt workflow show <id>`는 한 Workflow file을 읽는 canonical one-shot observation surface다.
 기본 human 출력은 Workflow meta(path, mode, base, title/body/origin, policy, task count)와

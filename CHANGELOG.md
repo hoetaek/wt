@@ -8,6 +8,16 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.47.0 - 2026-06-09
+
+### Changed
+
+- `[worktree]` 파일 materialization을 `copy` / `link` 두 필드로 통합. 둘 다 문자열(같은 이름)과 `{ from, to }`(rename)를 모두 받는다. `link`이 rename을 지원하므로 이름이 다른 심링크를 네이티브로 만들 수 있다.
+
+### Removed (breaking)
+
+- `[worktree].copy_as` 제거. `copy = [{ from = "...", to = "..." }]`로 이전. 옛 키는 명확한 안내 에러로 거부된다.
+
 ## 0.46.0 - 2026-06-08
 
 - Added provider-origin command surfaces and state for task and workflow

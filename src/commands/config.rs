@@ -1518,6 +1518,7 @@ fn is_movable_shared_section(section: &str) -> bool {
                 | "herd"
                 | "site"
                 | "workspace"
+                | "task_list"
                 | "agent"
                 | "review"
                 | "issues"
@@ -1702,7 +1703,10 @@ fn profile_toml_root_sections(content: &str) -> Vec<String> {
 }
 
 fn is_inlineable_profile_root(root: &str) -> bool {
-    matches!(root, "worktree" | "setup" | "site" | "workspace" | "agent")
+    matches!(
+        root,
+        "worktree" | "setup" | "site" | "task_list" | "workspace" | "agent"
+    )
 }
 
 fn render_profile_toml_as_inline_profile(content: &str) -> Result<String> {

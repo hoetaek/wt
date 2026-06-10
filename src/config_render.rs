@@ -1,8 +1,9 @@
 use crate::config::{
-    AgentCli, AgentConfig, Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
-    ReadyMode, ReviewCodexBasePolicy, ReviewDefaultPolicy, SetupConfig, SiteConfig, SiteProvider,
-    SubmitMode, WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy,
-    WorkflowDefaultPullRequestMode, WorkspaceBrowserMode, WorkspaceConfig, WorktreeConfig,
+    AgentCli, AgentConfig, ColumnConfig, Config, EditorConfig, EditorPlacement, IssueProviderType,
+    IssuesConfig, PathSpec, ReadyMode, ReviewCodexBasePolicy, ReviewDefaultPolicy, SetupConfig,
+    SiteConfig, SiteProvider, SubmitMode, TaskListConfig, WorkflowDefaultLandingPolicy,
+    WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode, WorkspaceBrowserMode, WorkspaceConfig,
+    WorktreeConfig,
 };
 
 pub fn render_effective_config(config: &Config) -> String {
@@ -12,6 +13,7 @@ pub fn render_effective_config(config: &Config) -> String {
     append_setup_section(&mut s, &config.setup);
     append_workflow_section(&mut s, config.workflow_default_policy());
     append_review_section(&mut s, config.review_default_policy());
+    append_task_list_section(&mut s, &config.task_list);
     if let Some(issues) = config.issues.as_ref() {
         append_issues_section(&mut s, issues);
     }
@@ -47,21 +49,16 @@ fn append_worktree_section(s: &mut String, worktree: &WorktreeConfig) {
         s.push_str(&format!("path = {}\n", toml_quote(path)));
     }
     if !worktree.copy.is_empty() {
-        s.push_str(&format!("copy = {}\n", toml_array(&worktree.copy)));
-    }
-    if !worktree.copy_as.is_empty() {
-        s.push_str("copy_as = [\n");
-        for entry in &worktree.copy_as {
-            s.push_str(&format!(
-                "    {{ from = {}, to = {} }},\n",
-                toml_quote(&entry.from),
-                toml_quote(&entry.to)
-            ));
-        }
-        s.push_str("]\n");
+        s.push_str(&format!(
+            "copy = {}\n",
+            render_pathspec_array(&worktree.copy)
+        ));
     }
     if !worktree.link.is_empty() {
-        s.push_str(&format!("link = {}\n", toml_array(&worktree.link)));
+        s.push_str(&format!(
+            "link = {}\n",
+            render_pathspec_array(&worktree.link)
+        ));
     }
     if let Some(context) = worktree.inject_local_context.as_deref() {
         s.push_str(&format!("inject_local_context = {}\n", toml_quote(context)));
@@ -140,6 +137,35 @@ fn append_review_section(s: &mut String, policy: ReviewDefaultPolicy) {
         "codex_base = {}\n",
         toml_quote(review_codex_base_name(policy.codex_base))
     ));
+}
+
+fn append_task_list_section(s: &mut String, task_list: &TaskListConfig) {
+    if task_list == &TaskListConfig::default() {
+        return;
+    }
+
+    append_task_list_column(s, "run", &task_list.columns.run);
+    append_task_list_column(s, "next", &task_list.columns.next);
+    append_task_list_column(s, "dur", &task_list.columns.dur);
+    append_task_list_column(s, "task", &task_list.columns.task);
+    append_task_list_column(s, "branch", &task_list.columns.branch);
+    append_task_list_column(s, "source", &task_list.columns.source);
+    append_task_list_column(s, "origin_status", &task_list.columns.origin_status);
+    append_task_list_column(s, "size", &task_list.columns.size);
+}
+
+fn append_task_list_column(s: &mut String, name: &str, column: &ColumnConfig) {
+    if column == &ColumnConfig::default() {
+        return;
+    }
+
+    s.push_str(&format!("\n[task_list.columns.{name}]\n"));
+    if let Some(hidden) = column.hidden {
+        s.push_str(&format!("hidden = {hidden}\n"));
+    }
+    if let Some(width) = column.width {
+        s.push_str(&format!("width = {width}\n"));
+    }
 }
 
 fn append_issues_section(s: &mut String, issues: &IssuesConfig) {
@@ -371,6 +397,22 @@ fn toml_array(values: &[String]) -> String {
     )
 }
 
+fn render_pathspec_array(specs: &[PathSpec]) -> String {
+    format!(
+        "[{}]",
+        specs
+            .iter()
+            .map(|spec| match spec {
+                PathSpec::Same(value) => toml_quote(value),
+                PathSpec::Rename { from, to } => {
+                    format!("{{ from = {}, to = {} }}", toml_quote(from), toml_quote(to))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 fn toml_inline_string_entries(values: &[(&str, &str)]) -> String {
     let rendered = values
         .iter()
@@ -413,10 +455,11 @@ fn toml_quote(value: &str) -> String {
 mod tests {
     use super::render_effective_config;
     use crate::config::{
-        Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig, OriginPolicy,
-        ReviewCodexBasePolicy, ReviewConfig, SiteConfig, SiteProvider, WorkflowConfig,
-        WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig, WorkspaceBrowserMode,
-        WorkspaceChromeDevtoolsConfig, WorkspaceConfig,
+        ColumnConfig, Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
+        OriginPolicy, PathSpec, ReviewCodexBasePolicy, ReviewConfig, SiteConfig, SiteProvider,
+        TaskListColumns, TaskListConfig, WorkflowConfig, WorkflowDefaultPullRequestMode,
+        WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
+        WorkspaceConfig,
     };
 
     #[test]
@@ -447,6 +490,36 @@ mod tests {
 
         assert!(rendered.contains("[review]\n"));
         assert!(rendered.contains("codex_base = \"required\"\n"));
+    }
+
+    #[test]
+    fn worktree_pathspec_arrays_round_trip() {
+        let mut config = Config::default();
+        config.worktree.copy = vec![
+            PathSpec::Same(".env".into()),
+            PathSpec::Rename {
+                from: ".local/skills".into(),
+                to: ".codex/skills".into(),
+            },
+        ];
+        config.worktree.link = vec![PathSpec::Rename {
+            from: ".local/bin/tool".into(),
+            to: "bin/tool".into(),
+        }];
+
+        let rendered = render_effective_config(&config);
+
+        assert!(
+            rendered
+                .contains(r#"copy = [".env", { from = ".local/skills", to = ".codex/skills" }]"#)
+        );
+        assert!(rendered.contains(r#"link = [{ from = ".local/bin/tool", to = "bin/tool" }]"#));
+
+        let parsed: Config = toml::from_str(&rendered).unwrap();
+        assert_eq!(parsed.worktree.copy[1].from(), ".local/skills");
+        assert_eq!(parsed.worktree.copy[1].to(), ".codex/skills");
+        assert_eq!(parsed.worktree.link[0].from(), ".local/bin/tool");
+        assert_eq!(parsed.worktree.link[0].to(), "bin/tool");
     }
 
     #[test]
@@ -634,5 +707,36 @@ mod tests {
 
         assert!(rendered.contains("[editor]\n"));
         assert!(rendered.contains("placement = \"process\"\n"));
+    }
+
+    #[test]
+    fn task_list_column_overrides_are_rendered() {
+        let rendered = render_effective_config(&Config {
+            task_list: TaskListConfig {
+                columns: TaskListColumns {
+                    run: ColumnConfig {
+                        hidden: Some(true),
+                        width: Some(7),
+                    },
+                    dur: ColumnConfig {
+                        hidden: None,
+                        width: Some(6),
+                    },
+                    ..TaskListColumns::default()
+                },
+            },
+            ..Config::default()
+        });
+
+        assert!(rendered.contains("[task_list.columns.run]\n"));
+        assert!(rendered.contains("hidden = true\n"));
+        assert!(rendered.contains("width = 7\n"));
+        assert!(rendered.contains("[task_list.columns.dur]\n"));
+        assert!(rendered.contains("width = 6\n"));
+
+        let parsed: Config = toml::from_str(&rendered).unwrap();
+        assert_eq!(parsed.task_list.columns.run.hidden, Some(true));
+        assert_eq!(parsed.task_list.columns.run.width, Some(7));
+        assert_eq!(parsed.task_list.columns.dur.width, Some(6));
     }
 }
