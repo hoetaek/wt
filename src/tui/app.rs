@@ -921,19 +921,11 @@ impl AppState {
     }
 
     pub(crate) fn origin_status_counts(&self) -> Vec<(&str, usize)> {
+        // 헤더 status 분포는 표(visible_rows)와 같은 행 집합을 세어
+        // 활성 소스 뷰·텍스트 필터와 항상 일치하게 유지한다.
         let mut counts = Vec::<(&str, usize)>::new();
-        match (&self.source_view, &self.origin_only) {
-            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => {
-                for row in rows {
-                    push_origin_status_count(&mut counts, row);
-                }
-            }
-            (SourceView::OriginOnly, _) => {}
-            _ => {
-                for row in &self.rows {
-                    push_origin_status_count(&mut counts, row);
-                }
-            }
+        for row in self.visible_rows() {
+            push_origin_status_count(&mut counts, row);
         }
         counts
     }
@@ -2060,6 +2052,25 @@ mod tests {
 
         assert!(app.origin_only_needs_fetch());
         assert!(app.visible_keys().is_empty());
+    }
+
+    #[test]
+    fn origin_status_counts_follow_active_filter() {
+        let mut app = app();
+        app.filter = "origin-sync".into();
+
+        assert_eq!(app.origin_status_counts(), vec![("conflict", 1)]);
+    }
+
+    #[test]
+    fn origin_status_counts_follow_source_view() {
+        let mut app = AppState::new(vec![
+            source_row("local-a", "local"),
+            source_row("pub-b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::Published);
+
+        assert_eq!(app.origin_status_counts(), vec![("stale", 1)]);
     }
 
     #[test]
