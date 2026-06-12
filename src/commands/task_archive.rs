@@ -340,9 +340,11 @@ fn move_task_to_archive(ctx: &Ctx, candidate: &ArchiveCandidate) -> Result<Archi
                 ctx.storage_root.display_path(&task_run_move.source_path)
             )
         }) {
-            restore_removed_sources(&removed_sources);
-            rollback_archive_artifacts(candidate);
-            return Err(err);
+            return Err(rollback_after_removal_failure(
+                candidate,
+                &removed_sources,
+                err,
+            ));
         }
         removed_sources.push(FileRestore {
             source: task_run_move.source_path.clone(),
@@ -356,9 +358,11 @@ fn move_task_to_archive(ctx: &Ctx, candidate: &ArchiveCandidate) -> Result<Archi
             ctx.storage_root.display_path(&candidate.source_path)
         )
     }) {
-        restore_removed_sources(&removed_sources);
-        rollback_archive_artifacts(candidate);
-        return Err(err);
+        return Err(rollback_after_removal_failure(
+            candidate,
+            &removed_sources,
+            err,
+        ));
     }
 
     Ok(ArchivedTask {
@@ -406,15 +410,48 @@ fn remove_file_if_present(path: &Path) -> Result<()> {
     }
 }
 
-fn restore_removed_sources(removed_sources: &[FileRestore]) {
+fn restore_removed_sources(removed_sources: &[FileRestore]) -> Result<()> {
     for removed in removed_sources.iter().rev() {
         if removed.source.exists() {
             continue;
         }
         if let Some(parent) = removed.source.parent() {
-            let _ = fs::create_dir_all(parent);
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "Failed to recreate directory for {} while restoring from {}",
+                    removed.source.display(),
+                    removed.archive.display()
+                )
+            })?;
         }
-        let _ = fs::copy(&removed.archive, &removed.source);
+        fs::copy(&removed.archive, &removed.source).with_context(|| {
+            format!(
+                "Failed to restore {} from archive copy {}",
+                removed.source.display(),
+                removed.archive.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Source 제거 실패 후의 롤백. 복원이 성공하면 archive 잔여물을 정리하고 원인
+/// 에러를 그대로 돌려준다. 복원이 실패하면 archive 사본이 남은 데이터의 유일한
+/// 원본이므로 절대 삭제하지 않고, 보존 위치를 에러에 담아 돌려준다.
+fn rollback_after_removal_failure(
+    candidate: &ArchiveCandidate,
+    removed_sources: &[FileRestore],
+    err: anyhow::Error,
+) -> anyhow::Error {
+    match restore_removed_sources(removed_sources) {
+        Ok(()) => {
+            rollback_archive_artifacts(candidate);
+            err
+        }
+        Err(restore_err) => err.context(format!(
+            "rollback restore failed ({restore_err:#}); archive copies are preserved under {} for manual recovery",
+            candidate.archive_dir.display()
+        )),
     }
 }
 
@@ -521,7 +558,10 @@ fn finish(report: ArchiveReport) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArchiveManifest, archive};
+    use super::{
+        ArchiveCandidate, ArchiveManifest, FileRestore, archive, restore_removed_sources,
+        rollback_after_removal_failure,
+    };
     use crate::config::Config;
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
@@ -621,6 +661,87 @@ body = "Task body"
         crate::commands::task_list::run(&list_ctx, true).unwrap();
         let output = list_ui.steps.lock().unwrap().join("\n");
         assert!(!output.contains("demo"));
+    }
+
+    #[test]
+    fn restore_removed_sources_restores_missing_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("archive/run.toml");
+        fs::create_dir_all(archive.parent().unwrap()).unwrap();
+        fs::write(&archive, "payload").unwrap();
+        let source = dir.path().join("active/run.toml");
+        let restores = vec![FileRestore {
+            source: source.clone(),
+            archive,
+        }];
+
+        restore_removed_sources(&restores).unwrap();
+
+        assert_eq!(fs::read_to_string(&source).unwrap(), "payload");
+    }
+
+    #[test]
+    fn restore_removed_sources_errors_when_archive_copy_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let restores = vec![FileRestore {
+            source: dir.path().join("active/run.toml"),
+            archive: dir.path().join("archive/missing.toml"),
+        }];
+
+        let err = restore_removed_sources(&restores).unwrap_err();
+
+        let report = format!("{err:#}");
+        assert!(
+            report.contains("missing.toml"),
+            "에러는 archive 경로를 명시: {report}"
+        );
+        assert!(
+            report.contains("run.toml"),
+            "에러는 source 경로를 명시: {report}"
+        );
+    }
+
+    #[test]
+    fn failed_restore_preserves_archive_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("archive/tasks/demo/archive.toml");
+        let archive_path = dir.path().join("archive/tasks/demo/demo.toml");
+        fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+        fs::write(&manifest_path, "manifest").unwrap();
+        fs::write(&archive_path, "doc").unwrap();
+        let candidate = ArchiveCandidate {
+            key: "demo".into(),
+            source_path: dir.path().join("tasks/demo.toml"),
+            archive_dir: dir.path().join("archive/tasks/demo"),
+            archive_path: archive_path.clone(),
+            manifest_path: manifest_path.clone(),
+            task_run_moves: Vec::new(),
+        };
+        // archive 사본이 없는 FileRestore → 복원 실패를 강제
+        let removed_sources = vec![FileRestore {
+            source: dir.path().join("active/run.toml"),
+            archive: dir.path().join("archive/gone.toml"),
+        }];
+
+        let err = rollback_after_removal_failure(
+            &candidate,
+            &removed_sources,
+            anyhow::anyhow!("removal failed"),
+        );
+
+        let report = format!("{err:#}");
+        assert!(
+            report.contains("removal failed"),
+            "원인 에러 유지: {report}"
+        );
+        assert!(
+            manifest_path.exists() && archive_path.exists(),
+            "복원 실패 시 archive 사본을 삭제하면 안 된다"
+        );
+        assert!(
+            report.contains(&candidate.archive_dir.display().to_string()),
+            "에러는 보존된 archive 위치를 안내해야 한다: {report}"
+        );
     }
 
     #[test]

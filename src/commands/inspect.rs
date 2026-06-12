@@ -1,6 +1,6 @@
 use crate::commands::agent_report;
 use crate::context::Ctx;
-use crate::services::git::GitService;
+use crate::services::git::{GitService, porcelain_status_path};
 use crate::services::github_review::{
     GithubReviewService, PullRequestReviewEvidence, PullRequestReviewVerdict,
 };
@@ -1140,6 +1140,7 @@ fn is_configured_link_status_line(ctx: &Ctx, line: &str) -> bool {
     let Some(path) = porcelain_status_path(line) else {
         return false;
     };
+    let path = path.as_ref();
     ctx.config
         .worktree
         .link
@@ -1161,7 +1162,7 @@ fn status_line_may_hide_configured_link(ctx: &Ctx, line: &str) -> bool {
     let Some(path) = porcelain_status_path(line) else {
         return false;
     };
-    let path = path.trim_end_matches('/');
+    let path = path.as_ref().trim_end_matches('/');
     ctx.config
         .worktree
         .link
@@ -1170,11 +1171,7 @@ fn status_line_may_hide_configured_link(ctx: &Ctx, line: &str) -> bool {
         .any(|linked| linked != path && linked.starts_with(&format!("{path}/")))
 }
 
-fn porcelain_status_path(line: &str) -> Option<&str> {
-    let path = line.get(3..)?.trim();
-    let path = path.rsplit(" -> ").next().unwrap_or(path);
-    Some(path.trim_matches('"'))
-}
+// porcelain 경로 추출/unquote는 services::git::porcelain_status_path 공유 구현을 쓴다.
 
 #[cfg(test)]
 mod tests {
@@ -1805,5 +1802,75 @@ run = "run-unrelated"
             calls[1].1,
             vec!["status", "--porcelain", "--untracked-files=all"]
         );
+    }
+
+    #[test]
+    fn porcelain_status_path_returns_plain_paths() {
+        assert_eq!(
+            porcelain_status_path("?? src/app.rs").as_deref(),
+            Some("src/app.rs")
+        );
+        assert_eq!(
+            porcelain_status_path("R  old.rs -> new.rs").as_deref(),
+            Some("new.rs")
+        );
+    }
+
+    #[test]
+    fn porcelain_status_path_splits_rename_only_for_rename_statuses() {
+        // 비rename 상태에서는 " -> "가 경로의 일부다 (git은 공백/화살표만으로는 인용하지 않음)
+        assert_eq!(
+            porcelain_status_path("?? a -> b.md").as_deref(),
+            Some("a -> b.md")
+        );
+        // rename은 따옴표 밖 첫 구분자에서 자르고 대상 경로를 취한다
+        assert_eq!(
+            porcelain_status_path(r#"R  "old -> x.md" -> "new -> y.md""#).as_deref(),
+            Some("new -> y.md")
+        );
+        assert_eq!(
+            porcelain_status_path("R  old.rs -> new.rs").as_deref(),
+            Some("new.rs")
+        );
+    }
+
+    #[test]
+    fn porcelain_status_path_unquotes_git_escaped_paths() {
+        assert_eq!(
+            porcelain_status_path(r#"?? "src/tab\there.txt""#).as_deref(),
+            Some("src/tab\there.txt")
+        );
+        assert_eq!(
+            porcelain_status_path(r#"?? "back\\slash""#).as_deref(),
+            Some("back\\slash")
+        );
+        assert_eq!(
+            porcelain_status_path(r#"?? "\355\225\234\352\270\200.md""#).as_deref(),
+            Some("한글.md")
+        );
+    }
+
+    #[test]
+    fn configured_link_detection_matches_git_quoted_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.worktree.link = vec![PathSpec::Same("한글".into())];
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        // git이 core.quotePath로 "한글/note.md"를 octal escape한 형태
+        assert!(
+            is_configured_link_status_line(&ctx, r#"?? "\355\225\234\352\270\200/note.md""#),
+            "escape된 configured link 경로도 link 라인으로 인식해야 한다"
+        );
+        assert!(!is_configured_link_status_line(
+            &ctx,
+            r#"?? "\355\225\234\352\270\200-else/note.md""#
+        ));
     }
 }

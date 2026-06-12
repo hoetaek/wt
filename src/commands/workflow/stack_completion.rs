@@ -1,6 +1,6 @@
 use super::resolve_mutating_target;
 use crate::context::Ctx;
-use crate::services::git::GitService;
+use crate::services::git::{GitService, porcelain_status_path};
 use crate::task as task_store;
 use crate::task_run::STATUS_PASSED;
 use crate::workflow as workflow_store;
@@ -293,8 +293,35 @@ fn status_line_may_hide_configured_link(ctx: &Ctx, line: &str) -> bool {
         .any(|linked| linked != path && linked.starts_with(&format!("{path}/")))
 }
 
-fn porcelain_status_path(line: &str) -> Option<&str> {
-    let path = line.get(3..)?.trim();
-    let path = path.rsplit(" -> ").next().unwrap_or(path);
-    Some(path.trim_matches('"'))
+// porcelain 경로 추출/unquote는 services::git::porcelain_status_path 공유 구현을 쓴다.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, PathSpec};
+    use crate::context::mock::{MockRunner, MockUi};
+
+    #[test]
+    fn configured_link_detection_matches_git_quoted_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.worktree.link = vec![PathSpec::Same("한글".into())];
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        // git이 core.quotePath로 "한글/note.md"를 octal escape한 형태
+        assert!(
+            is_configured_link_status_line(&ctx, r#"?? "\355\225\234\352\270\200/note.md""#),
+            "escape된 configured link 경로도 stack completion에서 link 라인으로 인식해야 한다"
+        );
+        assert!(!is_configured_link_status_line(
+            &ctx,
+            r#"?? "\355\225\234\352\270\200-else/note.md""#
+        ));
+    }
 }

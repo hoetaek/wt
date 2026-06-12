@@ -60,10 +60,27 @@ pub(crate) fn dim_style() -> Style {
     }
 }
 
+pub(crate) fn notice_style() -> Style {
+    if colors_active() {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    }
+}
+
 pub(crate) fn selected_style() -> Style {
     let style = Style::default().add_modifier(Modifier::REVERSED);
     if colors_active() {
         style.add_modifier(Modifier::BOLD)
+    } else {
+        style
+    }
+}
+
+pub(crate) fn marked_style() -> Style {
+    let style = Style::default().add_modifier(Modifier::BOLD);
+    if colors_active() {
+        style.fg(Color::Blue)
     } else {
         style
     }
@@ -134,6 +151,7 @@ mod tests {
             assert_eq!(external_write_style().fg, None);
             assert_eq!(chrome_style().fg, None);
             assert_eq!(dim_style().fg, None);
+            assert_eq!(notice_style().fg, None);
         });
     }
 

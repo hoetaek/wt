@@ -108,17 +108,30 @@ Default recommendation rules:
   `copy` and `link` both accept string entries for same-name materialization and
   `{ from, to }` entries for rename materialization. Use
   `copy = [{ from = "...", to = "..." }]` for renamed copies and
-  `link = [{ from = "...", to = "..." }]` for renamed symlinks. Add
-  `[worktree.naming]` (command, prompt, optional branch/workspace) only when the
-  repo needs a custom branch/workspace naming command instead of the built-in
-  default; it renders as its own sub-section in `wt config show`.
+  `link = [{ from = "...", to = "..." }]` for renamed symlinks. AI-assisted
+  branch/workspace naming is opt-in via the `[worktree.naming]` table: omitting
+  the table entirely disables the feature (`worktree_naming::generate` returns
+  the non-AI fallback), so when the repo wants AI naming at all, include at
+  least a minimal `[worktree.naming]` section — the command/prompt/branch
+  defaults fill in once the table exists. Add the optional fields only when the
+  repo needs a custom naming command; it renders as its own sub-section in
+  `wt config show`.
 - Add `[workflow]` only when future workflow PR/landing policy should differ
   from built-in defaults. `wt config show` always materializes `[workflow]`
   (pull_request, landing) even at defaults, so its presence in the effective
-  output is not evidence the user configured it.
+  output is not evidence the user configured it. Exception: these fields merge
+  by Option replacement, so a default-looking value (`pull_request = "none"`,
+  `landing = "manual"`) in a higher-precedence layer can be an explicit
+  override of an inherited policy — keep it when resetting inherited
+  `draft`/`ready` or `auto` back to the built-ins is the intent.
 - Add `[review]` only when the codex_base policy should differ from the built-in
   default (`none`). Like `[workflow]`, `wt config show` always materializes
-  `[review].codex_base`, so a `none` value there is the default, not intent.
+  `[review].codex_base`, so a `none` value there is the default, not intent —
+  unless an owner file declares it: `codex_base` also merges by Option
+  replacement, so an explicit `[review] codex_base = "none"` in a
+  higher-precedence layer is the only way to override an inherited
+  `advisory`/`required` policy. Keep that explicit `none`; do not strip it as
+  "just the default".
 - Add `[task_list.columns.<name>]` (`run`, `next`, `dur`, `task`, `branch`,
   `source`, `origin_status`, `size`, each with `hidden`/`width`) only when the
   user wants to hide or resize a task-browser column from its built-in layout.
@@ -228,9 +241,13 @@ Cover these when relevant:
 - named profiles
 
 `[workflow]` and `[review]` always appear in `wt config show` even at their
-built-in defaults, so frame them as "default materialized" unless the owner file
-actually sets a non-default value. `[task_list.columns.*]` and `[worktree.naming]`
-only appear when the user overrode a built-in.
+built-in defaults, so frame them as "default materialized" unless an owner file
+actually declares the field — a declared default-looking value (`pull_request =
+"none"`, `landing = "manual"`, `codex_base = "none"`) can be an explicit
+Option-replacement override of an inherited policy, not noise.
+`[task_list.columns.*]` and `[worktree.naming]` only appear when the user
+declared them; note that omitting `[worktree.naming]` disables AI naming
+entirely, so its absence is itself a meaningful state.
 
 The omission rationale should be practical, for example: "CLI repo, no dev
 server", "tool missing locally", "built-in default already covers this", or

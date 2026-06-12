@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const LIST_START: &str = "◆";
 const BAR: &str = "│";
@@ -116,14 +116,22 @@ pub(crate) fn origin_only_rows(
     issues
         .into_iter()
         .filter_map(|issue| {
-            let (_, id) = normalize_origin_key(&provider, &issue.identifier);
+            // 정규화 id는 매칭/중복 제거 전용. 표시·import dispatch에는 provider가
+            // 돌려준 원본 대소문자를 보존한다 (Linear `WT-142` 등 case-sensitive id).
+            let (_, normalized_id) = normalize_origin_key(&provider, &issue.identifier);
+            let import_id = issue
+                .identifier
+                .trim()
+                .trim_start_matches('#')
+                .trim()
+                .to_string();
             let import_key = task::safe_task_key(&issue.identifier);
-            if local_origin_keys.contains(&(provider.clone(), id.clone()))
+            if local_origin_keys.contains(&(provider.clone(), normalized_id))
                 || local_task_keys.contains(&import_key)
             {
                 return None;
             }
-            let key = format!("{provider}:{id}");
+            let key = format!("{provider}:{import_id}");
             let body = issue.hint.unwrap_or_default();
             Some(crate::tui::app::BrowserRow {
                 key,
@@ -136,7 +144,8 @@ pub(crate) fn origin_only_rows(
                 size: None,
                 branch: None,
                 source: "provider-origin".into(),
-                preview_lines: origin_issue_preview_lines(&provider, &id, &body),
+                path: None,
+                preview_lines: origin_issue_preview_lines(&provider, &import_id, &body),
                 body,
                 menu: OriginActionMenu::for_origin_issue_placeholder("Provider issue"),
             })
@@ -162,6 +171,8 @@ fn origin_issue_preview_lines(provider: &str, id: &str, hint: &str) -> Vec<Strin
 struct TaskListRow {
     key: String,
     path: String,
+    #[serde(skip_serializing)]
+    source_path: PathBuf,
     title: String,
     branch: Option<String>,
     origin: Option<TaskOriginSummary>,
@@ -343,20 +354,29 @@ fn read_task_row(ctx: &Ctx, path: &Path, run_statuses: &TaskRunStatusIndex) -> R
     let document: TaskDocument = toml::from_str(&content)
         .with_context(|| format!("Failed to parse task: {relative_path}"))?;
     let run_status = run_statuses.status_for(&key);
-    task_row_with_run_status(ctx, key, relative_path, document, run_status)
+    task_row_with_run_status(
+        ctx,
+        key,
+        relative_path,
+        path.to_path_buf(),
+        document,
+        run_status,
+    )
 }
 
 #[cfg(test)]
 fn task_row(ctx: &Ctx, key: String, path: String, document: TaskDocument) -> Result<TaskListRow> {
     let run_statuses = TaskRunStatusIndex::load(ctx)?;
+    let source_path = PathBuf::from(&path);
     let run_status = run_statuses.status_for(&key);
-    task_row_with_run_status(ctx, key, path, document, run_status)
+    task_row_with_run_status(ctx, key, path, source_path, document, run_status)
 }
 
 fn task_row_with_run_status(
     ctx: &Ctx,
     key: String,
     path: String,
+    source_path: PathBuf,
     document: TaskDocument,
     run_status: String,
 ) -> Result<TaskListRow> {
@@ -383,6 +403,7 @@ fn task_row_with_run_status(
     Ok(TaskListRow {
         key,
         path,
+        source_path,
         title: document.title,
         branch: task::prepared_branch_name(&document.branch).map(str::to_string),
         origin,
@@ -461,6 +482,7 @@ fn browser_row(row: &TaskListRow) -> crate::tui::app::BrowserRow {
         size: row.size.clone(),
         branch: row.branch.clone(),
         source: row.source.clone(),
+        path: Some(row.source_path.clone()),
         body: row.body.clone(),
         preview_lines: browser_preview_lines(row),
         menu: row.origin_action_menu(),
@@ -702,16 +724,9 @@ fn default_task_list_columns(cfg: &Config) -> Vec<Column> {
             cfg.task_list.columns.run,
         ),
         task_list_column(
-            TaskListColumnKind::Next,
-            "next",
-            false,
-            false,
-            cfg.task_list.columns.next,
-        ),
-        task_list_column(
             TaskListColumnKind::Dur,
             "dur",
-            false,
+            true,
             false,
             cfg.task_list.columns.dur,
         ),
@@ -723,9 +738,16 @@ fn default_task_list_columns(cfg: &Config) -> Vec<Column> {
             cfg.task_list.columns.task,
         ),
         task_list_column(
+            TaskListColumnKind::Next,
+            "next",
+            false,
+            false,
+            cfg.task_list.columns.next,
+        ),
+        task_list_column(
             TaskListColumnKind::Branch,
             "branch",
-            false,
+            true,
             false,
             cfg.task_list.columns.branch,
         ),
@@ -1007,6 +1029,7 @@ mod tests {
             size: None,
             branch: Some("demo".into()),
             source: source.into(),
+            path: None,
             body: String::new(),
             preview_lines: Vec::new(),
             menu: OriginActionMenu::for_local_task(key, title),
@@ -1084,7 +1107,41 @@ mod tests {
         let rows = origin_only_rows(issues, &local_origin_keys, &local_task_keys, "linear");
 
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
-        assert_eq!(keys, vec!["linear:proj-124"]);
+        assert_eq!(keys, vec!["linear:PROJ-124"]);
+    }
+
+    #[test]
+    fn origin_only_rows_preserves_identifier_case_in_key() {
+        use std::collections::HashSet;
+
+        let local_origin_keys: HashSet<(String, String)> =
+            [normalize_origin_key("linear", "WT-142")]
+                .into_iter()
+                .collect();
+        let local_task_keys = HashSet::new();
+        let issues = vec![
+            IssueListItem {
+                identifier: "WT-142".into(),
+                title: "Already imported".into(),
+                display: "linear WT-142".into(),
+                hint: None,
+            },
+            IssueListItem {
+                identifier: "WT-143".into(),
+                title: "Provider only".into(),
+                display: "linear WT-143".into(),
+                hint: None,
+            },
+        ];
+
+        let rows = origin_only_rows(issues, &local_origin_keys, &local_task_keys, "linear");
+
+        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["linear:WT-143"],
+            "중복 제거는 case-insensitive로 유지하되 key는 원본 대소문자를 보존해야 한다"
+        );
     }
 
     #[test]
@@ -1423,6 +1480,42 @@ updated_at = "2026-05-18T00:00:01Z"
     }
 
     #[test]
+    fn task_browser_row_path_points_to_real_file_for_reader_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        let task_path = tasks_dir.join("demo.toml");
+        fs::write(
+            &task_path,
+            r#"title = "Demo"
+branch = "demo"
+body = "old task body"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+        let rows = browser_rows(&report);
+        assert_eq!(rows[0].path.as_deref(), Some(task_path.as_path()));
+        assert!(rows[0].path.as_ref().is_some_and(|path| path.exists()));
+
+        let mut app = crate::tui::app::AppState::new(rows);
+        app.handle(crate::tui::app::KeyInput::Enter);
+        fs::write(
+            &task_path,
+            r#"title = "Demo"
+branch = "demo"
+body = "new task body"
+"#,
+        )
+        .unwrap();
+        app.handle(crate::tui::app::KeyInput::Char('r'));
+
+        assert!(app.selected_row().unwrap().body.contains("new task body"));
+    }
+
+    #[test]
     fn unrelated_malformed_task_run_leaves_new_run_status() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
@@ -1541,7 +1634,7 @@ body = "Task body"
     }
 
     #[test]
-    fn default_columns_show_run_dur_task_branch_hide_size() {
+    fn default_visible_columns_are_run_task_next() {
         let cols = default_task_list_columns(&Config::default());
         let visible = cols
             .iter()
@@ -1549,11 +1642,24 @@ body = "Task body"
             .map(|column| column.title.as_str())
             .collect::<Vec<_>>();
 
-        assert!(visible.contains(&"run"));
+        assert_eq!(visible, vec!["run", "task", "next"]);
+    }
+
+    #[test]
+    fn hidden_dur_and_branch_can_be_restored_by_config() {
+        let mut cfg = Config::default();
+        cfg.task_list.columns.dur.hidden = Some(false);
+        cfg.task_list.columns.branch.hidden = Some(false);
+
+        let cols = default_task_list_columns(&cfg);
+        let visible = cols
+            .iter()
+            .filter(|column| !column.hidden)
+            .map(|column| column.title.as_str())
+            .collect::<Vec<_>>();
+
         assert!(visible.contains(&"dur"));
-        assert!(visible.contains(&"task"));
         assert!(visible.contains(&"branch"));
-        assert!(!visible.contains(&"size"));
     }
 
     #[test]
@@ -1723,10 +1829,10 @@ body = '''
         assert!(
             text.lines().any(|line| {
                 line.contains("run")
-                    && line.contains("next")
-                    && line.contains("dur")
                     && line.contains("task")
-                    && line.contains("branch")
+                    && line.contains("next")
+                    && !line.contains("dur")
+                    && !line.contains("branch")
             }),
             "default browser columns should remain visible at narrow width:\n{text}"
         );
@@ -1760,8 +1866,8 @@ body = '''
         );
         assert!(
             text.lines()
-                .any(|line| line.contains("run") && line.contains("next") && line.contains("dur")),
-            "run/next/dur columns should remain visible with long keys:\n{text}"
+                .any(|line| line.contains("run") && line.contains("task") && line.contains("next")),
+            "run/task/next columns should remain visible with long keys:\n{text}"
         );
     }
 

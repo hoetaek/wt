@@ -1,11 +1,13 @@
 use crate::origin_action_menu::{OriginAction, OriginActionMenu};
-use crate::tui::body_markup::{self, LineKind};
+use crate::task::TaskDocument;
+use crate::tui::reader_render::render_reader_lines;
 use crate::tui::remote_ui::PrintKind;
-use crate::ui::selector::strip_terminal_sequences;
-use console::measure_text_width;
-#[cfg(test)]
-use std::cell::Cell;
-use std::cell::RefCell;
+use crate::workflow::WorkflowMetadata;
+use anyhow::Context;
+use ratatui::layout::Rect;
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserRow {
@@ -19,6 +21,7 @@ pub(crate) struct BrowserRow {
     pub(crate) size: Option<String>,
     pub(crate) branch: Option<String>,
     pub(crate) source: String,
+    pub(crate) path: Option<PathBuf>,
     pub(crate) body: String,
     pub(crate) preview_lines: Vec<String>,
     pub(crate) menu: OriginActionMenu,
@@ -81,6 +84,22 @@ pub(crate) enum KeyInput {
     Esc,
     Backspace,
     Char(char),
+    CtrlChar(char),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MouseInput {
+    Down { visible_index: usize },
+    Drag { visible_index: usize },
+    DoubleClick { visible_index: usize },
+    Up { dragged: bool },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TableMouseLayout {
+    pub(crate) rows: Rect,
+    pub(crate) first_visible_index: usize,
+    pub(crate) visible_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,9 +139,11 @@ impl SourceView {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Mode {
     List,
+    RangeSelect,
+    Reader,
     FilterInput,
     Menu,
 }
@@ -131,7 +152,9 @@ pub(crate) enum Mode {
 pub(crate) enum Outcome {
     Continue,
     Quit,
+    Refresh,
     FetchOriginIssues,
+    CopyRows { count: usize, text: String },
     Dispatch { key: String, action: OriginAction },
 }
 
@@ -235,17 +258,21 @@ pub(crate) struct AppState {
     source_view: SourceView,
     origin_only: OriginOnlyState,
     selected_index: usize,
+    selected_keys: HashSet<String>,
+    range_anchor_key: Option<String>,
+    range_prior_selected_keys: HashSet<String>,
     menu_selected_index: usize,
     mode: Mode,
     status_line: String,
+    notice: Option<String>,
     copy: BrowserCopy,
     popup: Option<PopupState>,
     output: OutputPanel,
     running: Option<RunningAction>,
     columns: Vec<BrowserColumn>,
-    body_view_open: bool,
-    body_scroll: usize,
-    body_cache: RefCell<BodyLineCache>,
+    reader_scroll: usize,
+    reader_viewport_height: Cell<usize>,
+    table_mouse_layout: Cell<Option<TableMouseLayout>>,
     body_wrap_cache: RefCell<BodyWrapCache>,
     #[cfg(test)]
     body_wrap_recompute_count: Cell<usize>,
@@ -292,6 +319,7 @@ impl BrowserCopy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct KeymapEntry {
+    mode: Mode,
     key: &'static str,
     desc: &'static str,
     footer: bool,
@@ -300,78 +328,140 @@ struct KeymapEntry {
 
 const LIST_KEYMAP: &[KeymapEntry] = &[
     KeymapEntry {
+        mode: Mode::List,
         key: "j/k",
         desc: "move",
         footer: true,
         task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "q",
         desc: "quit",
         footer: true,
         task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "g/G",
         desc: "first/last",
         footer: false,
         task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "/",
         desc: "filter",
         footer: true,
         task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "h/l",
         desc: "view",
         footer: true,
         task_only: true,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "s",
         desc: "sidebar",
         footer: true,
         task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "PageUp/Dn",
         desc: "scroll detail",
         footer: false,
         task_only: false,
     },
     KeymapEntry {
-        key: "v",
-        desc: "body",
+        mode: Mode::List,
+        key: "Enter",
+        desc: "reader",
         footer: true,
         task_only: false,
     },
     KeymapEntry {
-        key: "Enter",
-        desc: "actions",
+        mode: Mode::List,
+        key: "mouse",
+        desc: "click move / drag select / double-click reader",
         footer: false,
         task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
+        key: "Space",
+        desc: "mark",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
+        key: "v",
+        desc: "range",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
         key: "a",
+        desc: "all visible",
+        footer: false,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
+        key: "m",
+        desc: "actions",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
+        key: "A",
         desc: "archive",
         footer: true,
         task_only: true,
     },
     KeymapEntry {
+        mode: Mode::List,
+        key: "y",
+        desc: "copy rows",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
+        key: "Y",
+        desc: "copy key",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
+        key: "t",
+        desc: "attach",
+        footer: false,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
         key: "i",
         desc: "import origin-only",
         footer: false,
         task_only: true,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "r",
-        desc: "refetch origin-only",
+        desc: "refresh",
         footer: false,
-        task_only: true,
+        task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "?",
         desc: "help",
         footer: true,
@@ -379,11 +469,181 @@ const LIST_KEYMAP: &[KeymapEntry] = &[
     },
 ];
 
-#[derive(Debug, Clone, Default)]
-struct BodyLineCache {
-    selected_key: Option<String>,
-    body: String,
-    lines: Vec<(LineKind, String)>,
+const RANGE_KEYMAP: &[KeymapEntry] = &[
+    KeymapEntry {
+        mode: Mode::RangeSelect,
+        key: "j/k",
+        desc: "extend",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::RangeSelect,
+        key: "a",
+        desc: "all visible",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::RangeSelect,
+        key: "y",
+        desc: "copy rows",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::RangeSelect,
+        key: "v/Esc",
+        desc: "done",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::RangeSelect,
+        key: "q",
+        desc: "quit",
+        footer: true,
+        task_only: false,
+    },
+];
+
+const READER_KEYMAP: &[KeymapEntry] = &[
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "j/k",
+        desc: "scroll",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "d/u",
+        desc: "half page",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "PageUp/Dn",
+        desc: "page",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "g/G",
+        desc: "top/bottom",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "r",
+        desc: "refresh",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "q/Esc",
+        desc: "close",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "mouse drag",
+        desc: "terminal native selection",
+        footer: false,
+        task_only: false,
+    },
+];
+
+const FILTER_KEYMAP: &[KeymapEntry] = &[
+    KeymapEntry {
+        mode: Mode::FilterInput,
+        key: "type",
+        desc: "filter",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::FilterInput,
+        key: "Enter",
+        desc: "apply",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::FilterInput,
+        key: "Esc",
+        desc: "clear",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::FilterInput,
+        key: "Backspace",
+        desc: "delete",
+        footer: true,
+        task_only: false,
+    },
+];
+
+const MENU_KEYMAP: &[KeymapEntry] = &[
+    KeymapEntry {
+        mode: Mode::Menu,
+        key: "j/k",
+        desc: "move",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Menu,
+        key: "Enter",
+        desc: "run",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Menu,
+        key: "shortcut",
+        desc: "run item",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Menu,
+        key: "Esc",
+        desc: "back",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Menu,
+        key: "q",
+        desc: "quit",
+        footer: true,
+        task_only: false,
+    },
+];
+
+const MODE_KEYMAP: &[&[KeymapEntry]] = &[
+    LIST_KEYMAP,
+    RANGE_KEYMAP,
+    READER_KEYMAP,
+    FILTER_KEYMAP,
+    MENU_KEYMAP,
+];
+
+fn mode_keymap(mode: Mode) -> &'static [KeymapEntry] {
+    match mode {
+        Mode::List => LIST_KEYMAP,
+        Mode::RangeSelect => RANGE_KEYMAP,
+        Mode::Reader => READER_KEYMAP,
+        Mode::FilterInput => FILTER_KEYMAP,
+        Mode::Menu => MENU_KEYMAP,
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -391,7 +651,7 @@ struct BodyWrapCache {
     selected_key: Option<String>,
     body: String,
     width: usize,
-    lines: Vec<(LineKind, String)>,
+    lines: Vec<ratatui::text::Line<'static>>,
 }
 
 impl AppState {
@@ -433,17 +693,21 @@ impl AppState {
             source_view: SourceView::All,
             origin_only: OriginOnlyState::NotFetched,
             selected_index: 0,
+            selected_keys: HashSet::new(),
+            range_anchor_key: None,
+            range_prior_selected_keys: HashSet::new(),
             menu_selected_index: 0,
             mode: Mode::List,
             status_line: String::new(),
+            notice: None,
             copy,
             popup: None,
             output: OutputPanel::default(),
             running: None,
             columns,
-            body_view_open: false,
-            body_scroll: 0,
-            body_cache: RefCell::new(BodyLineCache::default()),
+            reader_scroll: 0,
+            reader_viewport_height: Cell::new(10),
+            table_mouse_layout: Cell::new(None),
             body_wrap_cache: RefCell::new(BodyWrapCache::default()),
             #[cfg(test)]
             body_wrap_recompute_count: Cell::new(0),
@@ -456,19 +720,64 @@ impl AppState {
     }
 
     pub(crate) fn handle(&mut self, key: KeyInput) -> Outcome {
+        self.notice = None;
+
         if self.help_open {
             return self.handle_help_key(key);
         }
 
-        if self.body_view_open {
-            return self.handle_body_view_key(key);
-        }
-
         match self.mode {
             Mode::List => self.handle_list_key(key),
+            Mode::RangeSelect => self.handle_range_key(key),
+            Mode::Reader => self.handle_reader_key(key),
             Mode::FilterInput => self.handle_filter_key(key),
             Mode::Menu => self.handle_menu_key(key),
         }
+    }
+
+    pub(crate) fn handle_mouse(&mut self, input: MouseInput) -> Outcome {
+        if self.has_popup()
+            || self.help_open
+            || matches!(self.mode, Mode::FilterInput | Mode::Menu | Mode::Reader)
+        {
+            return Outcome::Continue;
+        }
+
+        self.notice = None;
+        match input {
+            MouseInput::Down { visible_index } => {
+                if !self.select_visible_index(visible_index) {
+                    return Outcome::Continue;
+                }
+                self.range_prior_selected_keys = self.selected_keys.clone();
+                self.range_anchor_key = self.selected_key_owned();
+            }
+            MouseInput::Drag { visible_index } => {
+                if self.range_anchor_key.is_none() || !self.select_visible_index(visible_index) {
+                    return Outcome::Continue;
+                }
+                self.mode = Mode::RangeSelect;
+                self.select_range_to_cursor();
+                self.status_line = self.footer_keymap_summary();
+            }
+            MouseInput::Up { dragged } => {
+                if dragged && self.mode == Mode::RangeSelect {
+                    self.exit_range_select();
+                } else if self.mode != Mode::RangeSelect {
+                    self.range_anchor_key = None;
+                    self.range_prior_selected_keys.clear();
+                }
+            }
+            MouseInput::DoubleClick { visible_index } => {
+                if !self.select_visible_index(visible_index) {
+                    return Outcome::Continue;
+                }
+                self.range_anchor_key = None;
+                self.range_prior_selected_keys.clear();
+                self.open_reader();
+            }
+        }
+        Outcome::Continue
     }
 
     pub(crate) fn mode(&self) -> Mode {
@@ -477,6 +786,10 @@ impl AppState {
 
     pub(crate) fn status_line(&self) -> &str {
         &self.status_line
+    }
+
+    pub(crate) fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
     }
 
     pub(crate) fn open_popup(&mut self, spec: PopupSpec) {
@@ -567,36 +880,31 @@ impl AppState {
         self.output.scroll
     }
 
-    pub(crate) fn body_view_open(&self) -> bool {
-        self.body_view_open
+    pub(crate) fn reader_open(&self) -> bool {
+        self.mode == Mode::Reader
     }
 
-    pub(crate) fn body_scroll(&self) -> usize {
-        self.body_scroll
+    pub(crate) fn reader_scroll(&self) -> usize {
+        self.reader_scroll
     }
 
-    pub(crate) fn body_lines(&self) -> Vec<(LineKind, String)> {
-        let Some((selected_key, body)) = self
-            .selected_row()
-            .map(|row| (row.key.clone(), row.body.clone()))
-        else {
-            let mut cache = self.body_cache.borrow_mut();
-            cache.selected_key = None;
-            cache.body.clear();
-            cache.lines.clear();
-            return Vec::new();
-        };
-
-        let mut cache = self.body_cache.borrow_mut();
-        if cache.selected_key.as_deref() != Some(selected_key.as_str()) || cache.body != body {
-            cache.selected_key = Some(selected_key);
-            cache.body = body;
-            cache.lines = body_markup::markup_body(&sanitize_body_for_markup(&cache.body));
-        }
-        cache.lines.clone()
+    pub(crate) fn set_reader_viewport_height(&self, height: usize) {
+        self.reader_viewport_height.set(height.max(1));
     }
 
-    pub(crate) fn wrapped_body_lines(&self, width: usize) -> Vec<(LineKind, String)> {
+    pub(crate) fn set_table_mouse_layout(&self, layout: Option<TableMouseLayout>) {
+        self.table_mouse_layout.set(layout);
+    }
+
+    pub(crate) fn table_mouse_layout(&self) -> Option<TableMouseLayout> {
+        self.table_mouse_layout.get()
+    }
+
+    fn reader_viewport_height(&self) -> usize {
+        self.reader_viewport_height.get().max(1)
+    }
+
+    pub(crate) fn wrapped_body_lines(&self, width: usize) -> Vec<ratatui::text::Line<'static>> {
         let Some((selected_key, body)) = self
             .selected_row()
             .map(|row| (row.key.clone(), row.body.clone()))
@@ -607,7 +915,6 @@ impl AppState {
             cache.lines.clear();
             return Vec::new();
         };
-        let body_lines = self.body_lines();
 
         let mut cache = self.body_wrap_cache.borrow_mut();
         if cache.selected_key.as_deref() != Some(selected_key.as_str())
@@ -617,10 +924,7 @@ impl AppState {
             cache.selected_key = Some(selected_key);
             cache.body = body;
             cache.width = width;
-            cache.lines = body_lines
-                .iter()
-                .flat_map(|(kind, text)| wrapped_body_line(kind, text, width))
-                .collect();
+            cache.lines = render_reader_lines(&cache.body, width);
             #[cfg(test)]
             self.body_wrap_recompute_count
                 .set(self.body_wrap_recompute_count.get() + 1);
@@ -683,6 +987,7 @@ impl AppState {
         self.running = None;
         self.popup = None;
         self.status_line = status;
+        self.notice = None;
     }
 
     pub(crate) fn filter(&self) -> &str {
@@ -724,6 +1029,8 @@ impl AppState {
         self.reset_detail_scroll();
     }
 
+    // 헤더의 빈-상태 분기(empty_origin_summary)는 인벤토리가 진짜 비었을 때만.
+    // 필터/뷰로 0행이 된 경우는 총계 "0"을 보여줘야 표와 일관된다 (#198 리뷰).
     pub(crate) fn is_empty(&self) -> bool {
         match (&self.source_view, &self.origin_only) {
             (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows.is_empty(),
@@ -732,12 +1039,9 @@ impl AppState {
         }
     }
 
+    // 헤더 총계도 status 분포와 같은 visible 행 집합을 센다 (표현 일치).
     pub(crate) fn row_count(&self) -> usize {
-        match (&self.source_view, &self.origin_only) {
-            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => rows.len(),
-            (SourceView::OriginOnly, _) => 0,
-            _ => self.rows.len(),
-        }
+        self.visible_rows().len()
     }
 
     pub(crate) fn diagnostics(&self) -> &[String] {
@@ -802,6 +1106,22 @@ impl AppState {
     }
 
     #[cfg(test)]
+    pub(crate) fn selected_key_count(&self) -> usize {
+        self.selected_keys.len()
+    }
+
+    pub(crate) fn is_row_marked(&self, key: &str) -> bool {
+        self.selected_keys.contains(key)
+    }
+
+    pub(crate) fn selected_row_mtime(&self) -> Option<std::time::SystemTime> {
+        let path = self.selected_row()?.path.as_ref()?;
+        std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    }
+
+    #[cfg(test)]
     pub(crate) fn visible_keys(&self) -> Vec<&str> {
         self.visible_rows()
             .iter()
@@ -849,12 +1169,12 @@ impl AppState {
             .is_some_and(|item| !item.is_enabled())
     }
 
-    /// Show a status-line dispatch result: close the action menu and put the
-    /// one-line message in the status line. No row refresh — status-line
-    /// actions do not change on-disk state.
+    /// Show a one-line dispatch result without replacing the footer keymap.
+    /// No row refresh — dispatch message actions do not change on-disk state.
     pub(crate) fn show_dispatch_message(&mut self, message: String) {
         self.mode = Mode::List;
-        self.status_line = message;
+        self.status_line = self.list_status_line();
+        self.notice = Some(message);
     }
 
     pub(crate) fn replace_rows_preserving_selection(
@@ -865,8 +1185,22 @@ impl AppState {
     ) {
         self.rows = rows;
         self.diagnostics = diagnostics;
-        self.invalidate_origin_only();
-        self.mode = Mode::List;
+        if !self.origin_fetching() {
+            self.invalidate_origin_only();
+        }
+        self.retain_existing_selected_keys();
+        if self
+            .range_anchor_key
+            .as_ref()
+            .is_some_and(|key| !self.selected_keys.contains(key))
+        {
+            self.mode = Mode::List;
+            self.range_anchor_key = None;
+            self.range_prior_selected_keys.clear();
+        }
+        if self.mode != Mode::RangeSelect {
+            self.mode = Mode::List;
+        }
         self.status_line = self.list_status_line();
         self.selected_index = self
             .visible_rows()
@@ -876,7 +1210,7 @@ impl AppState {
         self.clamp_selection();
         self.reset_detail_scroll();
         self.select_first_enabled_menu_item();
-        self.clamp_body_scroll();
+        self.clamp_reader_scroll();
     }
 
     pub(crate) fn invalidate_origin_only(&mut self) {
@@ -889,6 +1223,10 @@ impl AppState {
 
     pub(crate) fn origin_fetching(&self) -> bool {
         matches!(self.origin_only, OriginOnlyState::Fetching { .. })
+    }
+
+    pub(crate) fn refresh_fetches_origin_issues(&self) -> bool {
+        self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly
     }
 
     pub(crate) fn begin_origin_fetch(&mut self) {
@@ -914,26 +1252,19 @@ impl AppState {
         self.clamp_selection();
         self.reset_detail_scroll();
         self.select_first_enabled_menu_item();
-        self.clamp_body_scroll();
+        self.clamp_reader_scroll();
+        self.notice = None;
         if self.mode == Mode::List {
             self.status_line = self.list_status_line();
         }
     }
 
     pub(crate) fn origin_status_counts(&self) -> Vec<(&str, usize)> {
+        // 헤더 status 분포는 표(visible_rows)와 같은 행 집합을 세어
+        // 활성 소스 뷰·텍스트 필터와 항상 일치하게 유지한다.
         let mut counts = Vec::<(&str, usize)>::new();
-        match (&self.source_view, &self.origin_only) {
-            (SourceView::OriginOnly, OriginOnlyState::Loaded { rows, .. }) => {
-                for row in rows {
-                    push_origin_status_count(&mut counts, row);
-                }
-            }
-            (SourceView::OriginOnly, _) => {}
-            _ => {
-                for row in &self.rows {
-                    push_origin_status_count(&mut counts, row);
-                }
-            }
+        for row in self.visible_rows() {
+            push_origin_status_count(&mut counts, row);
         }
         counts
     }
@@ -958,7 +1289,7 @@ impl AppState {
     }
 
     fn keymap_entries(&self) -> Vec<KeymapEntry> {
-        LIST_KEYMAP
+        mode_keymap(self.mode)
             .iter()
             .copied()
             .filter(|entry| !entry.task_only || self.copy.source_view_enabled)
@@ -966,9 +1297,23 @@ impl AppState {
     }
 
     fn footer_keymap_summary(&self) -> String {
-        self.keymap_entries()
+        let entries = self.keymap_entries();
+        let footer_entries = if self.mode == Mode::List {
+            let priority = entries
+                .iter()
+                .filter(|entry| entry.footer)
+                .copied()
+                .collect::<Vec<_>>();
+            if priority.is_empty() {
+                entries
+            } else {
+                priority
+            }
+        } else {
+            entries
+        };
+        footer_entries
             .into_iter()
-            .filter(|entry| entry.footer)
             .map(|entry| format!("{} {}", entry.key, entry.desc))
             .collect::<Vec<_>>()
             .join("  ")
@@ -990,10 +1335,13 @@ impl AppState {
         self.help_open
     }
 
-    pub(crate) fn help_keymap(&self) -> Vec<(&'static str, &'static str)> {
-        self.keymap_entries()
-            .into_iter()
-            .map(|entry| (entry.key, entry.desc))
+    pub(crate) fn help_keymap(&self) -> Vec<(Mode, &'static str, &'static str)> {
+        MODE_KEYMAP
+            .iter()
+            .flat_map(|entries| entries.iter())
+            .copied()
+            .filter(|entry| !entry.task_only || self.copy.source_view_enabled)
+            .map(|entry| (entry.mode, entry.key, entry.desc))
             .collect()
     }
 
@@ -1003,17 +1351,20 @@ impl AppState {
             KeyInput::Up | KeyInput::Char('k') => self.move_up(),
             KeyInput::Char('g') => self.move_to_first(),
             KeyInput::Char('G') => self.move_to_last(),
-            KeyInput::Char('v') => self.open_body_view(),
+            KeyInput::Enter => self.open_reader(),
+            KeyInput::Char(' ') => self.toggle_current_selection(),
+            KeyInput::Char('a') => self.toggle_all_visible_selection(),
+            KeyInput::Char('v') => self.enter_range_select(),
+            KeyInput::Char('y') => {
+                if let Some(outcome) = self.copy_rows_outcome() {
+                    return outcome;
+                }
+            }
             KeyInput::Char('s') => self.toggle_sidebar(),
             KeyInput::PageDown => self.scroll_sidebar_down(10),
             KeyInput::PageUp => self.scroll_sidebar_up(10),
             KeyInput::Char('?') => self.toggle_help(),
-            KeyInput::Char('r')
-                if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly =>
-            {
-                self.begin_origin_fetch();
-                return Outcome::FetchOriginIssues;
-            }
+            KeyInput::Char('r') => return Outcome::Refresh,
             KeyInput::Char('i')
                 if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly =>
             {
@@ -1026,9 +1377,9 @@ impl AppState {
             }
             KeyInput::Char('/') => {
                 self.mode = Mode::FilterInput;
-                self.status_line = "type to filter; Esc clears filter".into();
+                self.status_line = self.footer_keymap_summary();
             }
-            KeyInput::Enter => {
+            KeyInput::Char('m') => {
                 self.open_menu();
             }
             KeyInput::Char('q') => return Outcome::Quit,
@@ -1043,7 +1394,36 @@ impl AppState {
                     return Outcome::Dispatch { key, action };
                 }
             }
-            KeyInput::Esc | KeyInput::Backspace => {}
+            KeyInput::Esc => self.clear_selection(),
+            KeyInput::Backspace | KeyInput::CtrlChar(_) => {}
+        }
+        Outcome::Continue
+    }
+
+    fn handle_range_key(&mut self, key: KeyInput) -> Outcome {
+        match key {
+            KeyInput::Down | KeyInput::Char('j') => {
+                self.move_down();
+                self.select_range_to_cursor();
+            }
+            KeyInput::Up | KeyInput::Char('k') => {
+                self.move_up();
+                self.select_range_to_cursor();
+            }
+            KeyInput::Char('a') => self.toggle_all_visible_selection(),
+            KeyInput::Char('y') => {
+                if let Some(outcome) = self.copy_rows_outcome() {
+                    return outcome;
+                }
+            }
+            KeyInput::Esc | KeyInput::Char('v') => self.exit_range_select(),
+            KeyInput::Char('q') => return Outcome::Quit,
+            KeyInput::PageDown
+            | KeyInput::PageUp
+            | KeyInput::Enter
+            | KeyInput::Backspace
+            | KeyInput::Char(_)
+            | KeyInput::CtrlChar(_) => {}
         }
         Outcome::Continue
     }
@@ -1061,7 +1441,8 @@ impl AppState {
             | KeyInput::PageDown
             | KeyInput::Enter
             | KeyInput::Backspace
-            | KeyInput::Char(_) => {}
+            | KeyInput::Char(_)
+            | KeyInput::CtrlChar(_) => {}
         }
         Outcome::Continue
     }
@@ -1092,6 +1473,7 @@ impl AppState {
                 self.clamp_selection_after_visible_rows_changed(before_key);
             }
             KeyInput::PageUp | KeyInput::PageDown => {}
+            KeyInput::CtrlChar(_) => {}
         }
         Outcome::Continue
     }
@@ -1106,31 +1488,67 @@ impl AppState {
             KeyInput::Up | KeyInput::Char('k') => self.move_menu_up(),
             KeyInput::Enter => return self.menu_enter(),
             KeyInput::Char('q') => return Outcome::Quit,
-            KeyInput::PageUp | KeyInput::PageDown | KeyInput::Char(_) | KeyInput::Backspace => {}
+            KeyInput::Char(ch) => return self.menu_shortcut(ch),
+            KeyInput::PageUp | KeyInput::PageDown | KeyInput::Backspace | KeyInput::CtrlChar(_) => {
+            }
         }
         Outcome::Continue
     }
 
-    fn handle_body_view_key(&mut self, key: KeyInput) -> Outcome {
+    fn handle_reader_key(&mut self, key: KeyInput) -> Outcome {
         match key {
-            KeyInput::Esc | KeyInput::Char('v') => self.close_body_view(),
-            KeyInput::Down | KeyInput::Char('j') => self.scroll_body_down(1),
-            KeyInput::Up | KeyInput::Char('k') => self.scroll_body_up(1),
-            KeyInput::PageDown => self.scroll_body_down(10),
-            KeyInput::PageUp => self.scroll_body_up(10),
-            KeyInput::Enter | KeyInput::Backspace | KeyInput::Char(_) => {}
+            KeyInput::Esc | KeyInput::Char('q') => self.close_reader(),
+            KeyInput::Char('r') => {
+                self.refresh_reader_body(false);
+            }
+            KeyInput::Down | KeyInput::Char('j') => self.scroll_reader_down(1),
+            KeyInput::Up | KeyInput::Char('k') => self.scroll_reader_up(1),
+            KeyInput::PageDown => self.scroll_reader_down(self.reader_viewport_height()),
+            KeyInput::PageUp => self.scroll_reader_up(self.reader_viewport_height()),
+            KeyInput::Char('d') | KeyInput::CtrlChar('d') => {
+                self.scroll_reader_down(self.reader_viewport_height() / 2)
+            }
+            KeyInput::Char('u') | KeyInput::CtrlChar('u') => {
+                self.scroll_reader_up(self.reader_viewport_height() / 2)
+            }
+            KeyInput::Char('g') => self.reader_scroll = 0,
+            KeyInput::Char('G') => self.reader_scroll = usize::MAX,
+            KeyInput::Enter | KeyInput::Backspace | KeyInput::Char(_) | KeyInput::CtrlChar(_) => {}
         }
         Outcome::Continue
     }
 
-    fn open_body_view(&mut self) {
-        self.body_view_open = true;
-        self.body_scroll = 0;
-        self.status_line = "j/k scroll  PgUp/PgDn page  v/Esc close".into();
+    fn open_reader(&mut self) {
+        if self.selected_row().is_some() {
+            self.mode = Mode::Reader;
+            self.reader_scroll = 0;
+            self.status_line = self.footer_keymap_summary();
+        } else {
+            self.status_line = self.copy.no_selection_status.into();
+        }
     }
 
-    fn close_body_view(&mut self) {
-        self.body_view_open = false;
+    fn close_reader(&mut self) {
+        self.mode = Mode::List;
+        self.status_line = self.list_status_line();
+    }
+
+    fn enter_range_select(&mut self) {
+        let Some(key) = self.selected_row().map(|row| row.key.clone()) else {
+            self.status_line = self.copy.no_selection_status.into();
+            return;
+        };
+        self.range_prior_selected_keys = self.selected_keys.clone();
+        self.range_anchor_key = Some(key);
+        self.mode = Mode::RangeSelect;
+        self.select_range_to_cursor();
+        self.status_line = self.footer_keymap_summary();
+    }
+
+    fn exit_range_select(&mut self) {
+        self.range_anchor_key = None;
+        self.range_prior_selected_keys.clear();
+        self.mode = Mode::List;
         self.status_line = self.list_status_line();
     }
 
@@ -1173,24 +1591,30 @@ impl AppState {
         }
     }
 
-    fn scroll_body_down(&mut self, amount: usize) {
-        if !self.body_lines().is_empty() {
-            self.body_scroll = self.body_scroll.saturating_add(amount);
+    fn scroll_reader_down(&mut self, amount: usize) {
+        if self
+            .selected_row()
+            .is_some_and(|row| !row.body.trim().is_empty())
+        {
+            self.reader_scroll = self.reader_scroll.saturating_add(amount.max(1));
         }
     }
 
-    fn scroll_body_up(&mut self, amount: usize) {
-        self.body_scroll = self.body_scroll.saturating_sub(amount);
+    fn scroll_reader_up(&mut self, amount: usize) {
+        self.reader_scroll = self.reader_scroll.saturating_sub(amount.max(1));
     }
 
-    fn clamp_body_scroll(&mut self) {
-        if self.body_lines().is_empty() {
-            self.body_scroll = 0;
+    fn clamp_reader_scroll(&mut self) {
+        if self
+            .selected_row()
+            .is_none_or(|row| row.body.trim().is_empty())
+        {
+            self.reader_scroll = 0;
         }
     }
 
-    pub(crate) fn clamp_body_scroll_to(&mut self, max_scroll: usize) {
-        self.body_scroll = self.body_scroll.min(max_scroll);
+    pub(crate) fn clamp_reader_scroll_to(&mut self, max_scroll: usize) {
+        self.reader_scroll = self.reader_scroll.min(max_scroll);
     }
 
     fn toggle_sidebar(&mut self) {
@@ -1247,8 +1671,138 @@ impl AppState {
         }
     }
 
+    fn select_visible_index(&mut self, visible_index: usize) -> bool {
+        if visible_index >= self.visible_rows().len() {
+            return false;
+        }
+        self.set_selected_index(visible_index);
+        true
+    }
+
     fn reset_detail_scroll(&mut self) {
         self.sidebar_scroll = 0;
+    }
+
+    fn toggle_current_selection(&mut self) {
+        let Some(key) = self.selected_row().map(|row| row.key.clone()) else {
+            return;
+        };
+        if !self.selected_keys.remove(&key) {
+            self.selected_keys.insert(key);
+        }
+    }
+
+    fn toggle_all_visible_selection(&mut self) {
+        let keys = self
+            .visible_rows()
+            .into_iter()
+            .map(|row| row.key.clone())
+            .collect::<Vec<_>>();
+        if keys.is_empty() {
+            return;
+        }
+        if keys.iter().all(|key| self.selected_keys.contains(key)) {
+            for key in keys {
+                self.selected_keys.remove(&key);
+            }
+        } else {
+            self.selected_keys.extend(keys);
+        }
+        if self.mode == Mode::RangeSelect {
+            self.range_prior_selected_keys = self.selected_keys.clone();
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.selected_keys.clear();
+        self.range_anchor_key = None;
+        self.range_prior_selected_keys.clear();
+    }
+
+    fn select_range_to_cursor(&mut self) {
+        let Some(anchor_key) = self.range_anchor_key.as_deref() else {
+            return;
+        };
+        let Some(cursor_key) = self.selected_row().map(|row| row.key.as_str()) else {
+            return;
+        };
+        let visible_rows = self.visible_rows();
+        let Some(anchor_index) = visible_rows.iter().position(|row| row.key == anchor_key) else {
+            self.exit_range_select();
+            return;
+        };
+        let Some(cursor_index) = visible_rows.iter().position(|row| row.key == cursor_key) else {
+            return;
+        };
+        let start = anchor_index.min(cursor_index);
+        let end = anchor_index.max(cursor_index);
+        let range_keys = visible_rows[start..=end]
+            .iter()
+            .map(|row| row.key.clone())
+            .collect::<Vec<_>>();
+        self.selected_keys = self.range_prior_selected_keys.clone();
+        self.selected_keys.extend(range_keys);
+    }
+
+    fn copy_rows_outcome(&self) -> Option<Outcome> {
+        let rows = self.copy_target_rows();
+        if rows.is_empty() {
+            return None;
+        }
+        let text = rows
+            .iter()
+            .map(|row| self.copy_row_text(row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(Outcome::CopyRows {
+            count: rows.len(),
+            text,
+        })
+    }
+
+    fn copy_target_rows(&self) -> Vec<&BrowserRow> {
+        let visible_rows = self.visible_rows();
+        let selected_visible = visible_rows
+            .iter()
+            .copied()
+            .filter(|row| self.selected_keys.contains(&row.key))
+            .collect::<Vec<_>>();
+        if selected_visible.is_empty() {
+            self.selected_row().into_iter().collect()
+        } else {
+            selected_visible
+        }
+    }
+
+    fn copy_row_text(&self, row: &BrowserRow) -> String {
+        self.columns
+            .iter()
+            .map(|column| copy_cell_text(row, column.cell))
+            .collect::<Vec<_>>()
+            .join("\t")
+    }
+
+    fn retain_existing_selected_keys(&mut self) {
+        let available_keys = self
+            .all_rows_for_selection()
+            .into_iter()
+            .map(|row| row.key.clone())
+            .collect::<HashSet<_>>();
+        self.selected_keys
+            .retain(|key| available_keys.contains(key));
+        self.range_prior_selected_keys
+            .retain(|key| available_keys.contains(key));
+    }
+
+    fn all_rows_for_selection(&self) -> Vec<&BrowserRow> {
+        let mut rows = self.rows.iter().collect::<Vec<_>>();
+        if let OriginOnlyState::Loaded {
+            rows: origin_rows, ..
+        } = &self.origin_only
+        {
+            rows.extend(origin_rows.iter());
+        }
+        rows
     }
 
     fn selected_key_owned(&self) -> Option<String> {
@@ -1333,12 +1887,70 @@ impl AppState {
         Outcome::Continue
     }
 
+    fn menu_shortcut(&self, ch: char) -> Outcome {
+        let Some(row) = self.selected_row() else {
+            return Outcome::Continue;
+        };
+        let shortcut = ch.to_string();
+        row.menu
+            .action_for_shortcut(&shortcut)
+            .map(|action| Outcome::Dispatch {
+                key: row.key.clone(),
+                action,
+            })
+            .unwrap_or(Outcome::Continue)
+    }
+
     fn shortcut_dispatch(&self, ch: char) -> Option<(String, OriginAction)> {
         let row = self.selected_row()?;
         let shortcut = ch.to_string();
         row.menu
             .action_for_shortcut(&shortcut)
             .map(|action| (row.key.clone(), action))
+    }
+
+    pub(crate) fn refresh_reader_body(&mut self, automatic: bool) -> bool {
+        let Some(key) = self.selected_row().map(|row| row.key.clone()) else {
+            return false;
+        };
+        let Some(path) = self.selected_row().and_then(|row| row.path.clone()) else {
+            if !automatic {
+                self.notice = Some("로컬 파일 없음 — i로 import 후 다시 시도".into());
+            }
+            return false;
+        };
+        match read_body_from_path(&path) {
+            Ok(body) => {
+                if let Some(row) = self.row_mut_by_key(&key) {
+                    row.body = body;
+                }
+                self.invalidate_body_wrap_cache();
+                self.clamp_reader_scroll();
+                true
+            }
+            Err(err) => {
+                if !automatic {
+                    self.notice = Some(format!("본문 새로고침 실패: {err:#}"));
+                }
+                false
+            }
+        }
+    }
+
+    fn row_mut_by_key(&mut self, key: &str) -> Option<&mut BrowserRow> {
+        match &mut self.origin_only {
+            OriginOnlyState::Loaded { rows, .. } if self.source_view == SourceView::OriginOnly => {
+                rows.iter_mut().find(|row| row.key == key)
+            }
+            _ => self.rows.iter_mut().find(|row| row.key == key),
+        }
+    }
+
+    fn invalidate_body_wrap_cache(&self) {
+        let mut cache = self.body_wrap_cache.borrow_mut();
+        cache.selected_key = None;
+        cache.body.clear();
+        cache.lines.clear();
     }
 }
 
@@ -1359,7 +1971,8 @@ fn handle_confirm_popup_key(selected: &mut bool, key: KeyInput) -> Option<PopupO
         | KeyInput::PageUp
         | KeyInput::PageDown
         | KeyInput::Backspace
-        | KeyInput::Char(_) => None,
+        | KeyInput::Char(_)
+        | KeyInput::CtrlChar(_) => None,
     }
 }
 
@@ -1396,7 +2009,11 @@ fn handle_select_popup_key(
             }
             None
         }
-        KeyInput::PageUp | KeyInput::PageDown | KeyInput::Backspace | KeyInput::Char(_) => None,
+        KeyInput::PageUp
+        | KeyInput::PageDown
+        | KeyInput::Backspace
+        | KeyInput::Char(_)
+        | KeyInput::CtrlChar(_) => None,
     }
 }
 
@@ -1412,7 +2029,11 @@ fn handle_input_popup_key(buffer: &mut String, key: KeyInput) -> Option<PopupOut
             buffer.push(ch);
             None
         }
-        KeyInput::Up | KeyInput::Down | KeyInput::PageUp | KeyInput::PageDown => None,
+        KeyInput::Up
+        | KeyInput::Down
+        | KeyInput::PageUp
+        | KeyInput::PageDown
+        | KeyInput::CtrlChar(_) => None,
     }
 }
 
@@ -1423,49 +2044,31 @@ fn progress_label_for(verb: &str) -> String {
     }
 }
 
-fn sanitize_body_for_markup(body: &str) -> String {
-    strip_terminal_sequences(body).replace('\t', " ")
+fn read_body_from_path(path: &std::path::Path) -> anyhow::Result<String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    if let Ok(document) = toml::from_str::<TaskDocument>(&content) {
+        return Ok(document.body);
+    }
+    let workflow: WorkflowMetadata = crate::workflow::read(path)?;
+    Ok(workflow.body.unwrap_or_default())
 }
 
-fn wrapped_body_line(kind: &LineKind, text: &str, width: usize) -> Vec<(LineKind, String)> {
-    wrap_body_text(&body_display_text(kind, text), width)
-        .into_iter()
-        .map(|line| (kind.clone(), line))
-        .collect()
-}
-
-fn body_display_text(kind: &LineKind, text: &str) -> String {
-    match kind {
-        LineKind::Checkbox(checked) => {
-            let marker = if *checked { "☑ " } else { "☐ " };
-            format!("{marker}{text}")
-        }
-        LineKind::Heading | LineKind::Plain | LineKind::Code => text.to_string(),
+fn copy_cell_text(row: &BrowserRow, cell: BrowserCell) -> String {
+    match cell {
+        BrowserCell::Status | BrowserCell::OriginStatus => row.status.clone(),
+        BrowserCell::RunStatus => row.run_status.clone(),
+        BrowserCell::OriginLabel => row.origin_label.clone(),
+        BrowserCell::Title => row.title.clone(),
+        BrowserCell::Key => row.key.clone(),
+        BrowserCell::NextAction => row.next_action.clone(),
+        BrowserCell::Duration => row.duration.clone().unwrap_or_else(|| "-".into()),
+        BrowserCell::Size => row.size.clone().unwrap_or_else(|| "-".into()),
+        BrowserCell::Branch => row.branch.clone().unwrap_or_else(|| "not prepared".into()),
+        BrowserCell::Source => row.source.clone(),
+        BrowserCell::Task => format!("{}  task {}", row.title, row.key),
     }
-}
-
-fn wrap_body_text(text: &str, width: usize) -> Vec<String> {
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0;
-
-    for ch in text.chars() {
-        let ch_width = measure_text_width(&ch.to_string());
-        if current_width > 0 && current_width + ch_width > width {
-            lines.push(current);
-            current = String::new();
-            current_width = 0;
-        }
-        current.push(ch);
-        current_width += ch_width;
-    }
-
-    lines.push(current);
-    lines
 }
 
 fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
@@ -1556,6 +2159,7 @@ mod tests {
             size: None,
             branch: Some(format!("feature/{key}")),
             source: "provider-origin".into(),
+            path: None,
             body: String::new(),
             preview_lines: vec![format!("Origin      Linear WT-142")],
             menu,
@@ -1588,6 +2192,54 @@ mod tests {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body = body.into();
         AppState::new(vec![browser_row])
+    }
+
+    fn app_with_body_and_path(body: &str, path: Option<PathBuf>) -> AppState {
+        let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
+        browser_row.body = body.into();
+        browser_row.path = path;
+        AppState::new(vec![browser_row])
+    }
+
+    fn list_mode_bound_char_keys() -> std::collections::HashSet<char> {
+        let keymap_text = LIST_KEYMAP
+            .iter()
+            .map(|entry| entry.key)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let bound = [
+            'j', 'k', 'g', 'G', 'v', 'a', 's', '?', 'r', 'i', '/', 'm', 'q', 'h', 'l', 'y',
+        ];
+        for ch in bound {
+            assert!(
+                keymap_text.contains(ch),
+                "hard-bound List key '{ch}' missing from keymap"
+            );
+        }
+        assert!(keymap_text.contains("Space"));
+        bound.into_iter().collect()
+    }
+
+    fn all_menu_shortcuts() -> Vec<String> {
+        [
+            OriginActionMenu::for_origin_task(
+                "origin-sync-tui",
+                "Origin sync TUI",
+                OriginLabel::new("linear", "WT-142"),
+            ),
+            OriginActionMenu::for_local_task("scratch-clean", "Scratch cleanup"),
+            OriginActionMenu::for_origin_issue_placeholder("Provider issue"),
+            OriginActionMenu::for_workflow(
+                "workflow",
+                "Workflow",
+                Some(OriginLabel::new("linear", "WT-143")),
+                Vec::new(),
+            ),
+            OriginActionMenu::for_workflow("workflow", "Workflow", None, Vec::new()),
+        ]
+        .into_iter()
+        .flat_map(|menu| menu.all_shortcuts().map(str::to_string).collect::<Vec<_>>())
+        .collect()
     }
 
     #[test]
@@ -1687,6 +2339,22 @@ mod tests {
     }
 
     #[test]
+    fn finishing_action_clears_stale_notice() {
+        let mut app = app();
+        app.begin_action("origin-sync-tui", "pull");
+        app.show_dispatch_message("action in progress - wait for it to finish".into());
+        assert_eq!(
+            app.notice(),
+            Some("action in progress - wait for it to finish")
+        );
+
+        app.finish_action("pulled origin-sync-tui".into());
+
+        assert_eq!(app.notice(), None);
+        assert_eq!(app.status_line(), "pulled origin-sync-tui");
+    }
+
+    #[test]
     fn archive_running_action_uses_archiving_label() {
         let mut app = app();
 
@@ -1701,34 +2369,412 @@ mod tests {
     }
 
     #[test]
-    fn v_key_toggles_body_view_and_esc_closes() {
+    fn enter_opens_reader_and_esc_returns_with_selection_preserved() {
         let mut app = app();
-        assert!(!app.body_view_open());
-        app.handle(KeyInput::Char('v'));
-        assert!(app.body_view_open());
+        app.handle(KeyInput::Down);
+        let before = app.selected_row().map(|row| row.key.clone());
+        app.handle(KeyInput::Enter);
+        assert_eq!(app.mode(), Mode::Reader);
         app.handle(KeyInput::Esc);
-        assert!(!app.body_view_open());
+        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.selected_row().map(|row| row.key.clone()), before);
     }
 
     #[test]
-    fn body_view_scrolls_and_blocks_dispatch() {
-        let mut app = app_with_body("one\ntwo\nthree\nfour");
+    fn mouse_down_moves_cursor_and_drag_selects_span() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+
+        app.handle_mouse(MouseInput::Down { visible_index: 0 });
+        app.handle_mouse(MouseInput::Drag { visible_index: 2 });
+        app.handle_mouse(MouseInput::Up { dragged: true });
+
+        assert_eq!(app.selected_key(), Some("c"));
+        assert_eq!(app.selected_key_count(), 3);
+        assert_eq!(app.mode(), Mode::List);
+    }
+
+    #[test]
+    fn mouse_drag_reuses_prior_selection_union_span() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+            source_row("d", "local"),
+        ]);
+        app.handle(KeyInput::Char(' '));
+
+        app.handle_mouse(MouseInput::Down { visible_index: 2 });
+        app.handle_mouse(MouseInput::Drag { visible_index: 3 });
+        app.handle_mouse(MouseInput::Up { dragged: true });
+
+        assert!(app.is_row_marked("a"));
+        assert!(!app.is_row_marked("b"));
+        assert!(app.is_row_marked("c"));
+        assert!(app.is_row_marked("d"));
+    }
+
+    #[test]
+    fn double_click_same_row_opens_reader() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+
+        app.handle_mouse(MouseInput::DoubleClick { visible_index: 1 });
+
+        assert_eq!(app.selected_key(), Some("b"));
+        assert_eq!(app.mode(), Mode::Reader);
+    }
+
+    #[test]
+    fn mouse_is_no_op_while_popup_help_or_reader_is_open() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+        app.open_popup(PopupSpec::Confirm {
+            prompt: "Run?".into(),
+            default: false,
+        });
+        app.handle_mouse(MouseInput::Down { visible_index: 1 });
+        assert_eq!(app.selected_key(), Some("a"));
+        app.handle_popup_key(KeyInput::Esc);
+
+        app.handle(KeyInput::Char('?'));
+        app.handle_mouse(MouseInput::Down { visible_index: 1 });
+        assert_eq!(app.selected_key(), Some("a"));
+        app.handle(KeyInput::Char('?'));
+
+        app.handle(KeyInput::Enter);
+        app.handle_mouse(MouseInput::Down { visible_index: 1 });
+        assert_eq!(app.selected_key(), Some("a"));
+        assert_eq!(app.mode(), Mode::Reader);
+    }
+
+    #[test]
+    fn space_toggles_selection_and_esc_clears() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+
+        app.handle(KeyInput::Char(' '));
+        assert_eq!(app.selected_key_count(), 1);
+        app.handle(KeyInput::Down);
+        app.handle(KeyInput::Char(' '));
+        assert_eq!(app.selected_key_count(), 2);
+        app.handle(KeyInput::Esc);
+
+        assert_eq!(app.selected_key_count(), 0);
+    }
+
+    #[test]
+    fn a_toggles_all_visible_and_respects_filter() {
+        let mut app = AppState::new(vec![
+            source_row("alpha", "local"),
+            source_row("beta", "local"),
+        ]);
+        app.handle(KeyInput::Char('/'));
+        for ch in "alpha".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+        app.handle(KeyInput::Enter);
+
+        app.handle(KeyInput::Char('a'));
+        assert_eq!(app.selected_key_count(), 1);
+        app.handle(KeyInput::Char('a'));
+
+        assert_eq!(app.selected_key_count(), 0);
+    }
+
+    #[test]
+    fn selection_survives_row_reload_and_drops_missing_keys() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+        app.handle(KeyInput::Char(' '));
+        app.handle(KeyInput::Down);
+        app.handle(KeyInput::Char(' '));
+
+        app.replace_rows_preserving_selection(vec![source_row("a", "local")], Vec::new(), "a");
+
+        assert_eq!(app.selected_key_count(), 1);
+    }
+
+    #[test]
+    fn v_enters_range_select_and_extends_with_jk() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+
+        app.handle(KeyInput::Char('v'));
+        assert_eq!(app.mode(), Mode::RangeSelect);
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Esc);
+
+        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.selected_key_count(), 3);
+    }
+
+    #[test]
+    fn mouse_up_without_drag_does_not_exit_keyboard_range_select() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+
         app.handle(KeyInput::Char('v'));
         app.handle(KeyInput::Char('j'));
-        assert_eq!(app.body_scroll(), 1);
+        app.handle_mouse(MouseInput::Up { dragged: false });
+
+        assert_eq!(app.mode(), Mode::RangeSelect);
+        assert_eq!(app.selected_key_count(), 2);
+    }
+
+    #[test]
+    fn range_select_recomputes_selection_when_cursor_moves_back() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+
+        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('k'));
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+
+        assert_eq!(count, 2);
+        assert!(text.contains("a"));
+        assert!(text.contains("b"));
+        assert!(!text.contains("c"));
+    }
+
+    #[test]
+    fn range_select_preserves_prior_selection_outside_current_range() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char(' '));
+        app.handle(KeyInput::Char('g'));
+
+        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('k'));
+        app.handle(KeyInput::Esc);
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+
+        assert_eq!(count, 2);
+        assert!(text.contains("a"));
+        assert!(!text.contains("b"));
+        assert!(text.contains("c"));
+    }
+
+    #[test]
+    fn range_select_exits_when_anchor_disappears_on_reload() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+        app.handle(KeyInput::Char('v'));
+
+        app.replace_rows_preserving_selection(vec![source_row("b", "local")], Vec::new(), "b");
+
+        assert_eq!(app.mode(), Mode::List);
+    }
+
+    #[test]
+    fn y_copies_selected_visible_rows_or_current() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+        assert_eq!(count, 1);
+        assert!(text.contains("a"));
+
+        app.handle(KeyInput::Char(' '));
+        app.handle(KeyInput::Down);
+        app.handle(KeyInput::Char(' '));
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+
+        assert_eq!(count, 2);
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.lines().next().unwrap().contains('\t'));
+    }
+
+    #[test]
+    fn y_copies_only_selected_rows_still_visible() {
+        let mut app = AppState::new(vec![
+            source_row("alpha", "local"),
+            source_row("beta", "local"),
+        ]);
+        app.handle(KeyInput::Char('a'));
+        app.handle(KeyInput::Char('/'));
+        for ch in "alpha".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+        app.handle(KeyInput::Enter);
+
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+
+        assert_eq!(count, 1);
+        assert!(text.contains("alpha"));
+        assert!(!text.contains("beta"));
+    }
+
+    #[test]
+    fn reader_scrolls_and_blocks_dispatch() {
+        let mut app = app_with_body("one\ntwo\nthree\nfour");
+        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('j'));
+        assert_eq!(app.reader_scroll(), 1);
 
         let outcome = app.handle(KeyInput::Enter);
         assert_eq!(outcome, Outcome::Continue);
-        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.mode(), Mode::Reader);
         assert_eq!(app.handle(KeyInput::Char('d')), Outcome::Continue);
     }
 
     #[test]
-    fn a_key_requests_archive_dispatch_for_selected() {
+    fn reader_refresh_reloads_body_from_path_and_clamps_scroll() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("task.toml");
+        std::fs::write(
+            &path,
+            "title = \"t\"\nbranch = \"b\"\nbody = \"\"\"long\nbody\nhere\n\"\"\"\n",
+        )
+        .unwrap();
+        let mut app = app_with_body_and_path("long\nbody\nhere", Some(path.clone()));
+        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('G'));
+
+        std::fs::write(&path, "title = \"t\"\nbranch = \"b\"\nbody = \"short\"\n").unwrap();
+        app.handle(KeyInput::Char('r'));
+
+        assert!(app.selected_row().unwrap().body.contains("short"));
+        let line_count = app.wrapped_body_lines(80).len();
+        app.clamp_reader_scroll_to(line_count.saturating_sub(app.reader_viewport_height()));
+        assert_eq!(app.reader_scroll(), 0);
+    }
+
+    #[test]
+    fn reader_refresh_preserves_scroll_when_body_remains_long() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("task.toml");
+        let long_body = (0..60)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(
+            &path,
+            format!("title = \"t\"\nbranch = \"b\"\nbody = \"\"\"{long_body}\"\"\"\n"),
+        )
+        .unwrap();
+        let mut app = app_with_body_and_path(&long_body, Some(path.clone()));
+        app.handle(KeyInput::Enter);
+        app.set_reader_viewport_height(10);
+        app.handle(KeyInput::Char('G'));
+        let before = app.reader_scroll();
+        assert_ne!(before, 0);
+
+        let refreshed_body = (0..70)
+            .map(|index| format!("refreshed line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(
+            &path,
+            format!("title = \"t\"\nbranch = \"b\"\nbody = \"\"\"{refreshed_body}\"\"\"\n"),
+        )
+        .unwrap();
+        app.handle(KeyInput::Char('r'));
+
+        assert!(app.selected_row().unwrap().body.contains("refreshed line"));
+        assert_eq!(app.reader_scroll(), before);
+    }
+
+    #[test]
+    fn reader_refresh_without_path_shows_notice() {
+        let mut app = app_with_body("hint text");
+        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('r'));
+        assert!(app.notice().unwrap_or_default().contains("로컬 파일 없음"));
+    }
+
+    #[test]
+    fn reader_refresh_reloads_workflow_body_from_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflow.toml");
+        std::fs::write(
+            &path,
+            r#"title = "Workflow"
+body = "old workflow body"
+mode = "batch"
+base_mode = "default"
+created_at = "2026-06-06T00:00:00Z"
+updated_at = "2026-06-06T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[policy.review]
+codex_base = "none"
+
+[[tasks]]
+task = "demo"
+run = "run-demo"
+"#,
+        )
+        .unwrap();
+        let mut app = app_with_body_and_path("old workflow body", Some(path.clone()));
+        app.handle(KeyInput::Enter);
+
+        std::fs::write(
+            &path,
+            r#"title = "Workflow"
+body = "new workflow body"
+mode = "batch"
+base_mode = "default"
+created_at = "2026-06-06T00:00:00Z"
+updated_at = "2026-06-06T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[policy.review]
+codex_base = "none"
+
+[[tasks]]
+task = "demo"
+run = "run-demo"
+"#,
+        )
+        .unwrap();
+        app.handle(KeyInput::Char('r'));
+
+        assert!(
+            app.selected_row()
+                .unwrap()
+                .body
+                .contains("new workflow body")
+        );
+    }
+
+    #[test]
+    fn capital_a_requests_archive_dispatch_for_selected() {
         let mut app = app();
 
         assert_eq!(
-            app.handle(KeyInput::Char('a')),
+            app.handle(KeyInput::Char('A')),
             Outcome::Dispatch {
                 key: "origin-sync-tui".into(),
                 action: OriginAction::Archive
@@ -1737,9 +2783,9 @@ mod tests {
     }
 
     #[test]
-    fn a_key_ignored_during_body_view() {
+    fn a_key_ignored_during_reader() {
         let mut app = app();
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         assert_eq!(app.handle(KeyInput::Char('a')), Outcome::Continue);
     }
@@ -1748,7 +2794,7 @@ mod tests {
     fn task_status_line_mentions_archive_shortcut() {
         let app = app();
 
-        assert!(app.status_line().contains("a archive"));
+        assert!(app.status_line().contains("A archive"));
     }
 
     #[test]
@@ -1762,22 +2808,33 @@ mod tests {
     fn workflow_status_line_omits_archive_shortcut() {
         let app = AppState::workflow_with_diagnostics(Vec::new(), Vec::new());
 
-        assert!(!app.status_line().contains("a archive"));
+        assert!(!app.status_line().contains("A archive"));
         assert!(!app.status_line().contains("h/l view"));
     }
 
     #[test]
-    fn body_view_page_keys_scroll_by_larger_steps() {
+    fn reader_half_page_and_jump_keys_scroll() {
         let body = (0..20)
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
         let mut app = app_with_body(&body);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
+        app.set_reader_viewport_height(20);
+        app.handle(KeyInput::Char('d'));
+        assert_eq!(app.reader_scroll(), 10);
+        app.handle(KeyInput::CtrlChar('d'));
+        assert_eq!(app.reader_scroll(), 20);
+        app.handle(KeyInput::Char('G'));
+        assert!(app.reader_scroll() > 20);
+        app.handle(KeyInput::Char('g'));
+        assert_eq!(app.reader_scroll(), 0);
+        app.handle(KeyInput::Char('u'));
+        assert_eq!(app.reader_scroll(), 0);
         app.handle(KeyInput::PageDown);
-        assert_eq!(app.body_scroll(), 10);
+        assert_eq!(app.reader_scroll(), 20);
         app.handle(KeyInput::PageUp);
-        assert_eq!(app.body_scroll(), 0);
+        assert_eq!(app.reader_scroll(), 0);
     }
 
     #[test]
@@ -2003,6 +3060,20 @@ mod tests {
     }
 
     #[test]
+    fn applying_origin_fetch_clears_stale_notice() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.begin_origin_fetch();
+        app.show_dispatch_message("origin issue fetch already in progress".into());
+        assert_eq!(app.notice(), Some("origin issue fetch already in progress"));
+
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+
+        assert_eq!(app.notice(), None);
+        assert!(app.status_line().contains("just now"));
+    }
+
+    #[test]
     fn origin_only_error_shows_message_and_empty() {
         let mut app = AppState::new(vec![]);
         app.set_source_view_for_test(SourceView::OriginOnly);
@@ -2051,6 +3122,21 @@ mod tests {
     }
 
     #[test]
+    fn replacing_local_rows_preserves_inflight_origin_fetch() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.begin_origin_fetch();
+
+        app.replace_rows_preserving_selection(
+            vec![source_row("local-b", "local")],
+            Vec::new(),
+            "local-a",
+        );
+
+        assert!(app.origin_fetching());
+    }
+
+    #[test]
     fn invalidate_origin_only_resets_loaded_origin_cache() {
         let mut app = AppState::new(vec![]);
         app.set_source_view_for_test(SourceView::OriginOnly);
@@ -2060,6 +3146,48 @@ mod tests {
 
         assert!(app.origin_only_needs_fetch());
         assert!(app.visible_keys().is_empty());
+    }
+
+    #[test]
+    fn header_total_and_counts_share_visible_row_set() {
+        let mut app = AppState::new(vec![
+            source_row("local-a", "local"),
+            source_row("pub-b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::Published);
+
+        assert_eq!(
+            app.row_count(),
+            1,
+            "헤더 총계는 표와 같은 행 집합을 세야 한다"
+        );
+        assert!(!app.is_empty());
+
+        app.filter = "no-such-row".into();
+        assert_eq!(app.row_count(), 0, "필터 미스는 0 총계로 표시");
+        assert!(
+            !app.is_empty(),
+            "인벤토리가 남아 있으면 빈-상태 분기가 아니라 0 총계를 보여야 한다"
+        );
+    }
+
+    #[test]
+    fn origin_status_counts_follow_active_filter() {
+        let mut app = app();
+        app.filter = "origin-sync".into();
+
+        assert_eq!(app.origin_status_counts(), vec![("conflict", 1)]);
+    }
+
+    #[test]
+    fn origin_status_counts_follow_source_view() {
+        let mut app = AppState::new(vec![
+            source_row("local-a", "local"),
+            source_row("pub-b", "provider-origin"),
+        ]);
+        app.set_source_view_for_test(SourceView::Published);
+
+        assert_eq!(app.origin_status_counts(), vec![("stale", 1)]);
     }
 
     #[test]
@@ -2093,7 +3221,7 @@ mod tests {
         app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
         assert_eq!(app.handle(KeyInput::Char('h')), Outcome::Continue);
         assert_eq!(app.handle(KeyInput::Char('l')), Outcome::Continue);
-        assert_eq!(app.handle(KeyInput::Char('r')), Outcome::FetchOriginIssues);
+        assert_eq!(app.handle(KeyInput::Char('r')), Outcome::Refresh);
     }
 
     #[test]
@@ -2347,8 +3475,8 @@ mod tests {
         assert!(app.help_open());
 
         let keys = app.help_keymap();
-        assert!(keys.iter().any(|(key, _)| *key == "s"));
-        assert!(keys.iter().any(|(key, _)| *key == "h/l"));
+        assert!(keys.iter().any(|(_, key, _)| *key == "s"));
+        assert!(keys.iter().any(|(_, key, _)| *key == "h/l"));
 
         app.handle(KeyInput::Char('?'));
         assert!(!app.help_open());
@@ -2368,22 +3496,54 @@ mod tests {
         let app = AppState::new(vec![source_row("a", "local")]);
         let keys = app.help_keymap();
 
-        assert!(keys.iter().any(|(key, _)| *key == "q"));
-        assert!(keys.iter().any(|(key, desc)| {
-            app.status_line().contains(*key) && app.status_line().contains(*desc)
+        assert!(keys.iter().any(|(_, key, _)| *key == "q"));
+        assert!(keys.iter().any(|(mode, key, desc)| {
+            *mode == Mode::List
+                && app.status_line().contains(*key)
+                && app.status_line().contains(*desc)
         }));
     }
 
     #[test]
-    fn show_dispatch_message_closes_menu_and_fills_status_line() {
-        let mut app = app();
+    fn footer_swaps_entirely_per_mode() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+        let list_footer = app.status_line().to_string();
+        assert!(list_footer.contains("Enter reader"));
+        assert!(list_footer.contains("v range"));
+        assert!(list_footer.contains("m actions"));
+
         app.handle(KeyInput::Enter);
+
+        let reader_footer = app.status_line().to_string();
+        assert!(reader_footer.contains("d/u"));
+        assert!(reader_footer.contains("g/G"));
+        assert!(reader_footer.contains("r refresh"));
+        assert!(!reader_footer.contains("sidebar"));
+    }
+
+    #[test]
+    fn dispatch_message_routes_to_notice_and_clears_on_next_input() {
+        let mut app = app();
+        app.show_dispatch_message("Copied reference linear:WT-142".into());
+        assert_eq!(app.notice(), Some("Copied reference linear:WT-142"));
+        assert!(app.status_line().contains("m actions"));
+
+        app.handle(KeyInput::Down);
+
+        assert_eq!(app.notice(), None);
+    }
+
+    #[test]
+    fn show_dispatch_message_closes_menu_and_preserves_footer_keymap() {
+        let mut app = app();
+        app.handle(KeyInput::Char('m'));
         assert_eq!(app.mode(), Mode::Menu);
 
         app.show_dispatch_message("Copied reference linear:WT-142".into());
 
         assert_eq!(app.mode(), Mode::List);
-        assert_eq!(app.status_line(), "Copied reference linear:WT-142");
+        assert_eq!(app.notice(), Some("Copied reference linear:WT-142"));
+        assert!(app.status_line().contains("m actions"));
     }
 
     #[test]
@@ -2396,25 +3556,26 @@ mod tests {
     }
 
     #[test]
-    fn enter_shows_menu_status_hint() {
+    fn m_shows_menu_status_hint() {
         let mut app = app();
-        assert_eq!(app.handle(KeyInput::Enter), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('m')), Outcome::Continue);
         assert!(app.status_line().contains("Enter run"));
     }
 
     #[test]
-    fn enter_opens_menu_and_esc_returns_to_list() {
+    fn m_opens_menu_and_enter_no_longer_does() {
         let mut app = app();
-        assert_eq!(app.handle(KeyInput::Enter), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('m')), Outcome::Continue);
         assert_eq!(app.mode(), Mode::Menu);
         app.handle(KeyInput::Esc);
-        assert_eq!(app.mode(), Mode::List);
+        app.handle(KeyInput::Enter);
+        assert_eq!(app.mode(), Mode::Reader);
     }
 
     #[test]
     fn menu_enter_on_enabled_item_requests_dispatch() {
         let mut app = app();
-        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('m'));
         let outcome = app.handle(KeyInput::Enter);
         assert_eq!(
             outcome,
@@ -2428,7 +3589,7 @@ mod tests {
     #[test]
     fn menu_enter_on_archive_item_requests_dispatch() {
         let mut app = app();
-        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('m'));
         let item_count = app.selected_row().unwrap().menu.items().len();
 
         for _ in 0..item_count {
@@ -2454,7 +3615,7 @@ mod tests {
     #[test]
     fn menu_enter_on_disabled_item_shows_reason_and_stays() {
         let mut app = app();
-        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('m'));
         let item_count = app.selected_row().unwrap().menu.items().len();
         for _ in 0..item_count {
             if app.menu_selection_is_disabled() {
@@ -2481,7 +3642,51 @@ mod tests {
         );
         app.handle(KeyInput::Down);
         app.handle(KeyInput::Down);
-        assert_eq!(app.handle(KeyInput::Char('P')), Outcome::Continue);
+        assert_eq!(
+            app.handle(KeyInput::Char('P')),
+            Outcome::Dispatch {
+                key: "scratch-clean".into(),
+                action: OriginAction::Publish
+            }
+        );
+    }
+
+    #[test]
+    fn r_requests_refresh_outcome_in_local_views() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+
+        assert_eq!(app.handle(KeyInput::Char('r')), Outcome::Refresh);
+    }
+
+    #[test]
+    fn menu_char_shortcut_dispatches_enabled_item() {
+        let mut app = app();
+        app.handle(KeyInput::Char('m'));
+
+        assert_eq!(
+            app.handle(KeyInput::Char('d')),
+            Outcome::Dispatch {
+                key: "origin-sync-tui".into(),
+                action: OriginAction::Diff
+            }
+        );
+    }
+
+    #[test]
+    fn keymap_does_not_shadow_any_enabled_menu_shortcut() {
+        let bound = list_mode_bound_char_keys();
+        for shortcut in all_menu_shortcuts() {
+            if shortcut == "i" {
+                continue;
+            }
+            if shortcut.chars().count() == 1 {
+                let ch = shortcut.chars().next().unwrap();
+                assert!(
+                    !bound.contains(&ch),
+                    "menu shortcut '{ch}' shadowed by list keymap"
+                );
+            }
+        }
     }
 
     #[test]

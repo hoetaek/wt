@@ -1,7 +1,7 @@
 use crate::tui::app::{
     AppState, BrowserCell, BrowserColumn, BrowserColumnWidth, BrowserRow, Mode, PopupView,
+    TableMouseLayout,
 };
-use crate::tui::body_markup::LineKind;
 use crate::tui::remote_ui::PrintKind;
 use crate::tui::theme;
 use console::measure_text_width;
@@ -15,6 +15,8 @@ const SIDEBAR_RIGHT_MIN_LIST_WIDTH: u16 = 80;
 const SIDEBAR_RIGHT_MIN_WIDTH: u16 = 32;
 const SIDEBAR_BOTTOM_MIN_WIDTH: u16 = 50;
 const SIDEBAR_BOTTOM_HEIGHT: u16 = 7;
+const READER_BODY_HORIZONTAL_PADDING: u16 = 1;
+const MIN_READER_BODY_WIDTH_FOR_HORIZONTAL_PADDING: u16 = 48;
 const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,15 +28,16 @@ enum DetailSidebarLayout {
 
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
     let area = frame.area();
-    let show_body = app.body_view_open();
+    let show_reader = app.reader_open();
     let show_output = !app.output_lines().is_empty();
     let header_height = header_height(app, area);
-    let detail_layout = if show_body {
+    let notice_height = u16::from(app.notice().is_some());
+    let detail_layout = if show_reader {
         DetailSidebarLayout::Hidden
     } else {
-        resolve_detail_sidebar_layout(area, app, header_height, show_output)
+        resolve_detail_sidebar_layout(area, app, header_height, notice_height, show_output)
     };
-    let row_min_height = if show_body || matches!(detail_layout, DetailSidebarLayout::Bottom) {
+    let row_min_height = if show_reader || matches!(detail_layout, DetailSidebarLayout::Bottom) {
         5
     } else {
         1
@@ -43,6 +46,9 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
         Constraint::Length(header_height),
         Constraint::Min(row_min_height),
     ];
+    if app.notice().is_some() {
+        constraints.insert(1, Constraint::Length(1));
+    }
     if show_output {
         constraints.push(Constraint::Length(output_panel_height(area)));
     }
@@ -55,8 +61,12 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
     let mut chunk_index = 0;
     draw_header(frame, chunks[chunk_index], app);
     chunk_index += 1;
-    if show_body {
-        draw_body_view(frame, chunks[chunk_index], app);
+    if app.notice().is_some() {
+        draw_notice(frame, chunks[chunk_index], app);
+        chunk_index += 1;
+    }
+    if show_reader {
+        draw_reader(frame, chunks[chunk_index], app);
     } else if let DetailSidebarLayout::Right(sidebar_width) = detail_layout {
         let row_chunks =
             Layout::horizontal([Constraint::Min(1), Constraint::Length(sidebar_width)])
@@ -101,6 +111,15 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 
     let header = Paragraph::new(lines).block(chrome_block());
     frame.render_widget(header, area);
+}
+
+fn draw_notice(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
+    if let Some(notice) = app.notice() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(notice.to_string(), theme::notice_style())),
+            area,
+        );
+    }
 }
 
 fn header_height(app: &AppState, area: Rect) -> u16 {
@@ -209,6 +228,7 @@ fn resolve_detail_sidebar_layout(
     area: Rect,
     app: &AppState,
     header_height: u16,
+    notice_height: u16,
     show_output: bool,
 ) -> DetailSidebarLayout {
     if !app.sidebar_open() {
@@ -223,6 +243,7 @@ fn resolve_detail_sidebar_layout(
     let available_height = area
         .height
         .saturating_sub(header_height)
+        .saturating_sub(notice_height)
         .saturating_sub(output_height)
         .saturating_sub(1);
     if available_height < 5 {
@@ -253,6 +274,7 @@ fn bottom_sidebar_possible(width: u16, available_height: u16) -> bool {
 
 fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     if let Some(message) = app.empty_state_message() {
+        app.set_table_mouse_layout(None);
         let empty = Paragraph::new(message).block(
             Block::default()
                 .title(app.inventory_title_line())
@@ -268,6 +290,12 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let selected_index = app.selected_visible_index().unwrap_or(0);
     let row_capacity = table_row_capacity(area);
     let offset = row_viewport_offset(selected_index, row_capacity);
+    let data_rows = table_data_rows(area, row_capacity);
+    app.set_table_mouse_layout(Some(TableMouseLayout {
+        rows: data_rows,
+        first_visible_index: offset,
+        visible_count: visible_rows.len(),
+    }));
     let columns = app.columns();
     let effective_widths = effective_column_widths(columns, area.width);
     let rows = visible_rows
@@ -298,6 +326,31 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
                 .title_style(theme::chrome_style()),
         );
     frame.render_widget(table, area);
+}
+
+pub(crate) fn table_mouse_target(app: &AppState, column: u16, row: u16) -> Option<usize> {
+    let layout = app.table_mouse_layout()?;
+    if column < layout.rows.x || column >= layout.rows.x.saturating_add(layout.rows.width) {
+        return None;
+    }
+    if row < layout.rows.y || row >= layout.rows.y.saturating_add(layout.rows.height) {
+        return None;
+    }
+
+    let visible_index = layout
+        .first_visible_index
+        .saturating_add(row.saturating_sub(layout.rows.y) as usize);
+    (visible_index < layout.visible_count).then_some(visible_index)
+}
+
+fn table_data_rows(area: Rect, row_capacity: usize) -> Rect {
+    let inner = chrome_block().inner(area);
+    Rect {
+        x: inner.x,
+        y: inner.y.saturating_add(1),
+        width: inner.width,
+        height: (row_capacity.min(u16::MAX as usize) as u16).min(inner.height.saturating_sub(1)),
+    }
 }
 
 fn table_row_capacity(area: Rect) -> usize {
@@ -437,10 +490,16 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
 }
 
 fn row_style(app: &AppState, index: usize) -> Style {
-    if app.selected_visible_index() == Some(index) {
-        theme::selected_style()
-    } else {
-        Style::default()
+    let marked = app
+        .visible_rows()
+        .get(index)
+        .is_some_and(|row| app.is_row_marked(&row.key));
+    let selected = app.selected_visible_index() == Some(index);
+    match (selected, marked) {
+        (true, true) => theme::selected_style().add_modifier(Modifier::BOLD),
+        (true, false) => theme::selected_style(),
+        (false, true) => theme::marked_style(),
+        (false, false) => Style::default(),
     }
 }
 
@@ -502,11 +561,7 @@ fn detail_sidebar_lines(app: &AppState, content_width: usize) -> Vec<Line<'stati
         if !lines.is_empty() {
             lines.push(Line::from(""));
         }
-        lines.extend(
-            body_lines
-                .iter()
-                .map(|(kind, text)| body_wrapped_visual_line(kind, text)),
-        );
+        lines.extend(body_lines);
     } else if !lines.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::styled("no body", theme::dim_style()));
@@ -534,39 +589,55 @@ fn draw_output_panel(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     frame.render_widget(output, area);
 }
 
-fn draw_body_view(frame: &mut Frame<'_>, area: Rect, app: &mut AppState) {
-    let visible_count = area.height.saturating_sub(2) as usize;
-    let content_width = area.width.saturating_sub(2).max(1) as usize;
-    let body_lines = app.wrapped_body_lines(content_width);
-    let mut visual_lines = body_lines
-        .iter()
-        .map(|(kind, text)| body_wrapped_visual_line(kind, text))
-        .collect::<Vec<_>>();
+fn draw_reader(frame: &mut Frame<'_>, area: Rect, app: &mut AppState) {
+    let body_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::chrome_style())
+        .title_style(theme::chrome_style());
+    let body_area = reader_body_inner(body_block.inner(area));
+    let visible_count = body_area.height as usize;
+    app.set_reader_viewport_height(visible_count);
+    let content_width = body_area.width.max(1) as usize;
+    let mut visual_lines = app.wrapped_body_lines(content_width);
     if visual_lines.is_empty() {
         visual_lines.push(Line::styled("no body", theme::dim_style()));
     }
 
     let max_start = body_viewport_max_start(visual_lines.len(), visible_count);
-    app.clamp_body_scroll_to(max_start);
-    let start = app.body_scroll();
+    app.clamp_reader_scroll_to(max_start);
+    let start = app.reader_scroll();
     let percent = body_scroll_percent(visual_lines.len(), visible_count, start);
+    let total = visual_lines.len();
+    let first = if total == 0 {
+        0
+    } else {
+        start.saturating_add(1).min(total)
+    };
+    let last = start.saturating_add(visible_count).min(total);
     let title = app
         .selected_row()
-        .map(|row| format!("Body {} {percent}%", row.title))
-        .unwrap_or_else(|| format!("Body {percent}%"));
+        .map(|row| format!("Reader {} {first}-{last}/{total} {percent}%", row.title))
+        .unwrap_or_else(|| format!("Reader {first}-{last}/{total} {percent}%"));
     let rendered_lines = visual_lines
         .into_iter()
         .skip(start)
         .take(visible_count)
         .collect::<Vec<_>>();
-    let body = Paragraph::new(rendered_lines).block(
-        Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(theme::chrome_style())
-            .title_style(theme::chrome_style()),
-    );
-    frame.render_widget(body, area);
+    frame.render_widget(body_block.title(title), area);
+    frame.render_widget(Paragraph::new(rendered_lines), body_area);
+}
+
+fn reader_body_inner(area: Rect) -> Rect {
+    if area.width < MIN_READER_BODY_WIDTH_FOR_HORIZONTAL_PADDING {
+        return area;
+    }
+    Rect {
+        x: area.x.saturating_add(READER_BODY_HORIZONTAL_PADDING),
+        width: area
+            .width
+            .saturating_sub(READER_BODY_HORIZONTAL_PADDING.saturating_mul(2)),
+        ..area
+    }
 }
 
 fn body_viewport_max_start(line_count: usize, visible_count: usize) -> usize {
@@ -582,18 +653,6 @@ fn body_scroll_percent(line_count: usize, visible_count: usize, start: usize) ->
     }
     let visible_end = start.saturating_add(visible_count).min(line_count);
     visible_end.saturating_mul(100) / line_count
-}
-
-fn body_wrapped_visual_line(kind: &LineKind, text: &str) -> Line<'static> {
-    Line::styled(text.to_string(), body_line_style(kind))
-}
-
-fn body_line_style(kind: &LineKind) -> Style {
-    match kind {
-        LineKind::Heading => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        LineKind::Code => theme::dim_style(),
-        LineKind::Checkbox(_) | LineKind::Plain => Style::default(),
-    }
 }
 
 fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
@@ -618,14 +677,48 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 
 fn draw_help_popup(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let keymap = app.help_keymap();
-    let desired_height = keymap.len().div_ceil(2) as u16 + 2;
-    let area = popup_rect(area, desired_height);
+    let desired_height = [
+        Mode::List,
+        Mode::RangeSelect,
+        Mode::Reader,
+        Mode::Menu,
+        Mode::FilterInput,
+    ]
+    .into_iter()
+    .map(|mode| {
+        let entry_count = keymap
+            .iter()
+            .filter(|(entry_mode, _, _)| *entry_mode == mode)
+            .count();
+        if entry_count == 0 {
+            0
+        } else {
+            1 + entry_count.div_ceil(4)
+        }
+    })
+    .sum::<usize>() as u16
+        + 2;
+    let area = help_popup_rect(area, desired_height);
     frame.render_widget(Clear, area);
-    let lines = keymap
-        .chunks(2)
-        .map(|chunk| {
+    let mut lines = Vec::new();
+    for mode in [
+        Mode::List,
+        Mode::RangeSelect,
+        Mode::Reader,
+        Mode::Menu,
+        Mode::FilterInput,
+    ] {
+        let entries = keymap
+            .iter()
+            .filter(|(entry_mode, _, _)| *entry_mode == mode)
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
+            continue;
+        }
+        lines.push(Line::styled(help_mode_label(mode), theme::chrome_style()));
+        lines.extend(entries.chunks(4).map(|chunk| {
             let mut spans = Vec::new();
-            for (index, (key, desc)) in chunk.iter().enumerate() {
+            for (index, (_, key, desc)) in chunk.iter().enumerate() {
                 if index > 0 {
                     spans.push(Span::styled("  |  ", theme::dim_style()));
                 }
@@ -633,10 +726,20 @@ fn draw_help_popup(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
                 spans.push(Span::raw(desc.to_string()));
             }
             Line::from(spans)
-        })
-        .collect::<Vec<_>>();
+        }));
+    }
     let popup = Paragraph::new(lines).block(popup_block("Help"));
     frame.render_widget(popup, area);
+}
+
+fn help_mode_label(mode: Mode) -> &'static str {
+    match mode {
+        Mode::List => "List",
+        Mode::RangeSelect => "RangeSelect",
+        Mode::Reader => "Reader",
+        Mode::Menu => "Menu",
+        Mode::FilterInput => "Filter",
+    }
 }
 
 fn centered_rect(area: Rect) -> Rect {
@@ -656,6 +759,18 @@ fn popup_rect(area: Rect, desired_height: u16) -> Rect {
         .flex(Flex::Center)
         .areas(area);
     let [area] = Layout::horizontal([Constraint::Percentage(70)])
+        .flex(Flex::Center)
+        .areas(area);
+    area
+}
+
+fn help_popup_rect(area: Rect, desired_height: u16) -> Rect {
+    let max_height = area.height.max(3);
+    let height = desired_height.min(max_height).min(area.height.max(1));
+    let [area] = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [area] = Layout::horizontal([Constraint::Percentage(90)])
         .flex(Flex::Center)
         .areas(area);
     area
@@ -992,6 +1107,7 @@ mod tests {
             size: None,
             branch: Some(format!("feature/{key}")),
             source: "provider-origin".into(),
+            path: None,
             body: String::new(),
             preview_lines: vec!["Origin      Linear WT-142".into()],
             menu: OriginActionMenu::for_origin_task(
@@ -1006,6 +1122,12 @@ mod tests {
         let mut browser_row = row(key, key, "stale");
         browser_row.source = source.into();
         browser_row
+    }
+
+    fn local_rows(count: usize) -> Vec<BrowserRow> {
+        (0..count)
+            .map(|index| source_row(&format!("row-{index}"), "local"))
+            .collect()
     }
 
     fn line_contains_text(buffer: &Buffer, width: u16, y: u16, text: &str) -> bool {
@@ -1035,6 +1157,61 @@ mod tests {
                     }) && buffer[(x, y)].style().fg == Some(color)
                 })
         })
+    }
+
+    fn first_cell_style_on_line_with(
+        buffer: &Buffer,
+        width: u16,
+        height: u16,
+        text: &str,
+    ) -> Option<Style> {
+        let chars = text.chars().collect::<Vec<_>>();
+        (0..height).find_map(|y| {
+            (0..=width.saturating_sub(chars.len() as u16)).find_map(|x| {
+                chars
+                    .iter()
+                    .enumerate()
+                    .all(|(offset, ch)| buffer[(x + offset as u16, y)].symbol() == ch.to_string())
+                    .then(|| buffer[(x, y)].style())
+            })
+        })
+    }
+
+    #[test]
+    fn table_mouse_target_maps_rendered_body_rows() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+        render_buffer_mut(80, 12, &mut app);
+
+        assert_eq!(table_mouse_target(&app, 2, 6), Some(0));
+        assert_eq!(table_mouse_target(&app, 2, 7), Some(1));
+        assert_eq!(table_mouse_target(&app, 2, 8), Some(2));
+    }
+
+    #[test]
+    fn table_mouse_target_ignores_non_row_regions() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        render_buffer_mut(80, 12, &mut app);
+
+        assert_eq!(table_mouse_target(&app, 2, 0), None);
+        assert_eq!(table_mouse_target(&app, 2, 3), None);
+        assert_eq!(table_mouse_target(&app, 2, 4), None);
+        assert_eq!(table_mouse_target(&app, 2, 7), None);
+        assert_eq!(table_mouse_target(&app, 0, 6), None);
+        assert_eq!(table_mouse_target(&app, 79, 6), None);
+    }
+
+    #[test]
+    fn table_mouse_target_honors_scroll_offset() {
+        let mut app = AppState::new(local_rows(10));
+        app.handle(KeyInput::Char('G'));
+        render_buffer_mut(80, 10, &mut app);
+
+        assert_eq!(table_mouse_target(&app, 2, 6), Some(8));
+        assert_eq!(table_mouse_target(&app, 2, 7), Some(9));
     }
 
     fn has_colored_cell(buffer: &Buffer, width: u16, height: u16) -> bool {
@@ -1068,6 +1245,51 @@ mod tests {
         assert!(text.contains("Origin sync TUI"));
         assert!(text.contains("Linear WT-142"));
         assert!(text.contains("q quit"));
+    }
+
+    #[test]
+    fn marked_row_renders_with_bold_style() {
+        let mut app = AppState::new(vec![
+            row("a", "Task A", "stale"),
+            row("b", "Task B", "stale"),
+        ]);
+        app.handle(KeyInput::Down);
+        app.handle(KeyInput::Char(' '));
+        app.handle(KeyInput::Up);
+
+        let buffer = render_buffer(80, 24, &app);
+        let style = first_cell_style_on_line_with(&buffer, 80, 24, "Task B").unwrap();
+
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn notice_renders_below_header_and_releases_row_when_cleared() {
+        let _guard = ColorGuard::set(true);
+        let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
+        app.show_dispatch_message("Copied reference linear:WT-142".into());
+
+        let with_notice = render_buffer(80, 24, &app);
+
+        assert!(line_contains_text(
+            &with_notice,
+            80,
+            4,
+            "Copied reference linear:WT-142"
+        ));
+        assert_eq!(with_notice[(0, 4)].style().fg, Some(Color::Yellow));
+        assert!(line_contains_text(&with_notice, 80, 5, "Tasks"));
+
+        app.handle(KeyInput::Down);
+        let cleared = render_buffer(80, 24, &app);
+
+        assert!(!line_contains_text(
+            &cleared,
+            80,
+            4,
+            "Copied reference linear:WT-142"
+        ));
+        assert!(line_contains_text(&cleared, 80, 4, "Tasks"));
     }
 
     #[test]
@@ -1329,6 +1551,24 @@ mod tests {
     }
 
     #[test]
+    fn reader_body_adds_horizontal_padding_when_roomy() {
+        let area = Rect::new(0, 0, 80, 24);
+        let inner = reader_body_inner(area);
+
+        assert_eq!(inner.x, area.x + 1);
+        assert_eq!(inner.width, area.width - 2);
+    }
+
+    #[test]
+    fn reader_body_omits_horizontal_padding_when_cramped() {
+        let area = Rect::new(0, 0, 47, 24);
+        let inner = reader_body_inner(area);
+
+        assert_eq!(inner.x, area.x);
+        assert_eq!(inner.width, area.width);
+    }
+
+    #[test]
     fn narrow_terminal_reflows_sidebar_to_bottom() {
         let mut browser_row = source_row("a", "provider-origin");
         browser_row.title = "task a".into();
@@ -1340,6 +1580,30 @@ mod tests {
 
         assert!(text.contains("task a"));
         assert!(text.contains("body-marker"));
+    }
+
+    #[test]
+    fn notice_height_participates_in_bottom_sidebar_threshold() {
+        let mut browser_row = source_row("a", "provider-origin");
+        browser_row.title = "task a".into();
+        browser_row.body = "BODY-MARKER".into();
+        browser_row.preview_lines = vec!["META-MARKER".into()];
+        let mut app = AppState::new(vec![browser_row]);
+
+        let without_notice = buffer_text(70, 17, &app);
+        assert!(
+            without_notice.contains("BODY-MARKER"),
+            "height 17 has enough room for bottom sidebar without notice:\n{without_notice}"
+        );
+
+        app.show_dispatch_message("Copied reference linear:WT-142".into());
+        let with_notice = buffer_text(70, 17, &app);
+
+        assert!(with_notice.contains("Copied reference linear:WT-142"));
+        assert!(
+            !with_notice.contains("BODY-MARKER"),
+            "notice consumes the threshold row, so bottom sidebar should hide:\n{with_notice}"
+        );
     }
 
     #[test]
@@ -1388,17 +1652,17 @@ mod tests {
     }
 
     #[test]
-    fn body_view_renders_markup_body_instead_of_preview() {
+    fn reader_renders_markup_body_instead_of_preview() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body =
             "## 계획 (Planning)\n- [ ] Step 1\n```rust\nlet x = 1;\n```\nplain".into();
         browser_row.preview_lines = vec!["PREVIEW-MARKER".into()];
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let text = buffer_text(80, 24, &app);
 
-        assert!(text.contains("Body Origin sync TUI"));
+        assert!(text.contains("Reader Origin sync TUI"));
         assert!(text.contains("(Planning)"));
         assert!(text.contains("☐ Step 1"));
         assert!(text.contains("let x = 1;"));
@@ -1406,9 +1670,9 @@ mod tests {
     }
 
     #[test]
-    fn body_view_empty_body_renders_no_body_message() {
+    fn reader_empty_body_renders_no_body_message() {
         let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let text = buffer_text(80, 24, &app);
 
@@ -1416,7 +1680,7 @@ mod tests {
     }
 
     #[test]
-    fn body_view_scroll_reaches_wrapped_tail_of_long_single_line() {
+    fn reader_scroll_reaches_wrapped_tail_of_long_single_line() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         let mut words = (0..40)
             .map(|index| format!("word{index}"))
@@ -1424,7 +1688,7 @@ mod tests {
         words.push("tail-marker".into());
         browser_row.body = words.join(" ");
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let initial = buffer_text(32, 10, &app);
         assert!(!initial.contains("tail-marker"));
@@ -1437,16 +1701,16 @@ mod tests {
             }
         }
 
-        panic!("expected body view scroll to reach wrapped tail of a long source line");
+        panic!("expected reader scroll to reach wrapped tail of a long source line");
     }
 
     #[test]
-    fn body_view_strips_terminal_control_sequences_from_untrusted_body() {
+    fn reader_strips_terminal_control_sequences_from_untrusted_body() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body =
             "plain\x1b[31mred\x1b[0m\nosc\x1b]0;title\x07done\nc1\u{009b}31mred".into();
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let buffer = render_buffer(80, 24, &app);
         let text = buffer_text(80, 24, &app);
@@ -1456,16 +1720,16 @@ mod tests {
         assert!(text.contains("c1red"));
         assert!(
             !has_terminal_control_cell(&buffer, 80, 24),
-            "body view should not render terminal control characters from imported body text"
+            "reader should not render terminal control characters from imported body text"
         );
     }
 
     #[test]
-    fn body_view_normalizes_tabs_from_untrusted_body() {
+    fn reader_normalizes_tabs_from_untrusted_body() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body = "alpha\tbeta\n- [ ] gamma\tdelta".into();
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let buffer = render_buffer(80, 24, &app);
         let text = buffer_text(80, 24, &app);
@@ -1474,19 +1738,20 @@ mod tests {
         assert!(text.contains("☐ gamma delta"));
         assert!(
             !has_terminal_control_cell(&buffer, 80, 24),
-            "body view should render imported tab characters as inert spacing"
+            "reader should render imported tab characters as inert spacing"
         );
     }
 
     #[test]
-    fn body_view_scroll_up_moves_immediately_after_bottom_overscroll() {
+    fn reader_scroll_up_moves_immediately_after_bottom_overscroll() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
-        browser_row.body = (0..20)
+        let code = (0..20)
             .map(|index| format!("line-{index:02}"))
             .collect::<Vec<_>>()
             .join("\n");
+        browser_row.body = format!("```\n{code}\n```");
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         for _ in 0..30 {
             app.handle(KeyInput::Char('j'));
@@ -1499,30 +1764,30 @@ mod tests {
 
         assert!(
             !after_one_up.contains("line-19"),
-            "first scroll-up after bottom overscroll should move the body view"
+            "first scroll-up after bottom overscroll should move the reader"
         );
     }
 
     #[test]
-    fn body_view_remains_colorless_when_colors_disabled() {
+    fn reader_remains_colorless_when_colors_disabled() {
         let _guard = ColorGuard::set(false);
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body = "## Heading\n- [x] Done".into();
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let buffer = render_buffer(80, 24, &app);
 
         assert!(
             !has_colored_cell(&buffer, 80, 24),
-            "body view should not contain semantic or chrome colors when colors are disabled"
+            "reader should not contain semantic or chrome colors when colors are disabled"
         );
     }
 
     #[test]
     fn renders_action_menu_overlay() {
         let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
-        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('m'));
 
         let text = buffer_text(100, 24, &app);
 
@@ -1553,7 +1818,7 @@ mod tests {
 
         let text = buffer_text(100, 24, &app);
 
-        for (key, _) in keys {
+        for (_, key, _) in keys {
             assert!(text.contains(key), "missing help key {key} in:\n{text}");
         }
     }
