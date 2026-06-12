@@ -324,9 +324,14 @@ impl MouseGestureTracker {
                 target.map(|visible_index| BrowserMouseInput::Down { visible_index })
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                self.active.as_mut()?.dragged = true;
-                crate::tui::render::table_mouse_target(app, mouse.column, mouse.row)
-                    .map(|visible_index| BrowserMouseInput::Drag { visible_index })
+                let active = self.active.as_mut()?;
+                let visible_index =
+                    crate::tui::render::table_mouse_target(app, mouse.column, mouse.row)?;
+                if visible_index == active.visible_index {
+                    return None;
+                }
+                active.dragged = true;
+                Some(BrowserMouseInput::Drag { visible_index })
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.active.take().map(|gesture| BrowserMouseInput::Up {
@@ -933,6 +938,99 @@ mod tests {
 
         assert_eq!(app.mode(), Mode::List);
         assert!(!app.reader_open());
+    }
+
+    #[test]
+    fn same_row_drag_jitter_remains_click_and_can_seed_double_click() {
+        let mut app = app_with_mouse_layout();
+        let mut gesture = MouseGestureTracker::default();
+        let mut clicks = ClickTracker::default();
+        let now = Instant::now();
+
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+            now,
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Drag(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(10),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(20),
+        );
+
+        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.selected_key_count(), 0);
+        assert!(!app.reader_open());
+
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(100),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(120),
+        );
+
+        assert_eq!(app.mode(), Mode::Reader);
+    }
+
+    #[test]
+    fn same_row_jitter_then_other_row_drag_selects_two_rows() {
+        let mut app = app_with_mouse_layout();
+        let mut gesture = MouseGestureTracker::default();
+        let mut clicks = ClickTracker::default();
+        let now = Instant::now();
+
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+            now,
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Drag(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(10),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Drag(MouseButton::Left), 2, 2),
+            now + Duration::from_millis(20),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 2),
+            now + Duration::from_millis(30),
+        );
+
+        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.selected_key_count(), 2);
+        assert!(app.is_row_marked("a"));
+        assert!(app.is_row_marked("b"));
     }
 
     #[test]
