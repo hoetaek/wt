@@ -1088,6 +1088,7 @@ impl AppState {
         self.reset_detail_scroll();
         self.select_first_enabled_menu_item();
         self.clamp_reader_scroll();
+        self.notice = None;
         if self.mode == Mode::List {
             self.status_line = self.list_status_line();
         }
@@ -2284,6 +2285,20 @@ mod tests {
         );
 
         assert_eq!(app.visible_keys(), vec!["github:175", "github:178"]);
+        assert!(app.status_line().contains("just now"));
+    }
+
+    #[test]
+    fn applying_origin_fetch_clears_stale_notice() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.begin_origin_fetch();
+        app.show_dispatch_message("origin issue fetch already in progress".into());
+        assert_eq!(app.notice(), Some("origin issue fetch already in progress"));
+
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+
+        assert_eq!(app.notice(), None);
         assert!(app.status_line().contains("just now"));
     }
 
