@@ -70,9 +70,12 @@ fn run_browser_with_backend(
             let current_mtime = app.selected_row_mtime();
             let decision = reader_refresh_decision(true, reader_mtime, current_mtime);
             if decision.refresh {
-                app.refresh_reader_body(true);
+                if app.refresh_reader_body(true) {
+                    reader_mtime = decision.next_mtime;
+                }
+            } else {
+                reader_mtime = decision.next_mtime;
             }
-            reader_mtime = decision.next_mtime;
         } else if !app.reader_open() {
             let decision = reader_refresh_decision(false, reader_mtime, None);
             reader_mtime = decision.next_mtime;
@@ -431,9 +434,10 @@ fn reader_refresh_decision(
         };
     }
     let refresh = baseline.is_some() && current_mtime.is_some() && current_mtime != baseline;
+    let next_mtime = current_mtime.or(baseline);
     ReaderRefreshDecision {
         refresh,
-        next_mtime: current_mtime,
+        next_mtime,
     }
 }
 
@@ -534,6 +538,27 @@ mod tests {
             ReaderRefreshDecision {
                 refresh: false,
                 next_mtime: None,
+            }
+        );
+    }
+
+    #[test]
+    fn reader_refresh_decision_keeps_baseline_during_temporary_missing_mtime() {
+        let before = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let after = SystemTime::UNIX_EPOCH + Duration::from_secs(2);
+
+        assert_eq!(
+            reader_refresh_decision(true, Some(before), None),
+            ReaderRefreshDecision {
+                refresh: false,
+                next_mtime: Some(before),
+            }
+        );
+        assert_eq!(
+            reader_refresh_decision(true, Some(before), Some(after)),
+            ReaderRefreshDecision {
+                refresh: true,
+                next_mtime: Some(after),
             }
         );
     }

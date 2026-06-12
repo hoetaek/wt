@@ -1272,7 +1272,9 @@ impl AppState {
     fn handle_reader_key(&mut self, key: KeyInput) -> Outcome {
         match key {
             KeyInput::Esc | KeyInput::Char('q') => self.close_reader(),
-            KeyInput::Char('r') => self.refresh_reader_body(false),
+            KeyInput::Char('r') => {
+                self.refresh_reader_body(false);
+            }
             KeyInput::Down | KeyInput::Char('j') => self.scroll_reader_down(1),
             KeyInput::Up | KeyInput::Char('k') => self.scroll_reader_up(1),
             KeyInput::PageDown => self.scroll_reader_down(self.reader_viewport_height()),
@@ -1532,15 +1534,15 @@ impl AppState {
             .map(|action| (row.key.clone(), action))
     }
 
-    pub(crate) fn refresh_reader_body(&mut self, automatic: bool) {
+    pub(crate) fn refresh_reader_body(&mut self, automatic: bool) -> bool {
         let Some(key) = self.selected_row().map(|row| row.key.clone()) else {
-            return;
+            return false;
         };
         let Some(path) = self.selected_row().and_then(|row| row.path.clone()) else {
             if !automatic {
                 self.notice = Some("로컬 파일 없음 — i로 import 후 다시 시도".into());
             }
-            return;
+            return false;
         };
         match read_body_from_path(&path) {
             Ok(body) => {
@@ -1549,11 +1551,13 @@ impl AppState {
                 }
                 self.invalidate_body_wrap_cache();
                 self.clamp_reader_scroll();
+                true
             }
             Err(err) => {
                 if !automatic {
                     self.notice = Some(format!("본문 새로고침 실패: {err:#}"));
                 }
+                false
             }
         }
     }

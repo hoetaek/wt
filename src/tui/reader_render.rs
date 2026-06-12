@@ -226,7 +226,7 @@ impl MarkdownState {
                 code_style(),
                 self.link.clone(),
             )),
-            Event::SoftBreak | Event::HardBreak => self.flush_inline(),
+            Event::SoftBreak | Event::HardBreak => self.push_span(StyledSpan::plain(" ")),
             Event::Rule => self.blocks.push(Block::Rule),
             Event::TaskListMarker(checked) => {
                 if let Some(item) = self.item_stack.last_mut() {
@@ -882,5 +882,49 @@ mod tests {
         assert_eq!(rendered.first().map(String::as_str), Some("• item"));
         assert!(rendered.iter().any(|line| line.contains("fn main")));
         assert_eq!(rendered, vec!["• item", "", "fn main() {}"]);
+    }
+
+    #[test]
+    fn renders_kitchen_sink_markdown_with_stable_block_rhythm() {
+        let body = concat!(
+            "step one\n",
+            "step two\n",
+            "\n",
+            "- [ ] parent\n",
+            "  - [x] child\n",
+            "\n",
+            "```rust\n",
+            "fn main() {}\n",
+            "```\n",
+            "\n",
+            "| Name | Link |\n",
+            "| --- | --- |\n",
+            "| wt | [repo](https://example.com/wt) |\n",
+            "\n",
+            "> quoted\n",
+            "\n",
+            "[site](https://example.com)\n",
+        );
+        let lines = render_reader_lines(body, 100);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>();
+
+        assert_eq!(
+            rendered,
+            vec![
+                "step one step two",
+                "",
+                "• ☐ parent",
+                "  • ☑ child",
+                "",
+                "fn main() {}",
+                "",
+                "| Name | Link |",
+                "| wt | \u{1b}]8;;https://example.com/wt\u{7}repo\u{1b}]8;;\u{7} |",
+                "",
+                "│ quoted",
+                "",
+                "\u{1b}]8;;https://example.com\u{7}site\u{1b}]8;;\u{7}",
+            ]
+        );
     }
 }
