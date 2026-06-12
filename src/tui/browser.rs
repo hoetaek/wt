@@ -121,6 +121,22 @@ fn run_browser_with_backend(
                     match app.handle(input) {
                         Outcome::Continue => {}
                         Outcome::Quit => break,
+                        Outcome::Refresh => {
+                            let preferred_key = app
+                                .selected_row()
+                                .map(|row| row.key.clone())
+                                .unwrap_or_default();
+                            if app.refresh_fetches_origin_issues() {
+                                app.begin_origin_fetch();
+                                start_origin_fetch(&mut app, &mut origin_fetch, origin_ctx);
+                            }
+                            let (rows, diagnostics) = refresh()?;
+                            app.replace_rows_preserving_selection(
+                                rows,
+                                diagnostics,
+                                &preferred_key,
+                            );
+                        }
                         Outcome::FetchOriginIssues => {
                             start_origin_fetch(&mut app, &mut origin_fetch, origin_ctx);
                         }
@@ -356,6 +372,9 @@ fn key_input(key: KeyEvent) -> Option<KeyInput> {
         KeyCode::Enter => Some(KeyInput::Enter),
         KeyCode::Esc => Some(KeyInput::Esc),
         KeyCode::Backspace => Some(KeyInput::Backspace),
+        KeyCode::Char(ch) if key.modifiers == KeyModifiers::CONTROL && ch != 'c' => {
+            Some(KeyInput::CtrlChar(ch))
+        }
         KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
             Some(KeyInput::Char(ch))
         }
@@ -415,6 +434,17 @@ mod tests {
             key_input(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
             Some(KeyInput::PageDown)
         );
+    }
+
+    #[test]
+    fn key_input_maps_ctrl_d_and_ctrl_u() {
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert_eq!(key_input(ctrl_d), Some(KeyInput::CtrlChar('d')));
+        assert_eq!(key_input(ctrl_u), Some(KeyInput::CtrlChar('u')));
+
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(key_input(ctrl_c), None);
     }
 
     #[test]

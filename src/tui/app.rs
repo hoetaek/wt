@@ -3,9 +3,7 @@ use crate::tui::body_markup::{self, LineKind};
 use crate::tui::remote_ui::PrintKind;
 use crate::ui::selector::strip_terminal_sequences;
 use console::measure_text_width;
-#[cfg(test)]
-use std::cell::Cell;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserRow {
@@ -81,6 +79,7 @@ pub(crate) enum KeyInput {
     Esc,
     Backspace,
     Char(char),
+    CtrlChar(char),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,9 +119,10 @@ impl SourceView {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Mode {
     List,
+    Reader,
     FilterInput,
     Menu,
 }
@@ -131,6 +131,7 @@ pub(crate) enum Mode {
 pub(crate) enum Outcome {
     Continue,
     Quit,
+    Refresh,
     FetchOriginIssues,
     Dispatch { key: String, action: OriginAction },
 }
@@ -243,8 +244,8 @@ pub(crate) struct AppState {
     output: OutputPanel,
     running: Option<RunningAction>,
     columns: Vec<BrowserColumn>,
-    body_view_open: bool,
-    body_scroll: usize,
+    reader_scroll: usize,
+    reader_viewport_height: Cell<usize>,
     body_cache: RefCell<BodyLineCache>,
     body_wrap_cache: RefCell<BodyWrapCache>,
     #[cfg(test)]
@@ -292,6 +293,7 @@ impl BrowserCopy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct KeymapEntry {
+    mode: Mode,
     key: &'static str,
     desc: &'static str,
     footer: bool,
@@ -300,84 +302,236 @@ struct KeymapEntry {
 
 const LIST_KEYMAP: &[KeymapEntry] = &[
     KeymapEntry {
+        mode: Mode::List,
         key: "j/k",
         desc: "move",
         footer: true,
         task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "q",
         desc: "quit",
         footer: true,
         task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "g/G",
         desc: "first/last",
         footer: false,
         task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "/",
         desc: "filter",
         footer: true,
         task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "h/l",
         desc: "view",
         footer: true,
         task_only: true,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "s",
         desc: "sidebar",
         footer: true,
         task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "PageUp/Dn",
         desc: "scroll detail",
         footer: false,
         task_only: false,
     },
     KeymapEntry {
-        key: "v",
-        desc: "body",
+        mode: Mode::List,
+        key: "Enter/v",
+        desc: "reader",
         footer: true,
         task_only: false,
     },
     KeymapEntry {
-        key: "Enter",
+        mode: Mode::List,
+        key: "m",
         desc: "actions",
-        footer: false,
+        footer: true,
         task_only: false,
     },
     KeymapEntry {
-        key: "a",
+        mode: Mode::List,
+        key: "A",
         desc: "archive",
         footer: true,
         task_only: true,
     },
     KeymapEntry {
+        mode: Mode::List,
+        key: "Y",
+        desc: "copy key",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
+        key: "t",
+        desc: "attach",
+        footer: false,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
         key: "i",
         desc: "import origin-only",
         footer: false,
         task_only: true,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "r",
-        desc: "refetch origin-only",
+        desc: "refresh",
         footer: false,
-        task_only: true,
+        task_only: false,
     },
     KeymapEntry {
+        mode: Mode::List,
         key: "?",
         desc: "help",
         footer: true,
         task_only: false,
     },
 ];
+
+const READER_KEYMAP: &[KeymapEntry] = &[
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "j/k",
+        desc: "scroll",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "d/u",
+        desc: "half page",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "Ctrl-D/U",
+        desc: "half page",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "PageUp/Dn",
+        desc: "page",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "g/G",
+        desc: "top/bottom",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "q/Esc",
+        desc: "close",
+        footer: true,
+        task_only: false,
+    },
+];
+
+const FILTER_KEYMAP: &[KeymapEntry] = &[
+    KeymapEntry {
+        mode: Mode::FilterInput,
+        key: "type",
+        desc: "filter",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::FilterInput,
+        key: "Enter",
+        desc: "apply",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::FilterInput,
+        key: "Esc",
+        desc: "clear",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::FilterInput,
+        key: "Backspace",
+        desc: "delete",
+        footer: true,
+        task_only: false,
+    },
+];
+
+const MENU_KEYMAP: &[KeymapEntry] = &[
+    KeymapEntry {
+        mode: Mode::Menu,
+        key: "j/k",
+        desc: "move",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Menu,
+        key: "Enter",
+        desc: "run",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Menu,
+        key: "shortcut",
+        desc: "run item",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Menu,
+        key: "Esc",
+        desc: "back",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Menu,
+        key: "q",
+        desc: "quit",
+        footer: true,
+        task_only: false,
+    },
+];
+
+const MODE_KEYMAP: &[&[KeymapEntry]] = &[LIST_KEYMAP, READER_KEYMAP, FILTER_KEYMAP, MENU_KEYMAP];
+
+fn mode_keymap(mode: Mode) -> &'static [KeymapEntry] {
+    match mode {
+        Mode::List => LIST_KEYMAP,
+        Mode::Reader => READER_KEYMAP,
+        Mode::FilterInput => FILTER_KEYMAP,
+        Mode::Menu => MENU_KEYMAP,
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 struct BodyLineCache {
@@ -441,8 +595,8 @@ impl AppState {
             output: OutputPanel::default(),
             running: None,
             columns,
-            body_view_open: false,
-            body_scroll: 0,
+            reader_scroll: 0,
+            reader_viewport_height: Cell::new(10),
             body_cache: RefCell::new(BodyLineCache::default()),
             body_wrap_cache: RefCell::new(BodyWrapCache::default()),
             #[cfg(test)]
@@ -460,12 +614,9 @@ impl AppState {
             return self.handle_help_key(key);
         }
 
-        if self.body_view_open {
-            return self.handle_body_view_key(key);
-        }
-
         match self.mode {
             Mode::List => self.handle_list_key(key),
+            Mode::Reader => self.handle_reader_key(key),
             Mode::FilterInput => self.handle_filter_key(key),
             Mode::Menu => self.handle_menu_key(key),
         }
@@ -567,12 +718,20 @@ impl AppState {
         self.output.scroll
     }
 
-    pub(crate) fn body_view_open(&self) -> bool {
-        self.body_view_open
+    pub(crate) fn reader_open(&self) -> bool {
+        self.mode == Mode::Reader
     }
 
-    pub(crate) fn body_scroll(&self) -> usize {
-        self.body_scroll
+    pub(crate) fn reader_scroll(&self) -> usize {
+        self.reader_scroll
+    }
+
+    pub(crate) fn set_reader_viewport_height(&self, height: usize) {
+        self.reader_viewport_height.set(height.max(1));
+    }
+
+    fn reader_viewport_height(&self) -> usize {
+        self.reader_viewport_height.get().max(1)
     }
 
     pub(crate) fn body_lines(&self) -> Vec<(LineKind, String)> {
@@ -864,7 +1023,9 @@ impl AppState {
     ) {
         self.rows = rows;
         self.diagnostics = diagnostics;
-        self.invalidate_origin_only();
+        if !self.origin_fetching() {
+            self.invalidate_origin_only();
+        }
         self.mode = Mode::List;
         self.status_line = self.list_status_line();
         self.selected_index = self
@@ -875,7 +1036,7 @@ impl AppState {
         self.clamp_selection();
         self.reset_detail_scroll();
         self.select_first_enabled_menu_item();
-        self.clamp_body_scroll();
+        self.clamp_reader_scroll();
     }
 
     pub(crate) fn invalidate_origin_only(&mut self) {
@@ -888,6 +1049,10 @@ impl AppState {
 
     pub(crate) fn origin_fetching(&self) -> bool {
         matches!(self.origin_only, OriginOnlyState::Fetching { .. })
+    }
+
+    pub(crate) fn refresh_fetches_origin_issues(&self) -> bool {
+        self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly
     }
 
     pub(crate) fn begin_origin_fetch(&mut self) {
@@ -913,7 +1078,7 @@ impl AppState {
         self.clamp_selection();
         self.reset_detail_scroll();
         self.select_first_enabled_menu_item();
-        self.clamp_body_scroll();
+        self.clamp_reader_scroll();
         if self.mode == Mode::List {
             self.status_line = self.list_status_line();
         }
@@ -949,7 +1114,7 @@ impl AppState {
     }
 
     fn keymap_entries(&self) -> Vec<KeymapEntry> {
-        LIST_KEYMAP
+        mode_keymap(self.mode)
             .iter()
             .copied()
             .filter(|entry| !entry.task_only || self.copy.source_view_enabled)
@@ -957,9 +1122,23 @@ impl AppState {
     }
 
     fn footer_keymap_summary(&self) -> String {
-        self.keymap_entries()
+        let entries = self.keymap_entries();
+        let footer_entries = if self.mode == Mode::List {
+            let priority = entries
+                .iter()
+                .filter(|entry| entry.footer)
+                .copied()
+                .collect::<Vec<_>>();
+            if priority.is_empty() {
+                entries
+            } else {
+                priority
+            }
+        } else {
+            entries
+        };
+        footer_entries
             .into_iter()
-            .filter(|entry| entry.footer)
             .map(|entry| format!("{} {}", entry.key, entry.desc))
             .collect::<Vec<_>>()
             .join("  ")
@@ -981,10 +1160,13 @@ impl AppState {
         self.help_open
     }
 
-    pub(crate) fn help_keymap(&self) -> Vec<(&'static str, &'static str)> {
-        self.keymap_entries()
-            .into_iter()
-            .map(|entry| (entry.key, entry.desc))
+    pub(crate) fn help_keymap(&self) -> Vec<(Mode, &'static str, &'static str)> {
+        MODE_KEYMAP
+            .iter()
+            .flat_map(|entries| entries.iter())
+            .copied()
+            .filter(|entry| !entry.task_only || self.copy.source_view_enabled)
+            .map(|entry| (entry.mode, entry.key, entry.desc))
             .collect()
     }
 
@@ -994,17 +1176,12 @@ impl AppState {
             KeyInput::Up | KeyInput::Char('k') => self.move_up(),
             KeyInput::Char('g') => self.move_to_first(),
             KeyInput::Char('G') => self.move_to_last(),
-            KeyInput::Char('v') => self.open_body_view(),
+            KeyInput::Enter | KeyInput::Char('v') => self.open_reader(),
             KeyInput::Char('s') => self.toggle_sidebar(),
             KeyInput::PageDown => self.scroll_sidebar_down(10),
             KeyInput::PageUp => self.scroll_sidebar_up(10),
             KeyInput::Char('?') => self.toggle_help(),
-            KeyInput::Char('r')
-                if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly =>
-            {
-                self.begin_origin_fetch();
-                return Outcome::FetchOriginIssues;
-            }
+            KeyInput::Char('r') => return Outcome::Refresh,
             KeyInput::Char('i')
                 if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly =>
             {
@@ -1017,9 +1194,9 @@ impl AppState {
             }
             KeyInput::Char('/') => {
                 self.mode = Mode::FilterInput;
-                self.status_line = "type to filter; Esc clears filter".into();
+                self.status_line = self.footer_keymap_summary();
             }
-            KeyInput::Enter => {
+            KeyInput::Char('m') => {
                 self.open_menu();
             }
             KeyInput::Char('q') => return Outcome::Quit,
@@ -1034,7 +1211,7 @@ impl AppState {
                     return Outcome::Dispatch { key, action };
                 }
             }
-            KeyInput::Esc | KeyInput::Backspace => {}
+            KeyInput::Esc | KeyInput::Backspace | KeyInput::CtrlChar(_) => {}
         }
         Outcome::Continue
     }
@@ -1052,7 +1229,8 @@ impl AppState {
             | KeyInput::PageDown
             | KeyInput::Enter
             | KeyInput::Backspace
-            | KeyInput::Char(_) => {}
+            | KeyInput::Char(_)
+            | KeyInput::CtrlChar(_) => {}
         }
         Outcome::Continue
     }
@@ -1083,6 +1261,7 @@ impl AppState {
                 self.clamp_selection_after_visible_rows_changed(before_key);
             }
             KeyInput::PageUp | KeyInput::PageDown => {}
+            KeyInput::CtrlChar(_) => {}
         }
         Outcome::Continue
     }
@@ -1097,31 +1276,45 @@ impl AppState {
             KeyInput::Up | KeyInput::Char('k') => self.move_menu_up(),
             KeyInput::Enter => return self.menu_enter(),
             KeyInput::Char('q') => return Outcome::Quit,
-            KeyInput::PageUp | KeyInput::PageDown | KeyInput::Char(_) | KeyInput::Backspace => {}
+            KeyInput::Char(ch) => return self.menu_shortcut(ch),
+            KeyInput::PageUp | KeyInput::PageDown | KeyInput::Backspace | KeyInput::CtrlChar(_) => {
+            }
         }
         Outcome::Continue
     }
 
-    fn handle_body_view_key(&mut self, key: KeyInput) -> Outcome {
+    fn handle_reader_key(&mut self, key: KeyInput) -> Outcome {
         match key {
-            KeyInput::Esc | KeyInput::Char('v') => self.close_body_view(),
-            KeyInput::Down | KeyInput::Char('j') => self.scroll_body_down(1),
-            KeyInput::Up | KeyInput::Char('k') => self.scroll_body_up(1),
-            KeyInput::PageDown => self.scroll_body_down(10),
-            KeyInput::PageUp => self.scroll_body_up(10),
-            KeyInput::Enter | KeyInput::Backspace | KeyInput::Char(_) => {}
+            KeyInput::Esc | KeyInput::Char('q') => self.close_reader(),
+            KeyInput::Down | KeyInput::Char('j') => self.scroll_reader_down(1),
+            KeyInput::Up | KeyInput::Char('k') => self.scroll_reader_up(1),
+            KeyInput::PageDown => self.scroll_reader_down(self.reader_viewport_height()),
+            KeyInput::PageUp => self.scroll_reader_up(self.reader_viewport_height()),
+            KeyInput::Char('d') | KeyInput::CtrlChar('d') => {
+                self.scroll_reader_down(self.reader_viewport_height() / 2)
+            }
+            KeyInput::Char('u') | KeyInput::CtrlChar('u') => {
+                self.scroll_reader_up(self.reader_viewport_height() / 2)
+            }
+            KeyInput::Char('g') => self.reader_scroll = 0,
+            KeyInput::Char('G') => self.reader_scroll = usize::MAX,
+            KeyInput::Enter | KeyInput::Backspace | KeyInput::Char(_) | KeyInput::CtrlChar(_) => {}
         }
         Outcome::Continue
     }
 
-    fn open_body_view(&mut self) {
-        self.body_view_open = true;
-        self.body_scroll = 0;
-        self.status_line = "j/k scroll  PgUp/PgDn page  v/Esc close".into();
+    fn open_reader(&mut self) {
+        if self.selected_row().is_some() {
+            self.mode = Mode::Reader;
+            self.reader_scroll = 0;
+            self.status_line = self.footer_keymap_summary();
+        } else {
+            self.status_line = self.copy.no_selection_status.into();
+        }
     }
 
-    fn close_body_view(&mut self) {
-        self.body_view_open = false;
+    fn close_reader(&mut self) {
+        self.mode = Mode::List;
         self.status_line = self.list_status_line();
     }
 
@@ -1164,24 +1357,24 @@ impl AppState {
         }
     }
 
-    fn scroll_body_down(&mut self, amount: usize) {
+    fn scroll_reader_down(&mut self, amount: usize) {
         if !self.body_lines().is_empty() {
-            self.body_scroll = self.body_scroll.saturating_add(amount);
+            self.reader_scroll = self.reader_scroll.saturating_add(amount.max(1));
         }
     }
 
-    fn scroll_body_up(&mut self, amount: usize) {
-        self.body_scroll = self.body_scroll.saturating_sub(amount);
+    fn scroll_reader_up(&mut self, amount: usize) {
+        self.reader_scroll = self.reader_scroll.saturating_sub(amount.max(1));
     }
 
-    fn clamp_body_scroll(&mut self) {
+    fn clamp_reader_scroll(&mut self) {
         if self.body_lines().is_empty() {
-            self.body_scroll = 0;
+            self.reader_scroll = 0;
         }
     }
 
-    pub(crate) fn clamp_body_scroll_to(&mut self, max_scroll: usize) {
-        self.body_scroll = self.body_scroll.min(max_scroll);
+    pub(crate) fn clamp_reader_scroll_to(&mut self, max_scroll: usize) {
+        self.reader_scroll = self.reader_scroll.min(max_scroll);
     }
 
     fn toggle_sidebar(&mut self) {
@@ -1324,6 +1517,20 @@ impl AppState {
         Outcome::Continue
     }
 
+    fn menu_shortcut(&self, ch: char) -> Outcome {
+        let Some(row) = self.selected_row() else {
+            return Outcome::Continue;
+        };
+        let shortcut = ch.to_string();
+        row.menu
+            .action_for_shortcut(&shortcut)
+            .map(|action| Outcome::Dispatch {
+                key: row.key.clone(),
+                action,
+            })
+            .unwrap_or(Outcome::Continue)
+    }
+
     fn shortcut_dispatch(&self, ch: char) -> Option<(String, OriginAction)> {
         let row = self.selected_row()?;
         let shortcut = ch.to_string();
@@ -1350,7 +1557,8 @@ fn handle_confirm_popup_key(selected: &mut bool, key: KeyInput) -> Option<PopupO
         | KeyInput::PageUp
         | KeyInput::PageDown
         | KeyInput::Backspace
-        | KeyInput::Char(_) => None,
+        | KeyInput::Char(_)
+        | KeyInput::CtrlChar(_) => None,
     }
 }
 
@@ -1387,7 +1595,11 @@ fn handle_select_popup_key(
             }
             None
         }
-        KeyInput::PageUp | KeyInput::PageDown | KeyInput::Backspace | KeyInput::Char(_) => None,
+        KeyInput::PageUp
+        | KeyInput::PageDown
+        | KeyInput::Backspace
+        | KeyInput::Char(_)
+        | KeyInput::CtrlChar(_) => None,
     }
 }
 
@@ -1403,7 +1615,11 @@ fn handle_input_popup_key(buffer: &mut String, key: KeyInput) -> Option<PopupOut
             buffer.push(ch);
             None
         }
-        KeyInput::Up | KeyInput::Down | KeyInput::PageUp | KeyInput::PageDown => None,
+        KeyInput::Up
+        | KeyInput::Down
+        | KeyInput::PageUp
+        | KeyInput::PageDown
+        | KeyInput::CtrlChar(_) => None,
     }
 }
 
@@ -1581,6 +1797,46 @@ mod tests {
         AppState::new(vec![browser_row])
     }
 
+    fn list_mode_bound_char_keys() -> std::collections::HashSet<char> {
+        let keymap_text = LIST_KEYMAP
+            .iter()
+            .map(|entry| entry.key)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let bound = [
+            'j', 'k', 'g', 'G', 'v', 's', '?', 'r', 'i', '/', 'm', 'q', 'h', 'l',
+        ];
+        for ch in bound {
+            assert!(
+                keymap_text.contains(ch),
+                "hard-bound List key '{ch}' missing from keymap"
+            );
+        }
+        bound.into_iter().collect()
+    }
+
+    fn all_menu_shortcuts() -> Vec<String> {
+        [
+            OriginActionMenu::for_origin_task(
+                "origin-sync-tui",
+                "Origin sync TUI",
+                OriginLabel::new("linear", "WT-142"),
+            ),
+            OriginActionMenu::for_local_task("scratch-clean", "Scratch cleanup"),
+            OriginActionMenu::for_origin_issue_placeholder("Provider issue"),
+            OriginActionMenu::for_workflow(
+                "workflow",
+                "Workflow",
+                Some(OriginLabel::new("linear", "WT-143")),
+                Vec::new(),
+            ),
+            OriginActionMenu::for_workflow("workflow", "Workflow", None, Vec::new()),
+        ]
+        .into_iter()
+        .flat_map(|menu| menu.all_shortcuts().map(str::to_string).collect::<Vec<_>>())
+        .collect()
+    }
+
     #[test]
     fn popup_owns_keys_and_esc_cancels() {
         let mut app = app();
@@ -1692,34 +1948,36 @@ mod tests {
     }
 
     #[test]
-    fn v_key_toggles_body_view_and_esc_closes() {
+    fn enter_opens_reader_and_esc_returns_with_selection_preserved() {
         let mut app = app();
-        assert!(!app.body_view_open());
-        app.handle(KeyInput::Char('v'));
-        assert!(app.body_view_open());
+        app.handle(KeyInput::Down);
+        let before = app.selected_row().map(|row| row.key.clone());
+        app.handle(KeyInput::Enter);
+        assert_eq!(app.mode(), Mode::Reader);
         app.handle(KeyInput::Esc);
-        assert!(!app.body_view_open());
+        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.selected_row().map(|row| row.key.clone()), before);
     }
 
     #[test]
-    fn body_view_scrolls_and_blocks_dispatch() {
+    fn reader_scrolls_and_blocks_dispatch() {
         let mut app = app_with_body("one\ntwo\nthree\nfour");
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
         app.handle(KeyInput::Char('j'));
-        assert_eq!(app.body_scroll(), 1);
+        assert_eq!(app.reader_scroll(), 1);
 
         let outcome = app.handle(KeyInput::Enter);
         assert_eq!(outcome, Outcome::Continue);
-        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.mode(), Mode::Reader);
         assert_eq!(app.handle(KeyInput::Char('d')), Outcome::Continue);
     }
 
     #[test]
-    fn a_key_requests_archive_dispatch_for_selected() {
+    fn capital_a_requests_archive_dispatch_for_selected() {
         let mut app = app();
 
         assert_eq!(
-            app.handle(KeyInput::Char('a')),
+            app.handle(KeyInput::Char('A')),
             Outcome::Dispatch {
                 key: "origin-sync-tui".into(),
                 action: OriginAction::Archive
@@ -1728,9 +1986,9 @@ mod tests {
     }
 
     #[test]
-    fn a_key_ignored_during_body_view() {
+    fn a_key_ignored_during_reader() {
         let mut app = app();
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         assert_eq!(app.handle(KeyInput::Char('a')), Outcome::Continue);
     }
@@ -1739,7 +1997,7 @@ mod tests {
     fn task_status_line_mentions_archive_shortcut() {
         let app = app();
 
-        assert!(app.status_line().contains("a archive"));
+        assert!(app.status_line().contains("A archive"));
     }
 
     #[test]
@@ -1753,22 +2011,33 @@ mod tests {
     fn workflow_status_line_omits_archive_shortcut() {
         let app = AppState::workflow_with_diagnostics(Vec::new(), Vec::new());
 
-        assert!(!app.status_line().contains("a archive"));
+        assert!(!app.status_line().contains("A archive"));
         assert!(!app.status_line().contains("h/l view"));
     }
 
     #[test]
-    fn body_view_page_keys_scroll_by_larger_steps() {
+    fn reader_half_page_and_jump_keys_scroll() {
         let body = (0..20)
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
         let mut app = app_with_body(&body);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
+        app.set_reader_viewport_height(20);
+        app.handle(KeyInput::Char('d'));
+        assert_eq!(app.reader_scroll(), 10);
+        app.handle(KeyInput::CtrlChar('d'));
+        assert_eq!(app.reader_scroll(), 20);
+        app.handle(KeyInput::Char('G'));
+        assert!(app.reader_scroll() > 20);
+        app.handle(KeyInput::Char('g'));
+        assert_eq!(app.reader_scroll(), 0);
+        app.handle(KeyInput::Char('u'));
+        assert_eq!(app.reader_scroll(), 0);
         app.handle(KeyInput::PageDown);
-        assert_eq!(app.body_scroll(), 10);
+        assert_eq!(app.reader_scroll(), 20);
         app.handle(KeyInput::PageUp);
-        assert_eq!(app.body_scroll(), 0);
+        assert_eq!(app.reader_scroll(), 0);
     }
 
     #[test]
@@ -2042,6 +2311,21 @@ mod tests {
     }
 
     #[test]
+    fn replacing_local_rows_preserves_inflight_origin_fetch() {
+        let mut app = AppState::new(vec![source_row("local-a", "local")]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.begin_origin_fetch();
+
+        app.replace_rows_preserving_selection(
+            vec![source_row("local-b", "local")],
+            Vec::new(),
+            "local-a",
+        );
+
+        assert!(app.origin_fetching());
+    }
+
+    #[test]
     fn invalidate_origin_only_resets_loaded_origin_cache() {
         let mut app = AppState::new(vec![]);
         app.set_source_view_for_test(SourceView::OriginOnly);
@@ -2126,7 +2410,7 @@ mod tests {
         app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
         assert_eq!(app.handle(KeyInput::Char('h')), Outcome::Continue);
         assert_eq!(app.handle(KeyInput::Char('l')), Outcome::Continue);
-        assert_eq!(app.handle(KeyInput::Char('r')), Outcome::FetchOriginIssues);
+        assert_eq!(app.handle(KeyInput::Char('r')), Outcome::Refresh);
     }
 
     #[test]
@@ -2380,8 +2664,8 @@ mod tests {
         assert!(app.help_open());
 
         let keys = app.help_keymap();
-        assert!(keys.iter().any(|(key, _)| *key == "s"));
-        assert!(keys.iter().any(|(key, _)| *key == "h/l"));
+        assert!(keys.iter().any(|(_, key, _)| *key == "s"));
+        assert!(keys.iter().any(|(_, key, _)| *key == "h/l"));
 
         app.handle(KeyInput::Char('?'));
         assert!(!app.help_open());
@@ -2401,16 +2685,33 @@ mod tests {
         let app = AppState::new(vec![source_row("a", "local")]);
         let keys = app.help_keymap();
 
-        assert!(keys.iter().any(|(key, _)| *key == "q"));
-        assert!(keys.iter().any(|(key, desc)| {
-            app.status_line().contains(*key) && app.status_line().contains(*desc)
+        assert!(keys.iter().any(|(_, key, _)| *key == "q"));
+        assert!(keys.iter().any(|(mode, key, desc)| {
+            *mode == Mode::List
+                && app.status_line().contains(*key)
+                && app.status_line().contains(*desc)
         }));
+    }
+
+    #[test]
+    fn footer_swaps_entirely_per_mode() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+        let list_footer = app.status_line().to_string();
+        assert!(list_footer.contains("Enter/v"));
+        assert!(list_footer.contains("m actions"));
+
+        app.handle(KeyInput::Enter);
+
+        let reader_footer = app.status_line().to_string();
+        assert!(reader_footer.contains("d/u"));
+        assert!(reader_footer.contains("g/G"));
+        assert!(!reader_footer.contains("sidebar"));
     }
 
     #[test]
     fn show_dispatch_message_closes_menu_and_fills_status_line() {
         let mut app = app();
-        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('m'));
         assert_eq!(app.mode(), Mode::Menu);
 
         app.show_dispatch_message("Copied reference linear:WT-142".into());
@@ -2429,25 +2730,26 @@ mod tests {
     }
 
     #[test]
-    fn enter_shows_menu_status_hint() {
+    fn m_shows_menu_status_hint() {
         let mut app = app();
-        assert_eq!(app.handle(KeyInput::Enter), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('m')), Outcome::Continue);
         assert!(app.status_line().contains("Enter run"));
     }
 
     #[test]
-    fn enter_opens_menu_and_esc_returns_to_list() {
+    fn m_opens_menu_and_enter_no_longer_does() {
         let mut app = app();
-        assert_eq!(app.handle(KeyInput::Enter), Outcome::Continue);
+        assert_eq!(app.handle(KeyInput::Char('m')), Outcome::Continue);
         assert_eq!(app.mode(), Mode::Menu);
         app.handle(KeyInput::Esc);
-        assert_eq!(app.mode(), Mode::List);
+        app.handle(KeyInput::Enter);
+        assert_eq!(app.mode(), Mode::Reader);
     }
 
     #[test]
     fn menu_enter_on_enabled_item_requests_dispatch() {
         let mut app = app();
-        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('m'));
         let outcome = app.handle(KeyInput::Enter);
         assert_eq!(
             outcome,
@@ -2461,7 +2763,7 @@ mod tests {
     #[test]
     fn menu_enter_on_archive_item_requests_dispatch() {
         let mut app = app();
-        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('m'));
         let item_count = app.selected_row().unwrap().menu.items().len();
 
         for _ in 0..item_count {
@@ -2487,7 +2789,7 @@ mod tests {
     #[test]
     fn menu_enter_on_disabled_item_shows_reason_and_stays() {
         let mut app = app();
-        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('m'));
         let item_count = app.selected_row().unwrap().menu.items().len();
         for _ in 0..item_count {
             if app.menu_selection_is_disabled() {
@@ -2515,6 +2817,44 @@ mod tests {
         app.handle(KeyInput::Down);
         app.handle(KeyInput::Down);
         assert_eq!(app.handle(KeyInput::Char('P')), Outcome::Continue);
+    }
+
+    #[test]
+    fn r_requests_refresh_outcome_in_local_views() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+
+        assert_eq!(app.handle(KeyInput::Char('r')), Outcome::Refresh);
+    }
+
+    #[test]
+    fn menu_char_shortcut_dispatches_enabled_item() {
+        let mut app = app();
+        app.handle(KeyInput::Char('m'));
+
+        assert_eq!(
+            app.handle(KeyInput::Char('d')),
+            Outcome::Dispatch {
+                key: "origin-sync-tui".into(),
+                action: OriginAction::Diff
+            }
+        );
+    }
+
+    #[test]
+    fn keymap_does_not_shadow_any_enabled_menu_shortcut() {
+        let bound = list_mode_bound_char_keys();
+        for shortcut in all_menu_shortcuts() {
+            if shortcut == "i" {
+                continue;
+            }
+            if shortcut.chars().count() == 1 {
+                let ch = shortcut.chars().next().unwrap();
+                assert!(
+                    !bound.contains(&ch),
+                    "menu shortcut '{ch}' shadowed by list keymap"
+                );
+            }
+        }
     }
 
     #[test]

@@ -26,15 +26,15 @@ enum DetailSidebarLayout {
 
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
     let area = frame.area();
-    let show_body = app.body_view_open();
+    let show_reader = app.reader_open();
     let show_output = !app.output_lines().is_empty();
     let header_height = header_height(app, area);
-    let detail_layout = if show_body {
+    let detail_layout = if show_reader {
         DetailSidebarLayout::Hidden
     } else {
         resolve_detail_sidebar_layout(area, app, header_height, show_output)
     };
-    let row_min_height = if show_body || matches!(detail_layout, DetailSidebarLayout::Bottom) {
+    let row_min_height = if show_reader || matches!(detail_layout, DetailSidebarLayout::Bottom) {
         5
     } else {
         1
@@ -55,8 +55,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
     let mut chunk_index = 0;
     draw_header(frame, chunks[chunk_index], app);
     chunk_index += 1;
-    if show_body {
-        draw_body_view(frame, chunks[chunk_index], app);
+    if show_reader {
+        draw_reader(frame, chunks[chunk_index], app);
     } else if let DetailSidebarLayout::Right(sidebar_width) = detail_layout {
         let row_chunks =
             Layout::horizontal([Constraint::Min(1), Constraint::Length(sidebar_width)])
@@ -534,8 +534,9 @@ fn draw_output_panel(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     frame.render_widget(output, area);
 }
 
-fn draw_body_view(frame: &mut Frame<'_>, area: Rect, app: &mut AppState) {
+fn draw_reader(frame: &mut Frame<'_>, area: Rect, app: &mut AppState) {
     let visible_count = area.height.saturating_sub(2) as usize;
+    app.set_reader_viewport_height(visible_count);
     let content_width = area.width.saturating_sub(2).max(1) as usize;
     let body_lines = app.wrapped_body_lines(content_width);
     let mut visual_lines = body_lines
@@ -547,13 +548,20 @@ fn draw_body_view(frame: &mut Frame<'_>, area: Rect, app: &mut AppState) {
     }
 
     let max_start = body_viewport_max_start(visual_lines.len(), visible_count);
-    app.clamp_body_scroll_to(max_start);
-    let start = app.body_scroll();
+    app.clamp_reader_scroll_to(max_start);
+    let start = app.reader_scroll();
     let percent = body_scroll_percent(visual_lines.len(), visible_count, start);
+    let total = visual_lines.len();
+    let first = if total == 0 {
+        0
+    } else {
+        start.saturating_add(1).min(total)
+    };
+    let last = start.saturating_add(visible_count).min(total);
     let title = app
         .selected_row()
-        .map(|row| format!("Body {} {percent}%", row.title))
-        .unwrap_or_else(|| format!("Body {percent}%"));
+        .map(|row| format!("Reader {} {first}-{last}/{total} {percent}%", row.title))
+        .unwrap_or_else(|| format!("Reader {first}-{last}/{total} {percent}%"));
     let rendered_lines = visual_lines
         .into_iter()
         .skip(start)
@@ -618,14 +626,36 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 
 fn draw_help_popup(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let keymap = app.help_keymap();
-    let desired_height = keymap.len().div_ceil(2) as u16 + 2;
-    let area = popup_rect(area, desired_height);
+    let desired_height = [Mode::List, Mode::Reader, Mode::Menu, Mode::FilterInput]
+        .into_iter()
+        .map(|mode| {
+            let entry_count = keymap
+                .iter()
+                .filter(|(entry_mode, _, _)| *entry_mode == mode)
+                .count();
+            if entry_count == 0 {
+                0
+            } else {
+                1 + entry_count.div_ceil(2)
+            }
+        })
+        .sum::<usize>() as u16
+        + 2;
+    let area = help_popup_rect(area, desired_height);
     frame.render_widget(Clear, area);
-    let lines = keymap
-        .chunks(2)
-        .map(|chunk| {
+    let mut lines = Vec::new();
+    for mode in [Mode::List, Mode::Reader, Mode::Menu, Mode::FilterInput] {
+        let entries = keymap
+            .iter()
+            .filter(|(entry_mode, _, _)| *entry_mode == mode)
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
+            continue;
+        }
+        lines.push(Line::styled(help_mode_label(mode), theme::chrome_style()));
+        lines.extend(entries.chunks(2).map(|chunk| {
             let mut spans = Vec::new();
-            for (index, (key, desc)) in chunk.iter().enumerate() {
+            for (index, (_, key, desc)) in chunk.iter().enumerate() {
                 if index > 0 {
                     spans.push(Span::styled("  |  ", theme::dim_style()));
                 }
@@ -633,10 +663,19 @@ fn draw_help_popup(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
                 spans.push(Span::raw(desc.to_string()));
             }
             Line::from(spans)
-        })
-        .collect::<Vec<_>>();
+        }));
+    }
     let popup = Paragraph::new(lines).block(popup_block("Help"));
     frame.render_widget(popup, area);
+}
+
+fn help_mode_label(mode: Mode) -> &'static str {
+    match mode {
+        Mode::List => "List",
+        Mode::Reader => "Reader",
+        Mode::Menu => "Menu",
+        Mode::FilterInput => "Filter",
+    }
 }
 
 fn centered_rect(area: Rect) -> Rect {
@@ -651,6 +690,18 @@ fn centered_rect(area: Rect) -> Rect {
 
 fn popup_rect(area: Rect, desired_height: u16) -> Rect {
     let max_height = area.height.saturating_mul(60).saturating_div(100).max(3);
+    let height = desired_height.min(max_height).min(area.height.max(1));
+    let [area] = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [area] = Layout::horizontal([Constraint::Percentage(70)])
+        .flex(Flex::Center)
+        .areas(area);
+    area
+}
+
+fn help_popup_rect(area: Rect, desired_height: u16) -> Rect {
+    let max_height = area.height.saturating_sub(2).max(3);
     let height = desired_height.min(max_height).min(area.height.max(1));
     let [area] = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
@@ -1388,7 +1439,7 @@ mod tests {
     }
 
     #[test]
-    fn body_view_renders_markup_body_instead_of_preview() {
+    fn reader_renders_markup_body_instead_of_preview() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body =
             "## 계획 (Planning)\n- [ ] Step 1\n```rust\nlet x = 1;\n```\nplain".into();
@@ -1398,7 +1449,7 @@ mod tests {
 
         let text = buffer_text(80, 24, &app);
 
-        assert!(text.contains("Body Origin sync TUI"));
+        assert!(text.contains("Reader Origin sync TUI"));
         assert!(text.contains("(Planning)"));
         assert!(text.contains("☐ Step 1"));
         assert!(text.contains("let x = 1;"));
@@ -1406,7 +1457,7 @@ mod tests {
     }
 
     #[test]
-    fn body_view_empty_body_renders_no_body_message() {
+    fn reader_empty_body_renders_no_body_message() {
         let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
         app.handle(KeyInput::Char('v'));
 
@@ -1416,7 +1467,7 @@ mod tests {
     }
 
     #[test]
-    fn body_view_scroll_reaches_wrapped_tail_of_long_single_line() {
+    fn reader_scroll_reaches_wrapped_tail_of_long_single_line() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         let mut words = (0..40)
             .map(|index| format!("word{index}"))
@@ -1437,11 +1488,11 @@ mod tests {
             }
         }
 
-        panic!("expected body view scroll to reach wrapped tail of a long source line");
+        panic!("expected reader scroll to reach wrapped tail of a long source line");
     }
 
     #[test]
-    fn body_view_strips_terminal_control_sequences_from_untrusted_body() {
+    fn reader_strips_terminal_control_sequences_from_untrusted_body() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body =
             "plain\x1b[31mred\x1b[0m\nosc\x1b]0;title\x07done\nc1\u{009b}31mred".into();
@@ -1456,12 +1507,12 @@ mod tests {
         assert!(text.contains("c1red"));
         assert!(
             !has_terminal_control_cell(&buffer, 80, 24),
-            "body view should not render terminal control characters from imported body text"
+            "reader should not render terminal control characters from imported body text"
         );
     }
 
     #[test]
-    fn body_view_normalizes_tabs_from_untrusted_body() {
+    fn reader_normalizes_tabs_from_untrusted_body() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body = "alpha\tbeta\n- [ ] gamma\tdelta".into();
         let mut app = AppState::new(vec![browser_row]);
@@ -1474,12 +1525,12 @@ mod tests {
         assert!(text.contains("☐ gamma delta"));
         assert!(
             !has_terminal_control_cell(&buffer, 80, 24),
-            "body view should render imported tab characters as inert spacing"
+            "reader should render imported tab characters as inert spacing"
         );
     }
 
     #[test]
-    fn body_view_scroll_up_moves_immediately_after_bottom_overscroll() {
+    fn reader_scroll_up_moves_immediately_after_bottom_overscroll() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body = (0..20)
             .map(|index| format!("line-{index:02}"))
@@ -1499,12 +1550,12 @@ mod tests {
 
         assert!(
             !after_one_up.contains("line-19"),
-            "first scroll-up after bottom overscroll should move the body view"
+            "first scroll-up after bottom overscroll should move the reader"
         );
     }
 
     #[test]
-    fn body_view_remains_colorless_when_colors_disabled() {
+    fn reader_remains_colorless_when_colors_disabled() {
         let _guard = ColorGuard::set(false);
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body = "## Heading\n- [x] Done".into();
@@ -1515,14 +1566,14 @@ mod tests {
 
         assert!(
             !has_colored_cell(&buffer, 80, 24),
-            "body view should not contain semantic or chrome colors when colors are disabled"
+            "reader should not contain semantic or chrome colors when colors are disabled"
         );
     }
 
     #[test]
     fn renders_action_menu_overlay() {
         let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
-        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('m'));
 
         let text = buffer_text(100, 24, &app);
 
@@ -1553,7 +1604,7 @@ mod tests {
 
         let text = buffer_text(100, 24, &app);
 
-        for (key, _) in keys {
+        for (_, key, _) in keys {
             assert!(text.contains(key), "missing help key {key} in:\n{text}");
         }
     }

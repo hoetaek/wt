@@ -30,14 +30,14 @@ impl OriginActionMenu {
             items: vec![
                 OriginActionItem::enabled(OriginAction::Publish, "Publish as issue", "pub")
                     .external_write(),
-                OriginActionItem::enabled(OriginAction::Attach, "Attach existing issue", "A"),
+                OriginActionItem::enabled(OriginAction::Attach, "Attach existing issue", "t"),
                 OriginActionItem::enabled(
                     OriginAction::KeepLocal,
                     "Keep local-only for this task",
                     "L",
                 ),
-                OriginActionItem::enabled(OriginAction::Archive, "Archive task", "a"),
-                OriginActionItem::enabled(OriginAction::CopyReference, "Copy task key", "y"),
+                OriginActionItem::enabled(OriginAction::Archive, "Archive task", "A"),
+                OriginActionItem::enabled(OriginAction::CopyReference, "Copy task key", "Y"),
                 OriginActionItem::disabled(
                     OriginAction::Diff,
                     "Diff with issue",
@@ -90,13 +90,13 @@ impl OriginActionMenu {
                 OriginActionItem::enabled(
                     OriginAction::CopyReference,
                     "Copy origin reference",
-                    "y",
+                    "Y",
                 ),
-                OriginActionItem::enabled(OriginAction::Archive, "Archive task", "a"),
+                OriginActionItem::enabled(OriginAction::Archive, "Archive task", "A"),
                 OriginActionItem::disabled(
                     OriginAction::Attach,
                     "Attach different origin",
-                    "A",
+                    "t",
                     "origin replacement not supported",
                 ),
                 OriginActionItem::disabled(
@@ -144,12 +144,12 @@ impl OriginActionMenu {
                 OriginActionItem::enabled(
                     OriginAction::CopyReference,
                     "Copy workflow origin reference",
-                    "y",
+                    "Y",
                 ),
                 OriginActionItem::enabled(
                     OriginAction::Attach,
                     "Attach different workflow origin",
-                    "A",
+                    "t",
                 ),
             ]
         } else {
@@ -158,7 +158,7 @@ impl OriginActionMenu {
                 OriginActionItem::enabled(
                     OriginAction::Attach,
                     "Attach existing workflow issue",
-                    "A",
+                    "t",
                 ),
                 OriginActionItem::disabled(
                     OriginAction::Diff,
@@ -194,7 +194,7 @@ impl OriginActionMenu {
                 OriginActionItem::disabled(
                     OriginAction::CopyReference,
                     "Copy workflow origin reference",
-                    "y",
+                    "Y",
                     no_origin_reason,
                 ),
             ]
@@ -243,6 +243,11 @@ impl OriginActionMenu {
 
     pub fn items(&self) -> &[OriginActionItem] {
         &self.items
+    }
+
+    #[cfg(test)]
+    pub(crate) fn all_shortcuts(&self) -> impl Iterator<Item = &str> {
+        self.items.iter().map(|item| item.shortcut.as_str())
     }
 
     pub fn item(&self, index: usize) -> Option<&OriginActionItem> {
@@ -719,9 +724,14 @@ mod tests {
             OriginLabel::new("linear", "WT-142"),
         );
         assert_eq!(origin.action_for_shortcut("P"), Some(OriginAction::Push));
-        assert_eq!(origin.action_for_shortcut("a"), Some(OriginAction::Archive));
+        assert_eq!(origin.action_for_shortcut("A"), Some(OriginAction::Archive));
+        assert_eq!(
+            origin.action_for_shortcut("Y"),
+            Some(OriginAction::CopyReference)
+        );
         let local = OriginActionMenu::for_local_task("scratch-clean", "Scratch cleanup");
-        assert_eq!(local.action_for_shortcut("a"), Some(OriginAction::Archive));
+        assert_eq!(local.action_for_shortcut("A"), Some(OriginAction::Archive));
+        assert_eq!(local.action_for_shortcut("t"), Some(OriginAction::Attach));
         assert_eq!(local.action_for_shortcut("P"), None);
     }
 
