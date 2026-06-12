@@ -244,6 +244,7 @@ pub(crate) struct AppState {
     selected_index: usize,
     selected_keys: HashSet<String>,
     range_anchor_key: Option<String>,
+    range_prior_selected_keys: HashSet<String>,
     menu_selected_index: usize,
     mode: Mode,
     status_line: String,
@@ -663,6 +664,7 @@ impl AppState {
             selected_index: 0,
             selected_keys: HashSet::new(),
             range_anchor_key: None,
+            range_prior_selected_keys: HashSet::new(),
             menu_selected_index: 0,
             mode: Mode::List,
             status_line: String::new(),
@@ -1109,6 +1111,7 @@ impl AppState {
         {
             self.mode = Mode::List;
             self.range_anchor_key = None;
+            self.range_prior_selected_keys.clear();
         }
         if self.mode != Mode::RangeSelect {
             self.mode = Mode::List;
@@ -1450,14 +1453,16 @@ impl AppState {
             self.status_line = self.copy.no_selection_status.into();
             return;
         };
-        self.selected_keys.insert(key.clone());
+        self.range_prior_selected_keys = self.selected_keys.clone();
         self.range_anchor_key = Some(key);
         self.mode = Mode::RangeSelect;
+        self.select_range_to_cursor();
         self.status_line = self.footer_keymap_summary();
     }
 
     fn exit_range_select(&mut self) {
         self.range_anchor_key = None;
+        self.range_prior_selected_keys.clear();
         self.mode = Mode::List;
         self.status_line = self.list_status_line();
     }
@@ -1610,11 +1615,15 @@ impl AppState {
         } else {
             self.selected_keys.extend(keys);
         }
+        if self.mode == Mode::RangeSelect {
+            self.range_prior_selected_keys = self.selected_keys.clone();
+        }
     }
 
     fn clear_selection(&mut self) {
         self.selected_keys.clear();
         self.range_anchor_key = None;
+        self.range_prior_selected_keys.clear();
     }
 
     fn select_range_to_cursor(&mut self) {
@@ -1638,6 +1647,7 @@ impl AppState {
             .iter()
             .map(|row| row.key.clone())
             .collect::<Vec<_>>();
+        self.selected_keys = self.range_prior_selected_keys.clone();
         self.selected_keys.extend(range_keys);
     }
 
@@ -1686,6 +1696,8 @@ impl AppState {
             .map(|row| row.key.clone())
             .collect::<HashSet<_>>();
         self.selected_keys
+            .retain(|key| available_keys.contains(key));
+        self.range_prior_selected_keys
             .retain(|key| available_keys.contains(key));
     }
 
@@ -2336,6 +2348,54 @@ mod tests {
 
         assert_eq!(app.mode(), Mode::List);
         assert_eq!(app.selected_key_count(), 3);
+    }
+
+    #[test]
+    fn range_select_recomputes_selection_when_cursor_moves_back() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+
+        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('k'));
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+
+        assert_eq!(count, 2);
+        assert!(text.contains("a"));
+        assert!(text.contains("b"));
+        assert!(!text.contains("c"));
+    }
+
+    #[test]
+    fn range_select_preserves_prior_selection_outside_current_range() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char(' '));
+        app.handle(KeyInput::Char('g'));
+
+        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('k'));
+        app.handle(KeyInput::Esc);
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+
+        assert_eq!(count, 2);
+        assert!(text.contains("a"));
+        assert!(!text.contains("b"));
+        assert!(text.contains("c"));
     }
 
     #[test]
