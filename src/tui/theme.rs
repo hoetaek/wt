@@ -77,6 +77,15 @@ pub(crate) fn selected_style() -> Style {
     }
 }
 
+pub(crate) fn marked_style() -> Style {
+    let style = Style::default().add_modifier(Modifier::BOLD);
+    if colors_active() {
+        style.fg(Color::Blue)
+    } else {
+        style
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

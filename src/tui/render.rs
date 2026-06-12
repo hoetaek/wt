@@ -6,7 +6,7 @@ use crate::tui::theme;
 use console::measure_text_width;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 
@@ -455,10 +455,16 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
 }
 
 fn row_style(app: &AppState, index: usize) -> Style {
-    if app.selected_visible_index() == Some(index) {
-        theme::selected_style()
-    } else {
-        Style::default()
+    let marked = app
+        .visible_rows()
+        .get(index)
+        .is_some_and(|row| app.is_row_marked(&row.key));
+    let selected = app.selected_visible_index() == Some(index);
+    match (selected, marked) {
+        (true, true) => theme::selected_style().add_modifier(Modifier::BOLD),
+        (true, false) => theme::selected_style(),
+        (false, true) => theme::marked_style(),
+        (false, false) => Style::default(),
     }
 }
 
@@ -624,25 +630,37 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 
 fn draw_help_popup(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let keymap = app.help_keymap();
-    let desired_height = [Mode::List, Mode::Reader, Mode::Menu, Mode::FilterInput]
-        .into_iter()
-        .map(|mode| {
-            let entry_count = keymap
-                .iter()
-                .filter(|(entry_mode, _, _)| *entry_mode == mode)
-                .count();
-            if entry_count == 0 {
-                0
-            } else {
-                1 + entry_count.div_ceil(2)
-            }
-        })
-        .sum::<usize>() as u16
+    let desired_height = [
+        Mode::List,
+        Mode::RangeSelect,
+        Mode::Reader,
+        Mode::Menu,
+        Mode::FilterInput,
+    ]
+    .into_iter()
+    .map(|mode| {
+        let entry_count = keymap
+            .iter()
+            .filter(|(entry_mode, _, _)| *entry_mode == mode)
+            .count();
+        if entry_count == 0 {
+            0
+        } else {
+            1 + entry_count.div_ceil(3)
+        }
+    })
+    .sum::<usize>() as u16
         + 2;
     let area = help_popup_rect(area, desired_height);
     frame.render_widget(Clear, area);
     let mut lines = Vec::new();
-    for mode in [Mode::List, Mode::Reader, Mode::Menu, Mode::FilterInput] {
+    for mode in [
+        Mode::List,
+        Mode::RangeSelect,
+        Mode::Reader,
+        Mode::Menu,
+        Mode::FilterInput,
+    ] {
         let entries = keymap
             .iter()
             .filter(|(entry_mode, _, _)| *entry_mode == mode)
@@ -651,7 +669,7 @@ fn draw_help_popup(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
             continue;
         }
         lines.push(Line::styled(help_mode_label(mode), theme::chrome_style()));
-        lines.extend(entries.chunks(2).map(|chunk| {
+        lines.extend(entries.chunks(3).map(|chunk| {
             let mut spans = Vec::new();
             for (index, (_, key, desc)) in chunk.iter().enumerate() {
                 if index > 0 {
@@ -670,6 +688,7 @@ fn draw_help_popup(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 fn help_mode_label(mode: Mode) -> &'static str {
     match mode {
         Mode::List => "List",
+        Mode::RangeSelect => "RangeSelect",
         Mode::Reader => "Reader",
         Mode::Menu => "Menu",
         Mode::FilterInput => "Filter",
@@ -1087,6 +1106,24 @@ mod tests {
         })
     }
 
+    fn first_cell_style_on_line_with(
+        buffer: &Buffer,
+        width: u16,
+        height: u16,
+        text: &str,
+    ) -> Option<Style> {
+        let chars = text.chars().collect::<Vec<_>>();
+        (0..height).find_map(|y| {
+            (0..=width.saturating_sub(chars.len() as u16)).find_map(|x| {
+                chars
+                    .iter()
+                    .enumerate()
+                    .all(|(offset, ch)| buffer[(x + offset as u16, y)].symbol() == ch.to_string())
+                    .then(|| buffer[(x, y)].style())
+            })
+        })
+    }
+
     fn has_colored_cell(buffer: &Buffer, width: u16, height: u16) -> bool {
         (0..height).any(|y| {
             (0..width).any(|x| {
@@ -1118,6 +1155,22 @@ mod tests {
         assert!(text.contains("Origin sync TUI"));
         assert!(text.contains("Linear WT-142"));
         assert!(text.contains("q quit"));
+    }
+
+    #[test]
+    fn marked_row_renders_with_bold_style() {
+        let mut app = AppState::new(vec![
+            row("a", "Task A", "stale"),
+            row("b", "Task B", "stale"),
+        ]);
+        app.handle(KeyInput::Down);
+        app.handle(KeyInput::Char(' '));
+        app.handle(KeyInput::Up);
+
+        let buffer = render_buffer(80, 24, &app);
+        let style = first_cell_style_on_line_with(&buffer, 80, 24, "Task B").unwrap();
+
+        assert!(style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -1497,7 +1550,7 @@ mod tests {
             "## 계획 (Planning)\n- [ ] Step 1\n```rust\nlet x = 1;\n```\nplain".into();
         browser_row.preview_lines = vec!["PREVIEW-MARKER".into()];
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let text = buffer_text(80, 24, &app);
 
@@ -1511,7 +1564,7 @@ mod tests {
     #[test]
     fn reader_empty_body_renders_no_body_message() {
         let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let text = buffer_text(80, 24, &app);
 
@@ -1527,7 +1580,7 @@ mod tests {
         words.push("tail-marker".into());
         browser_row.body = words.join(" ");
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let initial = buffer_text(32, 10, &app);
         assert!(!initial.contains("tail-marker"));
@@ -1549,7 +1602,7 @@ mod tests {
         browser_row.body =
             "plain\x1b[31mred\x1b[0m\nosc\x1b]0;title\x07done\nc1\u{009b}31mred".into();
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let buffer = render_buffer(80, 24, &app);
         let text = buffer_text(80, 24, &app);
@@ -1568,7 +1621,7 @@ mod tests {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body = "alpha\tbeta\n- [ ] gamma\tdelta".into();
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let buffer = render_buffer(80, 24, &app);
         let text = buffer_text(80, 24, &app);
@@ -1590,7 +1643,7 @@ mod tests {
             .join("\n");
         browser_row.body = format!("```\n{code}\n```");
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         for _ in 0..30 {
             app.handle(KeyInput::Char('j'));
@@ -1613,7 +1666,7 @@ mod tests {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body = "## Heading\n- [x] Done".into();
         let mut app = AppState::new(vec![browser_row]);
-        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Enter);
 
         let buffer = render_buffer(80, 24, &app);
 

@@ -35,6 +35,17 @@ allow = [
 [licenses.private]
 ignore = true
 
+# Restrict the evaluated dependency graph to the targets we actually ship
+# (see [package.metadata.dist] in Cargo.toml). Without this, cargo-deny also
+# pulls Windows-only crates such as arboard's clipboard-win (BSL-1.0), which we
+# never build or distribute.
+[graph]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+]
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"

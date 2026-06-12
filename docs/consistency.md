@@ -1210,8 +1210,11 @@ worktree, local branch, TaskRun, Workflow, provider issue, pull request, agent s
 계속 `wt list`가 맡는다.
 
 Task list TUI에서 Enter는 선택된 TaskDocument body 전문을 browser를 떠나지 않고 읽는
-full-screen Reader 모드를 연다. `v`는 후속 range-select PR 전까지 Reader를 여는 임시
-별칭이다. Reader는 같은 terminal surface 안의 vertical band layout이며, 선택 task title,
+full-screen Reader 모드를 연다. `v`는 RangeSelect 모드를 열어 현재 row를 anchor로 삼고,
+`j`/`k`로 anchor부터 cursor까지의 visible row range를 선택한다. Space는 현재 row 선택을
+toggle하고, `a`는 visible row 전체 선택을 toggle한다. `y`는 선택된 visible row를, 선택이
+없으면 현재 row 하나를 현재 표시 column 순서의 tab-separated text로 clipboard에 복사한다.
+Reader는 같은 terminal surface 안의 vertical band layout이며, 선택 task title,
 wrap 후 줄 범위, scroll percent indicator를 함께 보여주고 `j`/`k`, `d`/`u`,
 Ctrl-D/Ctrl-U, PageUp/PageDown, `g`/`G`로 스크롤하며, `r`은 선택 row의 로컬 source
 file에서 body를 다시 읽는다. Local scaffold body는 알려진
