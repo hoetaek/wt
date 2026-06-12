@@ -325,9 +325,13 @@ impl MouseGestureTracker {
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 let active = self.active.as_mut()?;
-                let visible_index =
-                    crate::tui::render::table_mouse_target(app, mouse.column, mouse.row)?;
-                if visible_index == active.visible_index {
+                let Some(visible_index) =
+                    crate::tui::render::table_mouse_target(app, mouse.column, mouse.row)
+                else {
+                    active.dragged = true;
+                    return None;
+                };
+                if visible_index == active.visible_index && !active.dragged {
                     return None;
                 }
                 active.dragged = true;
@@ -363,6 +367,7 @@ fn mouse_input_for_app(
             dragged,
         } => {
             if dragged {
+                click_tracker.drag();
                 return MouseInput::Up;
             }
             if click_tracker.up(visible_index, now) {
@@ -1031,6 +1036,57 @@ mod tests {
         assert_eq!(app.selected_key_count(), 2);
         assert!(app.is_row_marked("a"));
         assert!(app.is_row_marked("b"));
+    }
+
+    #[test]
+    fn outside_drag_marks_gesture_without_seeding_double_click() {
+        let mut app = app_with_mouse_layout();
+        let mut gesture = MouseGestureTracker::default();
+        let mut clicks = ClickTracker::default();
+        let now = Instant::now();
+
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+            now,
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Drag(MouseButton::Left), 0, 0),
+            now + Duration::from_millis(10),
+        );
+        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.selected_key_count(), 0);
+
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 0, 0),
+            now + Duration::from_millis(20),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(100),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(120),
+        );
+
+        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.selected_key_count(), 0);
+        assert!(!app.reader_open());
     }
 
     #[test]
