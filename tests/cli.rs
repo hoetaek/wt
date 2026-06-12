@@ -1529,12 +1529,11 @@ id = "PROJ-123"
         .stdout(predicate::str::contains("◆ Tasks"))
         .stdout(predicate::str::contains("│ provider-origin"))
         .stdout(predicate::str::contains("│ local"))
+        .stdout(predicate::str::contains("•  new  local  task local  pub"))
         .stdout(predicate::str::contains(
-            "•  new  pub   -    local  task local  branch feature/local",
+            "•  new  Provider task  task provider  fetch",
         ))
-        .stdout(predicate::str::contains(
-            "•  new  fetch  -    Provider task  task provider  branch alice/provider-task",
-        ))
+        .stdout(predicate::str::contains("branch feature/local").not())
         .stdout(predicate::str::contains(
             "2 tasks hidden; use wt task list --all to show the full inventory",
         ))
@@ -1621,13 +1620,13 @@ id = "PROJ-123"
         .stdout(predicate::str::contains("│ provider-origin"))
         .stdout(predicate::str::contains("│ local"))
         .stdout(predicate::str::contains("task local"))
-        .stdout(predicate::str::contains("branch feature/local"))
         .stdout(predicate::str::contains("task passed"))
-        .stdout(predicate::str::contains("branch feature/passed"))
         .stdout(predicate::str::contains("task running"))
-        .stdout(predicate::str::contains("branch feature/running"))
+        .stdout(predicate::str::contains("branch feature/local").not())
+        .stdout(predicate::str::contains("branch feature/passed").not())
+        .stdout(predicate::str::contains("branch feature/running").not())
         .stdout(predicate::str::contains(
-            "•  new  fetch  -    Provider task  task provider  branch alice/provider-task",
+            "•  new  Provider task  task provider  fetch",
         ))
         .stdout(predicate::str::contains("tasks hidden").not())
         .stderr(predicate::str::contains(
