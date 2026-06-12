@@ -43,6 +43,9 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
         Constraint::Length(header_height),
         Constraint::Min(row_min_height),
     ];
+    if app.notice().is_some() {
+        constraints.insert(1, Constraint::Length(1));
+    }
     if show_output {
         constraints.push(Constraint::Length(output_panel_height(area)));
     }
@@ -55,6 +58,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
     let mut chunk_index = 0;
     draw_header(frame, chunks[chunk_index], app);
     chunk_index += 1;
+    if app.notice().is_some() {
+        draw_notice(frame, chunks[chunk_index], app);
+        chunk_index += 1;
+    }
     if show_reader {
         draw_reader(frame, chunks[chunk_index], app);
     } else if let DetailSidebarLayout::Right(sidebar_width) = detail_layout {
@@ -101,6 +108,15 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 
     let header = Paragraph::new(lines).block(chrome_block());
     frame.render_widget(header, area);
+}
+
+fn draw_notice(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
+    if let Some(notice) = app.notice() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(notice.to_string(), theme::notice_style())),
+            area,
+        );
+    }
 }
 
 fn header_height(app: &AppState, area: Rect) -> u16 {
@@ -1119,6 +1135,35 @@ mod tests {
         assert!(text.contains("Origin sync TUI"));
         assert!(text.contains("Linear WT-142"));
         assert!(text.contains("q quit"));
+    }
+
+    #[test]
+    fn notice_renders_below_header_and_releases_row_when_cleared() {
+        let _guard = ColorGuard::set(true);
+        let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
+        app.show_dispatch_message("Copied reference linear:WT-142".into());
+
+        let with_notice = render_buffer(80, 24, &app);
+
+        assert!(line_contains_text(
+            &with_notice,
+            80,
+            4,
+            "Copied reference linear:WT-142"
+        ));
+        assert_eq!(with_notice[(0, 4)].style().fg, Some(Color::Yellow));
+        assert!(line_contains_text(&with_notice, 80, 5, "Tasks"));
+
+        app.handle(KeyInput::Down);
+        let cleared = render_buffer(80, 24, &app);
+
+        assert!(!line_contains_text(
+            &cleared,
+            80,
+            4,
+            "Copied reference linear:WT-142"
+        ));
+        assert!(line_contains_text(&cleared, 80, 4, "Tasks"));
     }
 
     #[test]
