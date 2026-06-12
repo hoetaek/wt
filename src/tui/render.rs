@@ -1584,10 +1584,11 @@ mod tests {
     #[test]
     fn reader_scroll_up_moves_immediately_after_bottom_overscroll() {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
-        browser_row.body = (0..20)
+        let code = (0..20)
             .map(|index| format!("line-{index:02}"))
             .collect::<Vec<_>>()
             .join("\n");
+        browser_row.body = format!("```\n{code}\n```");
         let mut app = AppState::new(vec![browser_row]);
         app.handle(KeyInput::Char('v'));
 

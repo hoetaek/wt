@@ -677,16 +677,11 @@ fn should_insert_rhythm(previous: BlockKind, current: BlockKind) -> bool {
     if previous == BlockKind::Blank || current == BlockKind::Blank {
         return false;
     }
-    matches!(
+    !matches!(
         (previous, current),
-        (
-            _,
-            BlockKind::Heading1 | BlockKind::Heading | BlockKind::Code | BlockKind::Table
-        ) | (
-            BlockKind::Heading1 | BlockKind::Heading | BlockKind::Code | BlockKind::Table,
-            _
-        ) | (_, BlockKind::Quote)
-            | (BlockKind::Quote, _)
+        (BlockKind::List, BlockKind::List)
+            | (BlockKind::Table, BlockKind::Table)
+            | (BlockKind::Quote, BlockKind::Quote)
     )
 }
 
@@ -858,5 +853,34 @@ mod tests {
         assert!(rendered.contains("| wt |"));
         assert!(rendered.contains("\u{1b}]8;;https://example.com/wt\u{7}repo"));
         assert!(rendered.contains("\u{1b}]8;;\u{7}"));
+    }
+
+    #[test]
+    fn separates_adjacent_paragraph_blocks_without_outer_blank_lines() {
+        let lines = render_reader_lines("first\n\nsecond", 80);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec!["first", "", "second"]);
+    }
+
+    #[test]
+    fn separates_paragraph_from_list_without_outer_blank_lines() {
+        let lines = render_reader_lines("intro\n\n- one\n- two", 80);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>();
+
+        assert_eq!(rendered.first().map(String::as_str), Some("intro"));
+        assert_eq!(rendered.last().map(String::as_str), Some("• two"));
+        assert_eq!(rendered, vec!["intro", "", "• one", "• two"]);
+    }
+
+    #[test]
+    fn separates_list_from_code_without_outer_blank_lines() {
+        let body = "- item\n\n```rust\nfn main() {}\n```";
+        let lines = render_reader_lines(body, 80);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>();
+
+        assert_eq!(rendered.first().map(String::as_str), Some("• item"));
+        assert!(rendered.iter().any(|line| line.contains("fn main")));
+        assert_eq!(rendered, vec!["• item", "", "fn main() {}"]);
     }
 }
