@@ -975,11 +975,11 @@ fn update_issue_start_status(ctx: &Ctx, on_start_issue_id: Option<&str>) {
         return;
     };
 
-    if let Ok(provider) = build_provider(ctx) {
-        if let Err(e) = provider.on_start(on_start_issue_id) {
-            ctx.ui
-                .print_warning(&format!("Failed to update issue status: {e}"));
-        }
+    if let Ok(provider) = build_provider(ctx)
+        && let Err(e) = provider.on_start(on_start_issue_id)
+    {
+        ctx.ui
+            .print_warning(&format!("Failed to update issue status: {e}"));
     }
 }
 

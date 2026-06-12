@@ -37,10 +37,10 @@ impl Lang {
     /// `LC_MESSAGES`, then `LANG`. Empty values are treated as unset.
     pub fn detect_locale() -> Option<String> {
         for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-            if let Ok(value) = std::env::var(key) {
-                if !value.is_empty() {
-                    return Some(value);
-                }
+            if let Ok(value) = std::env::var(key)
+                && !value.is_empty()
+            {
+                return Some(value);
             }
         }
         None

@@ -143,19 +143,18 @@ fn run_selected_task(
         }
     };
 
-    if selected.document.branch != result.canonical_branch_name {
-        if let Err(err) = task::write_task_branch(ctx, &selected.key, &result.canonical_branch_name)
-        {
-            let message = err.to_string();
-            let _ = task_run::update(
-                ctx,
-                &run.id,
-                task_run::STATUS_FAILED,
-                Some(&result.branch_name),
-                Some(&message),
-            );
-            return Err(err);
-        }
+    if selected.document.branch != result.canonical_branch_name
+        && let Err(err) = task::write_task_branch(ctx, &selected.key, &result.canonical_branch_name)
+    {
+        let message = err.to_string();
+        let _ = task_run::update(
+            ctx,
+            &run.id,
+            task_run::STATUS_FAILED,
+            Some(&result.branch_name),
+            Some(&message),
+        );
+        return Err(err);
     }
 
     task_run::update(

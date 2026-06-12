@@ -254,11 +254,11 @@ pub(super) fn bootstrap_agent(
                 if attempt > 0 {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                 }
-                if let Ok(current) = cmux.read_screen(surface, ws_handle) {
-                    if current != stale_screen {
-                        screen_changed = true;
-                        break;
-                    }
+                if let Ok(current) = cmux.read_screen(surface, ws_handle)
+                    && current != stale_screen
+                {
+                    screen_changed = true;
+                    break;
                 }
             }
             if !screen_changed {
@@ -279,11 +279,11 @@ pub(super) fn bootstrap_agent(
                 if attempt > 0 {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                 }
-                if let Ok(screen) = cmux.read_screen(surface, ws_handle) {
-                    if screen.contains(marker) {
-                        ready = true;
-                        break;
-                    }
+                if let Ok(screen) = cmux.read_screen(surface, ws_handle)
+                    && screen.contains(marker)
+                {
+                    ready = true;
+                    break;
                 }
             }
 

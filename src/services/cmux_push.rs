@@ -343,13 +343,12 @@ fn run_cmux_paste_buffer_with_retry(
 }
 
 fn restore_prior_focus(cmux: &CmuxService<'_>, prior: &CmuxCaller) {
-    if let Some(surface) = prior.surface.as_deref().filter(|s| !s.trim().is_empty()) {
-        if cmux
+    if let Some(surface) = prior.surface.as_deref().filter(|s| !s.trim().is_empty())
+        && cmux
             .focus_surface(surface, prior.workspace.as_deref())
             .is_ok()
-        {
-            return;
-        }
+    {
+        return;
     }
     if let Some(workspace) = prior.workspace.as_deref().filter(|w| !w.trim().is_empty()) {
         let _ = cmux.select_workspace(workspace);
@@ -493,18 +492,18 @@ fn env_kind(value: &Value) -> Option<PushKind> {
         "agent_kind",
         "launch_kind",
     ] {
-        if let Some(kind) = map.get(key).and_then(Value::as_str).map(PushKind::parse) {
-            if kind != PushKind::Unknown {
-                return Some(kind);
-            }
+        if let Some(kind) = map.get(key).and_then(Value::as_str).map(PushKind::parse)
+            && kind != PushKind::Unknown
+        {
+            return Some(kind);
         }
     }
     if let Some(Value::Object(env)) = map.get("env").or_else(|| map.get("environment")) {
         for key in ["CMUX_AGENT_LAUNCH_KIND", "cmux_agent_launch_kind"] {
-            if let Some(kind) = env.get(key).and_then(Value::as_str).map(PushKind::parse) {
-                if kind != PushKind::Unknown {
-                    return Some(kind);
-                }
+            if let Some(kind) = env.get(key).and_then(Value::as_str).map(PushKind::parse)
+                && kind != PushKind::Unknown
+            {
+                return Some(kind);
             }
         }
     }

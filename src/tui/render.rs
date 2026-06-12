@@ -374,13 +374,12 @@ fn effective_column_widths(columns: &[BrowserColumn], area_width: u16) -> Vec<us
     let total_width = widths.iter().sum::<usize>() + spacing;
     let inner_width = area_width.saturating_sub(2) as usize;
     let overflow = total_width.saturating_sub(inner_width);
-    if overflow > 0 {
-        if let Some(task_index) = columns
+    if overflow > 0
+        && let Some(task_index) = columns
             .iter()
             .position(|column| column.cell == BrowserCell::Task)
-        {
-            widths[task_index] = widths[task_index].saturating_sub(overflow).max(1);
-        }
+    {
+        widths[task_index] = widths[task_index].saturating_sub(overflow).max(1);
     }
     widths
 }

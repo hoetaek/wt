@@ -1571,10 +1571,11 @@ impl AppState {
 
     fn list_status_line(&self) -> String {
         let controls = self.footer_keymap_summary();
-        if self.copy.source_view_enabled && self.source_view == SourceView::OriginOnly {
-            if let Some(status) = self.origin_only_status_label() {
-                return format!("{controls}  [origin: {status}]");
-            }
+        if self.copy.source_view_enabled
+            && self.source_view == SourceView::OriginOnly
+            && let Some(status) = self.origin_only_status_label()
+        {
+            return format!("{controls}  [origin: {status}]");
         }
         controls
     }

@@ -227,12 +227,12 @@ fn check_listener(ctx: &Ctx, bind_ip: &str, port: &str) -> Result<bool> {
 }
 
 fn traefik_binary(ctx: &Ctx) -> String {
-    if ctx.runner.has_command("traefik") {
-        if let Ok(output) = ctx.runner.run("which", &["traefik"], None) {
-            if output.success && !output.stdout.trim().is_empty() {
-                return output.stdout.trim().to_string();
-            }
-        }
+    if ctx.runner.has_command("traefik")
+        && let Ok(output) = ctx.runner.run("which", &["traefik"], None)
+        && output.success
+        && !output.stdout.trim().is_empty()
+    {
+        return output.stdout.trim().to_string();
     }
 
     "/opt/homebrew/bin/traefik".into()

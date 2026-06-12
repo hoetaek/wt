@@ -172,12 +172,13 @@ pub(super) fn open_workspace(
         }
     }
 
-    if options.restore_caller_after_workspace_open && focus_was_moved {
-        if let Some(target) = focus_restore_target.as_ref() {
-            // Temporary cmux 0.64.x workaround: focus starts the offscreen PTY
-            // (manaflow-ai/cmux#4187/#4193), then we restore the prior focus.
-            restore_cmux_focus(ctx, &cmux, &ws_handle, target, should_probe_workspace_start);
-        }
+    if options.restore_caller_after_workspace_open
+        && focus_was_moved
+        && let Some(target) = focus_restore_target.as_ref()
+    {
+        // Temporary cmux 0.64.x workaround: focus starts the offscreen PTY
+        // (manaflow-ai/cmux#4187/#4193), then we restore the prior focus.
+        restore_cmux_focus(ctx, &cmux, &ws_handle, target, should_probe_workspace_start);
     }
 
     Ok(Some(OpenedWorkspace {
