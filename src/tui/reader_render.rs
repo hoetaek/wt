@@ -226,7 +226,7 @@ impl MarkdownState {
                 code_style(),
                 self.link.clone(),
             )),
-            Event::SoftBreak | Event::HardBreak => self.push_span(StyledSpan::plain(" ")),
+            Event::SoftBreak | Event::HardBreak => self.push_span(StyledSpan::plain("\n")),
             Event::Rule => self.blocks.push(Block::Rule),
             Event::TaskListMarker(checked) => {
                 if let Some(item) = self.item_stack.last_mut() {
@@ -549,6 +549,9 @@ fn wrap_spans(
         let mut last_space_after = None;
         while end < units.len() {
             let unit = &units[end];
+            if unit.ch == '\n' {
+                break;
+            }
             if current_width > 0 && current_width + unit.width > available {
                 break;
             }
@@ -562,16 +565,20 @@ fn wrap_spans(
                 last_space_after = Some(end);
             }
         }
+        let forced_line_break = end < units.len() && units[end].ch == '\n';
         let mut line_end = end;
         let mut next_start = end;
-        if end < units.len()
+        if forced_line_break {
+            line_end = trim_trailing_space(&units, end);
+            next_start = end + 1;
+        } else if end < units.len()
             && let Some(space_after) = last_space_after
             && space_after > start
         {
             line_end = trim_trailing_space(&units, space_after);
             next_start = skip_space(&units, space_after);
         }
-        if line_end <= start {
+        if line_end <= start && !forced_line_break {
             line_end = end.max(start + 1).min(units.len());
             next_start = line_end;
         }
@@ -885,6 +892,17 @@ mod tests {
     }
 
     #[test]
+    fn softbreaks_preserve_lines_inside_paragraphs_and_list_items() {
+        let lines = render_reader_lines("step one\nstep two\n\n- first\n  second", 80);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>();
+
+        assert_eq!(
+            rendered,
+            vec!["step one", "step two", "", "• first", "  second"]
+        );
+    }
+
+    #[test]
     fn renders_kitchen_sink_markdown_with_stable_block_rhythm() {
         let body = concat!(
             "step one\n",
@@ -911,7 +929,8 @@ mod tests {
         assert_eq!(
             rendered,
             vec![
-                "step one step two",
+                "step one",
+                "step two",
                 "",
                 "• ☐ parent",
                 "  • ☑ child",
