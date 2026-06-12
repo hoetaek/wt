@@ -2,6 +2,7 @@ use crate::origin_action_menu::{OriginAction, OriginActionMenu};
 use crate::task::TaskDocument;
 use crate::tui::reader_render::render_reader_lines;
 use crate::tui::remote_ui::PrintKind;
+use crate::workflow::WorkflowMetadata;
 use anyhow::Context;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -1668,10 +1669,11 @@ fn read_body_from_path(path: &std::path::Path) -> anyhow::Result<String> {
     let content = std::fs::read_to_string(path)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("Failed to read {}", path.display()))?;
-    let document: TaskDocument = toml::from_str(&content)
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("Failed to parse {}", path.display()))?;
-    Ok(document.body)
+    if let Ok(document) = toml::from_str::<TaskDocument>(&content) {
+        return Ok(document.body);
+    }
+    let workflow: WorkflowMetadata = crate::workflow::read(path)?;
+    Ok(workflow.body.unwrap_or_default())
 }
 
 fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
@@ -2058,6 +2060,67 @@ mod tests {
         app.handle(KeyInput::Enter);
         app.handle(KeyInput::Char('r'));
         assert!(app.notice().unwrap_or_default().contains("로컬 파일 없음"));
+    }
+
+    #[test]
+    fn reader_refresh_reloads_workflow_body_from_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflow.toml");
+        std::fs::write(
+            &path,
+            r#"title = "Workflow"
+body = "old workflow body"
+mode = "batch"
+base_mode = "default"
+created_at = "2026-06-06T00:00:00Z"
+updated_at = "2026-06-06T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[policy.review]
+codex_base = "none"
+
+[[tasks]]
+task = "demo"
+run = "run-demo"
+"#,
+        )
+        .unwrap();
+        let mut app = app_with_body_and_path("old workflow body", Some(path.clone()));
+        app.handle(KeyInput::Enter);
+
+        std::fs::write(
+            &path,
+            r#"title = "Workflow"
+body = "new workflow body"
+mode = "batch"
+base_mode = "default"
+created_at = "2026-06-06T00:00:00Z"
+updated_at = "2026-06-06T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[policy.review]
+codex_base = "none"
+
+[[tasks]]
+task = "demo"
+run = "run-demo"
+"#,
+        )
+        .unwrap();
+        app.handle(KeyInput::Char('r'));
+
+        assert!(
+            app.selected_row()
+                .unwrap()
+                .body
+                .contains("new workflow body")
+        );
     }
 
     #[test]

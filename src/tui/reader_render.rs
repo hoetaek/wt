@@ -119,16 +119,18 @@ impl Block {
                 } else {
                     Style::default()
                 };
-                let text = cells
-                    .into_iter()
-                    .map(|cell| styled_text(&cell))
-                    .collect::<Vec<_>>()
-                    .join(" | ");
-                wrap_spans(
-                    vec![StyledSpan::new(format!("| {text} |"), style, None)],
-                    width,
-                    None,
-                )
+                let mut spans = vec![StyledSpan::new("| ", style, None)];
+                for (index, cell) in cells.into_iter().enumerate() {
+                    if index > 0 {
+                        spans.push(StyledSpan::new(" | ", style, None));
+                    }
+                    spans.extend(cell.into_iter().map(|mut span| {
+                        span.style = span.style.patch(style);
+                        span
+                    }));
+                }
+                spans.push(StyledSpan::new(" |", style, None));
+                wrap_spans(spans, width, None)
             }
         }
     }
@@ -175,7 +177,7 @@ struct MarkdownState {
     heading: Option<(u8, String)>,
     code: Option<(Option<String>, String)>,
     list_stack: Vec<Option<u64>>,
-    item: Option<ItemState>,
+    item_stack: Vec<ItemState>,
     quote_depth: usize,
     strong: usize,
     emphasis: usize,
@@ -189,6 +191,7 @@ struct ItemState {
     marker: String,
     checkbox: Option<bool>,
     spans: Vec<StyledSpan>,
+    emitted: bool,
 }
 
 #[derive(Debug, Default)]
@@ -226,7 +229,7 @@ impl MarkdownState {
             Event::SoftBreak | Event::HardBreak => self.flush_inline(),
             Event::Rule => self.blocks.push(Block::Rule),
             Event::TaskListMarker(checked) => {
-                if let Some(item) = &mut self.item {
+                if let Some(item) = self.item_stack.last_mut() {
                     item.checkbox = Some(checked);
                 }
             }
@@ -243,7 +246,7 @@ impl MarkdownState {
             Tag::CodeBlock(kind) => {
                 self.code = Some((language_from_code_block(kind), String::new()))
             }
-            Tag::List(start) => self.list_stack.push(start),
+            Tag::List(start) => self.start_list(start),
             Tag::Item => self.start_item(),
             Tag::Strong => self.strong += 1,
             Tag::Emphasis => self.emphasis += 1,
@@ -296,12 +299,10 @@ impl MarkdownState {
                 self.list_stack.pop();
             }
             TagEnd::Item => {
-                if let Some(item) = self.item.take() {
-                    self.blocks.push(Block::ListItem {
-                        marker: item.marker,
-                        checkbox: item.checkbox,
-                        spans: item.spans,
-                    });
+                if let Some(item) = self.item_stack.pop()
+                    && !item.emitted
+                {
+                    self.push_item_output(item);
                 }
             }
             TagEnd::Paragraph => self.flush_inline(),
@@ -352,9 +353,37 @@ impl MarkdownState {
             }
             None => format!("{}•", "  ".repeat(depth)),
         };
-        self.item = Some(ItemState {
+        self.item_stack.push(ItemState {
             marker,
             ..ItemState::default()
+        });
+    }
+
+    fn start_list(&mut self, start: Option<u64>) {
+        self.emit_current_item_if_needed();
+        self.list_stack.push(start);
+    }
+
+    fn emit_current_item_if_needed(&mut self) {
+        let Some(item) = self.item_stack.last_mut() else {
+            return;
+        };
+        if item.emitted || item.spans.is_empty() {
+            return;
+        }
+        item.emitted = true;
+        self.blocks.push(Block::ListItem {
+            marker: item.marker.clone(),
+            checkbox: item.checkbox,
+            spans: item.spans.clone(),
+        });
+    }
+
+    fn push_item_output(&mut self, item: ItemState) {
+        self.blocks.push(Block::ListItem {
+            marker: item.marker,
+            checkbox: item.checkbox,
+            spans: item.spans,
         });
     }
 
@@ -381,7 +410,9 @@ impl MarkdownState {
             cell.push(span);
             return;
         }
-        if let Some(item) = &mut self.item {
+        if let Some(item) = self.item_stack.last_mut()
+            && !item.emitted
+        {
             item.spans.push(span);
             return;
         }
@@ -636,10 +667,6 @@ fn trim_trailing_space(units: &[Unit], mut end: usize) -> usize {
     end
 }
 
-fn styled_text(spans: &[StyledSpan]) -> String {
-    spans.iter().map(|span| span.text.as_str()).collect()
-}
-
 fn line_vec_ends_blank(lines: &[Line<'_>]) -> bool {
     lines
         .last()
@@ -803,5 +830,33 @@ mod tests {
                 .iter()
                 .any(|span| span.content.contains('\u{1b}'))
         }));
+    }
+
+    #[test]
+    fn nested_checklist_keeps_parent_and_child_with_indent() {
+        let lines = render_reader_lines("- [ ] parent\n  - [x] child\n", 80);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line.contains("parent")));
+        let child = rendered
+            .iter()
+            .find(|line| line.contains("child"))
+            .expect("child list item should render");
+        assert!(
+            child.starts_with("  "),
+            "child should keep nested indent: {child:?}"
+        );
+    }
+
+    #[test]
+    fn renders_table_rows_and_osc8_links() {
+        let body = "| Name | Link |\n| --- | --- |\n| wt | [repo](https://example.com/wt) |\n";
+        let lines = render_reader_lines(body, 100);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>().join("\n");
+
+        assert!(rendered.contains("| Name | Link |"));
+        assert!(rendered.contains("| wt |"));
+        assert!(rendered.contains("\u{1b}]8;;https://example.com/wt\u{7}repo"));
+        assert!(rendered.contains("\u{1b}]8;;\u{7}"));
     }
 }
