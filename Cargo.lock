@@ -3339,6 +3339,7 @@ dependencies = [
  "syntect",
  "tempfile",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "toml",
  "toml_edit",
