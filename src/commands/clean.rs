@@ -66,10 +66,10 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
         unlink_site(ctx, config, wt_path, branch)?;
 
         // Issue provider cleanup hook
-        if let Ok(provider) = build_provider(ctx) {
-            if let Err(e) = provider.on_clean(&entry.branch, &entry.branch) {
-                ctx.ui.print_warning(&format!("  Issue cleanup: {e}"));
-            }
+        if let Ok(provider) = build_provider(ctx)
+            && let Err(e) = provider.on_clean(&entry.branch, &entry.branch)
+        {
+            ctx.ui.print_warning(&format!("  Issue cleanup: {e}"));
         }
 
         // Remove worktree

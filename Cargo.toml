@@ -2,7 +2,7 @@
 name = "wt"
 version = "0.48.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 publish = false
 description = "Worktree-based agent orchestration harness"
 license = "MIT OR Apache-2.0"

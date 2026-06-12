@@ -20,10 +20,10 @@ fn wake_message_recipient(ctx: &Ctx, message: &Message) -> Result<bool> {
     if let Some(task_run_id) = task_run_scope_recipient(ctx, message)? {
         return wake_idle_task_run_agent(ctx, &task_run_id);
     }
-    if let Some(task_run_id) = single_running_task_run_for_agent(ctx, &recipient)? {
-        if wake_idle_task_run_agent(ctx, &task_run_id)? {
-            return Ok(true);
-        }
+    if let Some(task_run_id) = single_running_task_run_for_agent(ctx, &recipient)?
+        && wake_idle_task_run_agent(ctx, &task_run_id)?
+    {
+        return Ok(true);
     }
     wake_idle_identity_anchor_agent(ctx, &recipient)
 }

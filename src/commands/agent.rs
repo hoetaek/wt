@@ -365,8 +365,8 @@ fn warnings_for_work(work: &work::Work) -> Vec<String> {
     if let Some(warning) = work.state.warning.as_ref() {
         warnings.push(warning.clone());
     }
-    if let Some(cmux) = work.cmux.as_ref() {
-        if let Some(warning) = work
+    if let Some(cmux) = work.cmux.as_ref()
+        && let Some(warning) = work
             .cmux_contacts
             .iter()
             .find(|contact| {
@@ -374,11 +374,9 @@ fn warnings_for_work(work: &work::Work) -> Vec<String> {
                     && Some(contact.surface.as_str()) == cmux.surface_ref.as_deref()
             })
             .and_then(|contact| contact.validation_warning.as_ref())
-        {
-            if !warnings.contains(warning) {
-                warnings.push(warning.clone());
-            }
-        }
+        && !warnings.contains(warning)
+    {
+        warnings.push(warning.clone());
     }
     if work.session_state != WorkSessionState::TerminalSurfaceReady {
         for warning in work
@@ -742,18 +740,18 @@ enum WatchDetailLevel {
 fn print_watch_details(ctx: &Ctx, report: &AgentStatusReport, detail_level: WatchDetailLevel) {
     ctx.ui.print_dim(&format!("  Branch: {}", report.branch));
     print_task_run_text(ctx, report);
-    if detail_level == WatchDetailLevel::Heartbeat {
-        if let Some(last_tool) = report.agent.last_tool.as_deref() {
-            ctx.ui.print_dim(&format!("  Last tool: {last_tool}"));
-        }
+    if detail_level == WatchDetailLevel::Heartbeat
+        && let Some(last_tool) = report.agent.last_tool.as_deref()
+    {
+        ctx.ui.print_dim(&format!("  Last tool: {last_tool}"));
     }
     if let Some(last_event_at) = report.agent.last_event_at.as_deref() {
         ctx.ui.print_dim(&format!("  Last event: {last_event_at}"));
     }
-    if detail_level == WatchDetailLevel::Heartbeat {
-        if let Some(session_id) = report.agent.session_id.as_deref() {
-            ctx.ui.print_dim(&format!("  Session: {session_id}"));
-        }
+    if detail_level == WatchDetailLevel::Heartbeat
+        && let Some(session_id) = report.agent.session_id.as_deref()
+    {
+        ctx.ui.print_dim(&format!("  Session: {session_id}"));
     }
     print_cmux_text(ctx, report);
     print_cmux_candidates_text(ctx, &report.cmux.candidates);

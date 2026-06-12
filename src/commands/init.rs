@@ -778,10 +778,10 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
             "origin_policy = {}\n",
             toml_quote(defaults.origin_policy.as_config_value())
         ));
-        if *provider == InitIssueProvider::Github {
-            if let Some(user) = gh_user.as_deref() {
-                s.push_str(&format!("gh_user = {}\n", toml_quote(user)));
-            }
+        if *provider == InitIssueProvider::Github
+            && let Some(user) = gh_user.as_deref()
+        {
+            s.push_str(&format!("gh_user = {}\n", toml_quote(user)));
         }
         s.push('\n');
     }

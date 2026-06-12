@@ -136,7 +136,7 @@ skills for `wt`'s harness-first model.
 Required:
 
 - Git
-- Rust 1.85 or newer when building from source
+- Rust 1.88 or newer when building from source
 
 Optional integrations:
 

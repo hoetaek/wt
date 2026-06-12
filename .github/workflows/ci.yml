@@ -49,11 +49,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.85.0
+          toolchain: 1.88.0
 
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-
+      # 캐시를 쓰지 않는다: 캐시된 의존성은 cargo의 rust-version 검사를 건너뛰어
+      # MSRV 위반을 가린 전례가 있다 (1.85 toolchain으로 1.88 요구 의존성이 green).
       - name: Check package with MSRV
         run: cargo check --locked --all-targets --all-features
 
