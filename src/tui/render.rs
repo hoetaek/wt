@@ -1,13 +1,12 @@
 use crate::tui::app::{
     AppState, BrowserCell, BrowserColumn, BrowserColumnWidth, BrowserRow, Mode, PopupView,
 };
-use crate::tui::body_markup::LineKind;
 use crate::tui::remote_ui::PrintKind;
 use crate::tui::theme;
 use console::measure_text_width;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 
@@ -521,11 +520,7 @@ fn detail_sidebar_lines(app: &AppState, content_width: usize) -> Vec<Line<'stati
         if !lines.is_empty() {
             lines.push(Line::from(""));
         }
-        lines.extend(
-            body_lines
-                .iter()
-                .map(|(kind, text)| body_wrapped_visual_line(kind, text)),
-        );
+        lines.extend(body_lines);
     } else if !lines.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::styled("no body", theme::dim_style()));
@@ -557,11 +552,7 @@ fn draw_reader(frame: &mut Frame<'_>, area: Rect, app: &mut AppState) {
     let visible_count = area.height.saturating_sub(2) as usize;
     app.set_reader_viewport_height(visible_count);
     let content_width = area.width.saturating_sub(2).max(1) as usize;
-    let body_lines = app.wrapped_body_lines(content_width);
-    let mut visual_lines = body_lines
-        .iter()
-        .map(|(kind, text)| body_wrapped_visual_line(kind, text))
-        .collect::<Vec<_>>();
+    let mut visual_lines = app.wrapped_body_lines(content_width);
     if visual_lines.is_empty() {
         visual_lines.push(Line::styled("no body", theme::dim_style()));
     }
@@ -609,18 +600,6 @@ fn body_scroll_percent(line_count: usize, visible_count: usize, start: usize) ->
     }
     let visible_end = start.saturating_add(visible_count).min(line_count);
     visible_end.saturating_mul(100) / line_count
-}
-
-fn body_wrapped_visual_line(kind: &LineKind, text: &str) -> Line<'static> {
-    Line::styled(text.to_string(), body_line_style(kind))
-}
-
-fn body_line_style(kind: &LineKind) -> Style {
-    match kind {
-        LineKind::Heading => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        LineKind::Code => theme::dim_style(),
-        LineKind::Checkbox(_) | LineKind::Plain => Style::default(),
-    }
 }
 
 fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
@@ -1062,6 +1041,7 @@ mod tests {
             size: None,
             branch: Some(format!("feature/{key}")),
             source: "provider-origin".into(),
+            path: None,
             body: String::new(),
             preview_lines: vec!["Origin      Linear WT-142".into()],
             menu: OriginActionMenu::for_origin_task(

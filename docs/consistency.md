@@ -1213,13 +1213,18 @@ Task list TUI에서 Enter는 선택된 TaskDocument body 전문을 browser를 �
 full-screen Reader 모드를 연다. `v`는 후속 range-select PR 전까지 Reader를 여는 임시
 별칭이다. Reader는 같은 terminal surface 안의 vertical band layout이며, 선택 task title,
 wrap 후 줄 범위, scroll percent indicator를 함께 보여주고 `j`/`k`, `d`/`u`,
-Ctrl-D/Ctrl-U, PageUp/PageDown, `g`/`G`로 스크롤한다. Local scaffold body는 알려진
+Ctrl-D/Ctrl-U, PageUp/PageDown, `g`/`G`로 스크롤하며, `r`은 선택 row의 로컬 source
+file에서 body를 다시 읽는다. Local scaffold body는 알려진
 Planning template을 따를 수 있지만 provider issue import body는 외부 본문을 verbatim으로
 보존하므로 untrusted display input이다. Reader는 terminal control sequence와 tab을 먼저
-sanitize해야 한다. 범용 Markdown renderer를 붙이지 않는 것은 trust boundary가 아니라 simplicity
-선택이며, heading, checkbox, fenced code, inline code/강조 표식 같은 알려진 line pattern만
-경량 styling으로 렌더한다. Reader가 열려 있는 동안 action menu, origin shortcut dispatch,
-archive 같은 row action 진입은 막히고, `q` 또는 Esc로 닫은 뒤에만 다시 list action을 수행한다.
+sanitize해야 한다. Reader rendering은 leaf reader에서 이식한 pulldown-cmark parse와 수동
+ratatui styling pipeline이 canonical이다. Heading, checkbox, blockquote, table, link, inline
+style은 직접 Line/Span으로 렌더하고 fenced code는 syntect/two-face로 highlight하되, sanitized
+text 위에 wt가 생성한 OSC 8 hyperlink sequence만 허용한다. Reader가 열린 동안 source file
+mtime이 바뀌면 약 1초 간격 tick에서 조용히 body를 다시 읽고 scroll을 유효 범위로 되돌린다.
+로컬 path가 없는 origin-only row는 자동 refresh 대상이 아니며 수동 `r`은 import 안내 notice를
+보여준다. Reader가 열려 있는 동안 action menu, origin shortcut dispatch, archive 같은 row action
+진입은 막히고, `q` 또는 Esc로 닫은 뒤에만 다시 list action을 수행한다.
 
 `wt task archive <key...>`는 active TaskDocument를 `<repo-root>/.wt/execution/archive/tasks/<key>/`
 아래로 옮겨 active task inventory에서 감추는 visibility/retention command다. Workflow archive와

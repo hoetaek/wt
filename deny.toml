@@ -3,6 +3,12 @@ yanked = "warn"
 ignore = [
     # paste via ratatui 0.29; no safe upgrade available in the ratatui line.
     "RUSTSEC-2024-0436",
+    # bincode via syntect 5 default features; this task intentionally adopts
+    # leaf's syntect-based reader pipeline and there is no safe syntect upgrade.
+    "RUSTSEC-2025-0141",
+    # yaml-rust via syntect 5 default features; this task intentionally adopts
+    # leaf's syntect-based reader pipeline and there is no safe syntect upgrade.
+    "RUSTSEC-2024-0320",
 ]
 
 [bans]

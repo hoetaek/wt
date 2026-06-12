@@ -229,6 +229,7 @@ fn workflow_browser_row(row: &WorkflowListRow) -> crate::tui::app::BrowserRow {
         size: None,
         branch: None,
         source: "workflow".into(),
+        path: Some(std::path::PathBuf::from(&row.path)),
         body: row.body.clone().unwrap_or_default(),
         preview_lines: workflow_browser_preview_lines(row),
         menu: row.origin_action_menu(),

@@ -1,9 +1,10 @@
 use crate::origin_action_menu::{OriginAction, OriginActionMenu};
-use crate::tui::body_markup::{self, LineKind};
+use crate::task::TaskDocument;
+use crate::tui::reader_render::render_reader_lines;
 use crate::tui::remote_ui::PrintKind;
-use crate::ui::selector::strip_terminal_sequences;
-use console::measure_text_width;
+use anyhow::Context;
 use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserRow {
@@ -17,6 +18,7 @@ pub(crate) struct BrowserRow {
     pub(crate) size: Option<String>,
     pub(crate) branch: Option<String>,
     pub(crate) source: String,
+    pub(crate) path: Option<PathBuf>,
     pub(crate) body: String,
     pub(crate) preview_lines: Vec<String>,
     pub(crate) menu: OriginActionMenu,
@@ -247,7 +249,6 @@ pub(crate) struct AppState {
     columns: Vec<BrowserColumn>,
     reader_scroll: usize,
     reader_viewport_height: Cell<usize>,
-    body_cache: RefCell<BodyLineCache>,
     body_wrap_cache: RefCell<BodyWrapCache>,
     #[cfg(test)]
     body_wrap_recompute_count: Cell<usize>,
@@ -535,18 +536,11 @@ fn mode_keymap(mode: Mode) -> &'static [KeymapEntry] {
 }
 
 #[derive(Debug, Clone, Default)]
-struct BodyLineCache {
-    selected_key: Option<String>,
-    body: String,
-    lines: Vec<(LineKind, String)>,
-}
-
-#[derive(Debug, Clone, Default)]
 struct BodyWrapCache {
     selected_key: Option<String>,
     body: String,
     width: usize,
-    lines: Vec<(LineKind, String)>,
+    lines: Vec<ratatui::text::Line<'static>>,
 }
 
 impl AppState {
@@ -599,7 +593,6 @@ impl AppState {
             columns,
             reader_scroll: 0,
             reader_viewport_height: Cell::new(10),
-            body_cache: RefCell::new(BodyLineCache::default()),
             body_wrap_cache: RefCell::new(BodyWrapCache::default()),
             #[cfg(test)]
             body_wrap_recompute_count: Cell::new(0),
@@ -742,28 +735,7 @@ impl AppState {
         self.reader_viewport_height.get().max(1)
     }
 
-    pub(crate) fn body_lines(&self) -> Vec<(LineKind, String)> {
-        let Some((selected_key, body)) = self
-            .selected_row()
-            .map(|row| (row.key.clone(), row.body.clone()))
-        else {
-            let mut cache = self.body_cache.borrow_mut();
-            cache.selected_key = None;
-            cache.body.clear();
-            cache.lines.clear();
-            return Vec::new();
-        };
-
-        let mut cache = self.body_cache.borrow_mut();
-        if cache.selected_key.as_deref() != Some(selected_key.as_str()) || cache.body != body {
-            cache.selected_key = Some(selected_key);
-            cache.body = body;
-            cache.lines = body_markup::markup_body(&sanitize_body_for_markup(&cache.body));
-        }
-        cache.lines.clone()
-    }
-
-    pub(crate) fn wrapped_body_lines(&self, width: usize) -> Vec<(LineKind, String)> {
+    pub(crate) fn wrapped_body_lines(&self, width: usize) -> Vec<ratatui::text::Line<'static>> {
         let Some((selected_key, body)) = self
             .selected_row()
             .map(|row| (row.key.clone(), row.body.clone()))
@@ -774,7 +746,6 @@ impl AppState {
             cache.lines.clear();
             return Vec::new();
         };
-        let body_lines = self.body_lines();
 
         let mut cache = self.body_wrap_cache.borrow_mut();
         if cache.selected_key.as_deref() != Some(selected_key.as_str())
@@ -784,10 +755,7 @@ impl AppState {
             cache.selected_key = Some(selected_key);
             cache.body = body;
             cache.width = width;
-            cache.lines = body_lines
-                .iter()
-                .flat_map(|(kind, text)| wrapped_body_line(kind, text, width))
-                .collect();
+            cache.lines = render_reader_lines(&cache.body, width);
             #[cfg(test)]
             self.body_wrap_recompute_count
                 .set(self.body_wrap_recompute_count.get() + 1);
@@ -966,6 +934,13 @@ impl AppState {
 
     pub(crate) fn selected_row(&self) -> Option<&BrowserRow> {
         self.visible_rows().get(self.selected_index).copied()
+    }
+
+    pub(crate) fn selected_row_mtime(&self) -> Option<std::time::SystemTime> {
+        let path = self.selected_row()?.path.as_ref()?;
+        std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
     }
 
     #[cfg(test)]
@@ -1296,6 +1271,7 @@ impl AppState {
     fn handle_reader_key(&mut self, key: KeyInput) -> Outcome {
         match key {
             KeyInput::Esc | KeyInput::Char('q') => self.close_reader(),
+            KeyInput::Char('r') => self.refresh_reader_body(false),
             KeyInput::Down | KeyInput::Char('j') => self.scroll_reader_down(1),
             KeyInput::Up | KeyInput::Char('k') => self.scroll_reader_up(1),
             KeyInput::PageDown => self.scroll_reader_down(self.reader_viewport_height()),
@@ -1368,7 +1344,10 @@ impl AppState {
     }
 
     fn scroll_reader_down(&mut self, amount: usize) {
-        if !self.body_lines().is_empty() {
+        if self
+            .selected_row()
+            .is_some_and(|row| !row.body.trim().is_empty())
+        {
             self.reader_scroll = self.reader_scroll.saturating_add(amount.max(1));
         }
     }
@@ -1378,7 +1357,10 @@ impl AppState {
     }
 
     fn clamp_reader_scroll(&mut self) {
-        if self.body_lines().is_empty() {
+        if self
+            .selected_row()
+            .is_none_or(|row| row.body.trim().is_empty())
+        {
             self.reader_scroll = 0;
         }
     }
@@ -1548,6 +1530,49 @@ impl AppState {
             .action_for_shortcut(&shortcut)
             .map(|action| (row.key.clone(), action))
     }
+
+    pub(crate) fn refresh_reader_body(&mut self, automatic: bool) {
+        let Some(key) = self.selected_row().map(|row| row.key.clone()) else {
+            return;
+        };
+        let Some(path) = self.selected_row().and_then(|row| row.path.clone()) else {
+            if !automatic {
+                self.notice = Some("로컬 파일 없음 — i로 import 후 다시 시도".into());
+            }
+            return;
+        };
+        match read_body_from_path(&path) {
+            Ok(body) => {
+                if let Some(row) = self.row_mut_by_key(&key) {
+                    row.body = body;
+                }
+                self.invalidate_body_wrap_cache();
+                self.reader_scroll = 0;
+                self.clamp_reader_scroll();
+            }
+            Err(err) => {
+                if !automatic {
+                    self.notice = Some(format!("본문 새로고침 실패: {err:#}"));
+                }
+            }
+        }
+    }
+
+    fn row_mut_by_key(&mut self, key: &str) -> Option<&mut BrowserRow> {
+        match &mut self.origin_only {
+            OriginOnlyState::Loaded { rows, .. } if self.source_view == SourceView::OriginOnly => {
+                rows.iter_mut().find(|row| row.key == key)
+            }
+            _ => self.rows.iter_mut().find(|row| row.key == key),
+        }
+    }
+
+    fn invalidate_body_wrap_cache(&self) {
+        let mut cache = self.body_wrap_cache.borrow_mut();
+        cache.selected_key = None;
+        cache.body.clear();
+        cache.lines.clear();
+    }
 }
 
 fn handle_confirm_popup_key(selected: &mut bool, key: KeyInput) -> Option<PopupOutcome> {
@@ -1640,49 +1665,14 @@ fn progress_label_for(verb: &str) -> String {
     }
 }
 
-fn sanitize_body_for_markup(body: &str) -> String {
-    strip_terminal_sequences(body).replace('\t', " ")
-}
-
-fn wrapped_body_line(kind: &LineKind, text: &str, width: usize) -> Vec<(LineKind, String)> {
-    wrap_body_text(&body_display_text(kind, text), width)
-        .into_iter()
-        .map(|line| (kind.clone(), line))
-        .collect()
-}
-
-fn body_display_text(kind: &LineKind, text: &str) -> String {
-    match kind {
-        LineKind::Checkbox(checked) => {
-            let marker = if *checked { "☑ " } else { "☐ " };
-            format!("{marker}{text}")
-        }
-        LineKind::Heading | LineKind::Plain | LineKind::Code => text.to_string(),
-    }
-}
-
-fn wrap_body_text(text: &str, width: usize) -> Vec<String> {
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0;
-
-    for ch in text.chars() {
-        let ch_width = measure_text_width(&ch.to_string());
-        if current_width > 0 && current_width + ch_width > width {
-            lines.push(current);
-            current = String::new();
-            current_width = 0;
-        }
-        current.push(ch);
-        current_width += ch_width;
-    }
-
-    lines.push(current);
-    lines
+fn read_body_from_path(path: &std::path::Path) -> anyhow::Result<String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let document: TaskDocument = toml::from_str(&content)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    Ok(document.body)
 }
 
 fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
@@ -1773,6 +1763,7 @@ mod tests {
             size: None,
             branch: Some(format!("feature/{key}")),
             source: "provider-origin".into(),
+            path: None,
             body: String::new(),
             preview_lines: vec![format!("Origin      Linear WT-142")],
             menu,
@@ -1804,6 +1795,13 @@ mod tests {
     fn app_with_body(body: &str) -> AppState {
         let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
         browser_row.body = body.into();
+        AppState::new(vec![browser_row])
+    }
+
+    fn app_with_body_and_path(body: &str, path: Option<PathBuf>) -> AppState {
+        let mut browser_row = row("origin-sync-tui", "Origin sync TUI", "conflict");
+        browser_row.body = body.into();
+        browser_row.path = path;
         AppState::new(vec![browser_row])
     }
 
@@ -1996,6 +1994,34 @@ mod tests {
         assert_eq!(outcome, Outcome::Continue);
         assert_eq!(app.mode(), Mode::Reader);
         assert_eq!(app.handle(KeyInput::Char('d')), Outcome::Continue);
+    }
+
+    #[test]
+    fn reader_refresh_reloads_body_from_path_and_clamps_scroll() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("task.toml");
+        std::fs::write(
+            &path,
+            "title = \"t\"\nbranch = \"b\"\nbody = \"\"\"long\nbody\nhere\n\"\"\"\n",
+        )
+        .unwrap();
+        let mut app = app_with_body_and_path("long\nbody\nhere", Some(path.clone()));
+        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('G'));
+
+        std::fs::write(&path, "title = \"t\"\nbranch = \"b\"\nbody = \"short\"\n").unwrap();
+        app.handle(KeyInput::Char('r'));
+
+        assert!(app.selected_row().unwrap().body.contains("short"));
+        assert_eq!(app.reader_scroll(), 0);
+    }
+
+    #[test]
+    fn reader_refresh_without_path_shows_notice() {
+        let mut app = app_with_body("hint text");
+        app.handle(KeyInput::Enter);
+        app.handle(KeyInput::Char('r'));
+        assert!(app.notice().unwrap_or_default().contains("로컬 파일 없음"));
     }
 
     #[test]

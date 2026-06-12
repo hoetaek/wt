@@ -14,7 +14,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::io;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 const MIN_BROWSER_WIDTH: u16 = 40;
 const MIN_BROWSER_HEIGHT: u16 = 8;
@@ -54,11 +54,24 @@ fn run_browser_with_backend(
     let mut origin_fetch: Option<dispatch::InFlightOriginFetch> = None;
     let mut pending_reply: Option<mpsc::Sender<UiReply>> = None;
     let mut ctrl_c_armed = false;
+    let mut reader_refresh_tick = Instant::now();
+    let mut reader_mtime: Option<SystemTime> = None;
 
     loop {
         terminal
             .draw(|frame| draw(frame, &mut app))
             .context("draw TUI browser")?;
+
+        if app.reader_open() && reader_refresh_tick.elapsed() >= Duration::from_secs(1) {
+            reader_refresh_tick = Instant::now();
+            let current_mtime = app.selected_row_mtime();
+            if reader_mtime.is_some() && current_mtime.is_some() && current_mtime != reader_mtime {
+                app.refresh_reader_body(true);
+            }
+            reader_mtime = current_mtime;
+        } else if !app.reader_open() {
+            reader_mtime = None;
+        }
 
         poll_origin_fetch(&mut app, &mut origin_fetch, &mut pending_reply, origin_ctx);
 
