@@ -1,7 +1,9 @@
 use crate::commands::task_list;
 use crate::context::Ctx;
 use crate::error::WtError;
-use crate::tui::app::{AppState, BrowserRow, KeyInput, Outcome, PopupOutcome, PopupSpec};
+use crate::tui::app::{
+    AppState, BrowserRow, KeyInput, Mode, MouseInput, Outcome, PopupOutcome, PopupSpec,
+};
 use crate::tui::dispatch::{
     self, CtxBackend, DispatchBackend, DispatchStart, InFlightAction, WorkflowCtxBackend,
 };
@@ -11,13 +13,17 @@ use crate::tui::terminal::TerminalSession;
 use anyhow::{Context, Result, anyhow};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use std::io;
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime};
 
 const MIN_BROWSER_WIDTH: u16 = 40;
 const MIN_BROWSER_HEIGHT: u16 = 8;
+const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
 
 pub(crate) fn terminal_size_allows_browser() -> bool {
     ratatui::crossterm::terminal::size()
@@ -47,7 +53,8 @@ fn run_browser_with_backend(
     dispatch_backend: impl DispatchBackend,
     origin_ctx: Option<&Ctx>,
 ) -> Result<()> {
-    let _session = TerminalSession::new()?;
+    let mut session = TerminalSession::new()?;
+    sync_mouse_capture(&mut session, app.mode())?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("open TUI browser terminal")?;
     let mut inflight: Option<InFlightAction> = None;
@@ -56,6 +63,7 @@ fn run_browser_with_backend(
     let mut ctrl_c_armed = false;
     let mut reader_refresh_tick = Instant::now();
     let mut reader_mtime: Option<SystemTime> = None;
+    let mut click_tracker = ClickTracker::default();
 
     loop {
         terminal
@@ -114,6 +122,7 @@ fn run_browser_with_backend(
 
         match event::read().context("read TUI browser event")? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
+                click_tracker.reset();
                 if is_ctrl_c(key) {
                     if inflight.is_some() {
                         if ctrl_c_armed {
@@ -200,6 +209,31 @@ fn run_browser_with_backend(
                             }
                         }
                     }
+                    sync_mouse_capture(&mut session, app.mode())?;
+                }
+            }
+            Event::Mouse(mouse) => {
+                if let Some(input) = mouse_input(&app, mouse) {
+                    let input = match input {
+                        MouseInput::Down { visible_index }
+                            if click_tracker.is_double(visible_index, Instant::now()) =>
+                        {
+                            MouseInput::DoubleClick { visible_index }
+                        }
+                        other => other,
+                    };
+                    let was_reader_open = app.reader_open();
+                    let outcome = app.handle_mouse(input);
+                    if app.reader_open() && reader_mtime.is_none() {
+                        reader_mtime = app.selected_row_mtime();
+                        reader_refresh_tick = Instant::now();
+                    } else if was_reader_open && !app.reader_open() {
+                        reader_mtime = None;
+                    }
+                    if outcome == Outcome::Quit {
+                        break;
+                    }
+                    sync_mouse_capture(&mut session, app.mode())?;
                 }
             }
             Event::Resize(_, _) => {}
@@ -211,6 +245,59 @@ fn run_browser_with_backend(
         .show_cursor()
         .context("restore TUI browser cursor")?;
     Ok(())
+}
+
+fn mode_wants_mouse_capture(mode: Mode) -> bool {
+    mode != Mode::Reader
+}
+
+fn sync_mouse_capture(session: &mut TerminalSession, mode: Mode) -> Result<()> {
+    session
+        .set_mouse_capture(mode_wants_mouse_capture(mode))
+        .context("sync TUI browser mouse capture")
+}
+
+fn mouse_input(app: &AppState, mouse: MouseEvent) -> Option<MouseInput> {
+    if matches!(app.mode(), Mode::Reader | Mode::Menu | Mode::FilterInput) || app.has_popup() {
+        return None;
+    }
+
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            crate::tui::render::table_mouse_target(app, mouse.column, mouse.row)
+                .map(|visible_index| MouseInput::Down { visible_index })
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            crate::tui::render::table_mouse_target(app, mouse.column, mouse.row)
+                .map(|visible_index| MouseInput::Drag { visible_index })
+        }
+        MouseEventKind::Up(MouseButton::Left) => Some(MouseInput::Up),
+        _ => None,
+    }
+}
+
+#[derive(Default)]
+struct ClickTracker {
+    last_down: Option<(usize, Instant)>,
+}
+
+impl ClickTracker {
+    fn reset(&mut self) {
+        self.last_down = None;
+    }
+
+    fn is_double(&mut self, visible_index: usize, now: Instant) -> bool {
+        if let Some((last_visible_index, at)) = self.last_down
+            && last_visible_index == visible_index
+            && now.duration_since(at) <= DOUBLE_CLICK_INTERVAL
+        {
+            self.last_down = None;
+            return true;
+        }
+
+        self.last_down = Some((visible_index, now));
+        false
+    }
 }
 
 fn start_origin_fetch(
@@ -552,6 +639,23 @@ mod tests {
                 next_mtime: None,
             }
         );
+    }
+
+    #[test]
+    fn double_click_same_row_only_within_window() {
+        let mut tracker = ClickTracker::default();
+        let now = Instant::now();
+
+        assert!(!tracker.is_double(0, now));
+        assert!(tracker.is_double(0, now + Duration::from_millis(399)));
+
+        let mut tracker = ClickTracker::default();
+        assert!(!tracker.is_double(0, now));
+        assert!(!tracker.is_double(1, now + Duration::from_millis(100)));
+
+        let mut tracker = ClickTracker::default();
+        assert!(!tracker.is_double(0, now));
+        assert!(!tracker.is_double(0, now + Duration::from_millis(401)));
     }
 
     #[test]
