@@ -170,6 +170,18 @@ fn run_browser_with_backend(
                         Outcome::FetchOriginIssues => {
                             start_origin_fetch(&mut app, &mut origin_fetch, origin_ctx);
                         }
+                        Outcome::CopyRows { count, text } => {
+                            match arboard::Clipboard::new()
+                                .and_then(|mut clipboard| clipboard.set_text(text))
+                            {
+                                Ok(()) => {
+                                    app.show_dispatch_message(format!("{count} row(s) copied"))
+                                }
+                                Err(err) => {
+                                    app.show_dispatch_message(format!("clipboard 사용 불가: {err}"))
+                                }
+                            }
+                        }
                         Outcome::Dispatch { key, action } => {
                             if app.action_in_flight() {
                                 app.show_dispatch_message(

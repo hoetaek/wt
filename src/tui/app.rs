@@ -5,6 +5,7 @@ use crate::tui::remote_ui::PrintKind;
 use crate::workflow::WorkflowMetadata;
 use anyhow::Context;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +126,7 @@ impl SourceView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Mode {
     List,
+    RangeSelect,
     Reader,
     FilterInput,
     Menu,
@@ -136,6 +138,7 @@ pub(crate) enum Outcome {
     Quit,
     Refresh,
     FetchOriginIssues,
+    CopyRows { count: usize, text: String },
     Dispatch { key: String, action: OriginAction },
 }
 
@@ -239,6 +242,9 @@ pub(crate) struct AppState {
     source_view: SourceView,
     origin_only: OriginOnlyState,
     selected_index: usize,
+    selected_keys: HashSet<String>,
+    range_anchor_key: Option<String>,
+    range_prior_selected_keys: HashSet<String>,
     menu_selected_index: usize,
     mode: Mode,
     status_line: String,
@@ -355,9 +361,30 @@ const LIST_KEYMAP: &[KeymapEntry] = &[
     },
     KeymapEntry {
         mode: Mode::List,
-        key: "Enter/v",
+        key: "Enter",
         desc: "reader",
         footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
+        key: "Space",
+        desc: "mark",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
+        key: "v",
+        desc: "range",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
+        key: "a",
+        desc: "all visible",
+        footer: false,
         task_only: false,
     },
     KeymapEntry {
@@ -373,6 +400,13 @@ const LIST_KEYMAP: &[KeymapEntry] = &[
         desc: "archive",
         footer: true,
         task_only: true,
+    },
+    KeymapEntry {
+        mode: Mode::List,
+        key: "y",
+        desc: "copy rows",
+        footer: true,
+        task_only: false,
     },
     KeymapEntry {
         mode: Mode::List,
@@ -406,6 +440,44 @@ const LIST_KEYMAP: &[KeymapEntry] = &[
         mode: Mode::List,
         key: "?",
         desc: "help",
+        footer: true,
+        task_only: false,
+    },
+];
+
+const RANGE_KEYMAP: &[KeymapEntry] = &[
+    KeymapEntry {
+        mode: Mode::RangeSelect,
+        key: "j/k",
+        desc: "extend",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::RangeSelect,
+        key: "a",
+        desc: "all visible",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::RangeSelect,
+        key: "y",
+        desc: "copy rows",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::RangeSelect,
+        key: "v/Esc",
+        desc: "done",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::RangeSelect,
+        key: "q",
+        desc: "quit",
         footer: true,
         task_only: false,
     },
@@ -525,11 +597,18 @@ const MENU_KEYMAP: &[KeymapEntry] = &[
     },
 ];
 
-const MODE_KEYMAP: &[&[KeymapEntry]] = &[LIST_KEYMAP, READER_KEYMAP, FILTER_KEYMAP, MENU_KEYMAP];
+const MODE_KEYMAP: &[&[KeymapEntry]] = &[
+    LIST_KEYMAP,
+    RANGE_KEYMAP,
+    READER_KEYMAP,
+    FILTER_KEYMAP,
+    MENU_KEYMAP,
+];
 
 fn mode_keymap(mode: Mode) -> &'static [KeymapEntry] {
     match mode {
         Mode::List => LIST_KEYMAP,
+        Mode::RangeSelect => RANGE_KEYMAP,
         Mode::Reader => READER_KEYMAP,
         Mode::FilterInput => FILTER_KEYMAP,
         Mode::Menu => MENU_KEYMAP,
@@ -583,6 +662,9 @@ impl AppState {
             source_view: SourceView::All,
             origin_only: OriginOnlyState::NotFetched,
             selected_index: 0,
+            selected_keys: HashSet::new(),
+            range_anchor_key: None,
+            range_prior_selected_keys: HashSet::new(),
             menu_selected_index: 0,
             mode: Mode::List,
             status_line: String::new(),
@@ -614,6 +696,7 @@ impl AppState {
 
         match self.mode {
             Mode::List => self.handle_list_key(key),
+            Mode::RangeSelect => self.handle_range_key(key),
             Mode::Reader => self.handle_reader_key(key),
             Mode::FilterInput => self.handle_filter_key(key),
             Mode::Menu => self.handle_menu_key(key),
@@ -937,6 +1020,15 @@ impl AppState {
         self.visible_rows().get(self.selected_index).copied()
     }
 
+    #[cfg(test)]
+    pub(crate) fn selected_key_count(&self) -> usize {
+        self.selected_keys.len()
+    }
+
+    pub(crate) fn is_row_marked(&self, key: &str) -> bool {
+        self.selected_keys.contains(key)
+    }
+
     pub(crate) fn selected_row_mtime(&self) -> Option<std::time::SystemTime> {
         let path = self.selected_row()?.path.as_ref()?;
         std::fs::metadata(path)
@@ -1011,7 +1103,19 @@ impl AppState {
         if !self.origin_fetching() {
             self.invalidate_origin_only();
         }
-        self.mode = Mode::List;
+        self.retain_existing_selected_keys();
+        if self
+            .range_anchor_key
+            .as_ref()
+            .is_some_and(|key| !self.selected_keys.contains(key))
+        {
+            self.mode = Mode::List;
+            self.range_anchor_key = None;
+            self.range_prior_selected_keys.clear();
+        }
+        if self.mode != Mode::RangeSelect {
+            self.mode = Mode::List;
+        }
         self.status_line = self.list_status_line();
         self.selected_index = self
             .visible_rows()
@@ -1162,7 +1266,15 @@ impl AppState {
             KeyInput::Up | KeyInput::Char('k') => self.move_up(),
             KeyInput::Char('g') => self.move_to_first(),
             KeyInput::Char('G') => self.move_to_last(),
-            KeyInput::Enter | KeyInput::Char('v') => self.open_reader(),
+            KeyInput::Enter => self.open_reader(),
+            KeyInput::Char(' ') => self.toggle_current_selection(),
+            KeyInput::Char('a') => self.toggle_all_visible_selection(),
+            KeyInput::Char('v') => self.enter_range_select(),
+            KeyInput::Char('y') => {
+                if let Some(outcome) = self.copy_rows_outcome() {
+                    return outcome;
+                }
+            }
             KeyInput::Char('s') => self.toggle_sidebar(),
             KeyInput::PageDown => self.scroll_sidebar_down(10),
             KeyInput::PageUp => self.scroll_sidebar_up(10),
@@ -1197,7 +1309,36 @@ impl AppState {
                     return Outcome::Dispatch { key, action };
                 }
             }
-            KeyInput::Esc | KeyInput::Backspace | KeyInput::CtrlChar(_) => {}
+            KeyInput::Esc => self.clear_selection(),
+            KeyInput::Backspace | KeyInput::CtrlChar(_) => {}
+        }
+        Outcome::Continue
+    }
+
+    fn handle_range_key(&mut self, key: KeyInput) -> Outcome {
+        match key {
+            KeyInput::Down | KeyInput::Char('j') => {
+                self.move_down();
+                self.select_range_to_cursor();
+            }
+            KeyInput::Up | KeyInput::Char('k') => {
+                self.move_up();
+                self.select_range_to_cursor();
+            }
+            KeyInput::Char('a') => self.toggle_all_visible_selection(),
+            KeyInput::Char('y') => {
+                if let Some(outcome) = self.copy_rows_outcome() {
+                    return outcome;
+                }
+            }
+            KeyInput::Esc | KeyInput::Char('v') => self.exit_range_select(),
+            KeyInput::Char('q') => return Outcome::Quit,
+            KeyInput::PageDown
+            | KeyInput::PageUp
+            | KeyInput::Enter
+            | KeyInput::Backspace
+            | KeyInput::Char(_)
+            | KeyInput::CtrlChar(_) => {}
         }
         Outcome::Continue
     }
@@ -1303,6 +1444,25 @@ impl AppState {
     }
 
     fn close_reader(&mut self) {
+        self.mode = Mode::List;
+        self.status_line = self.list_status_line();
+    }
+
+    fn enter_range_select(&mut self) {
+        let Some(key) = self.selected_row().map(|row| row.key.clone()) else {
+            self.status_line = self.copy.no_selection_status.into();
+            return;
+        };
+        self.range_prior_selected_keys = self.selected_keys.clone();
+        self.range_anchor_key = Some(key);
+        self.mode = Mode::RangeSelect;
+        self.select_range_to_cursor();
+        self.status_line = self.footer_keymap_summary();
+    }
+
+    fn exit_range_select(&mut self) {
+        self.range_anchor_key = None;
+        self.range_prior_selected_keys.clear();
         self.mode = Mode::List;
         self.status_line = self.list_status_line();
     }
@@ -1428,6 +1588,128 @@ impl AppState {
 
     fn reset_detail_scroll(&mut self) {
         self.sidebar_scroll = 0;
+    }
+
+    fn toggle_current_selection(&mut self) {
+        let Some(key) = self.selected_row().map(|row| row.key.clone()) else {
+            return;
+        };
+        if !self.selected_keys.remove(&key) {
+            self.selected_keys.insert(key);
+        }
+    }
+
+    fn toggle_all_visible_selection(&mut self) {
+        let keys = self
+            .visible_rows()
+            .into_iter()
+            .map(|row| row.key.clone())
+            .collect::<Vec<_>>();
+        if keys.is_empty() {
+            return;
+        }
+        if keys.iter().all(|key| self.selected_keys.contains(key)) {
+            for key in keys {
+                self.selected_keys.remove(&key);
+            }
+        } else {
+            self.selected_keys.extend(keys);
+        }
+        if self.mode == Mode::RangeSelect {
+            self.range_prior_selected_keys = self.selected_keys.clone();
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.selected_keys.clear();
+        self.range_anchor_key = None;
+        self.range_prior_selected_keys.clear();
+    }
+
+    fn select_range_to_cursor(&mut self) {
+        let Some(anchor_key) = self.range_anchor_key.as_deref() else {
+            return;
+        };
+        let Some(cursor_key) = self.selected_row().map(|row| row.key.as_str()) else {
+            return;
+        };
+        let visible_rows = self.visible_rows();
+        let Some(anchor_index) = visible_rows.iter().position(|row| row.key == anchor_key) else {
+            self.exit_range_select();
+            return;
+        };
+        let Some(cursor_index) = visible_rows.iter().position(|row| row.key == cursor_key) else {
+            return;
+        };
+        let start = anchor_index.min(cursor_index);
+        let end = anchor_index.max(cursor_index);
+        let range_keys = visible_rows[start..=end]
+            .iter()
+            .map(|row| row.key.clone())
+            .collect::<Vec<_>>();
+        self.selected_keys = self.range_prior_selected_keys.clone();
+        self.selected_keys.extend(range_keys);
+    }
+
+    fn copy_rows_outcome(&self) -> Option<Outcome> {
+        let rows = self.copy_target_rows();
+        if rows.is_empty() {
+            return None;
+        }
+        let text = rows
+            .iter()
+            .map(|row| self.copy_row_text(row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(Outcome::CopyRows {
+            count: rows.len(),
+            text,
+        })
+    }
+
+    fn copy_target_rows(&self) -> Vec<&BrowserRow> {
+        let visible_rows = self.visible_rows();
+        let selected_visible = visible_rows
+            .iter()
+            .copied()
+            .filter(|row| self.selected_keys.contains(&row.key))
+            .collect::<Vec<_>>();
+        if selected_visible.is_empty() {
+            self.selected_row().into_iter().collect()
+        } else {
+            selected_visible
+        }
+    }
+
+    fn copy_row_text(&self, row: &BrowserRow) -> String {
+        self.columns
+            .iter()
+            .map(|column| copy_cell_text(row, column.cell))
+            .collect::<Vec<_>>()
+            .join("\t")
+    }
+
+    fn retain_existing_selected_keys(&mut self) {
+        let available_keys = self
+            .all_rows_for_selection()
+            .into_iter()
+            .map(|row| row.key.clone())
+            .collect::<HashSet<_>>();
+        self.selected_keys
+            .retain(|key| available_keys.contains(key));
+        self.range_prior_selected_keys
+            .retain(|key| available_keys.contains(key));
+    }
+
+    fn all_rows_for_selection(&self) -> Vec<&BrowserRow> {
+        let mut rows = self.rows.iter().collect::<Vec<_>>();
+        if let OriginOnlyState::Loaded {
+            rows: origin_rows, ..
+        } = &self.origin_only
+        {
+            rows.extend(origin_rows.iter());
+        }
+        rows
     }
 
     fn selected_key_owned(&self) -> Option<String> {
@@ -1680,6 +1962,22 @@ fn read_body_from_path(path: &std::path::Path) -> anyhow::Result<String> {
     Ok(workflow.body.unwrap_or_default())
 }
 
+fn copy_cell_text(row: &BrowserRow, cell: BrowserCell) -> String {
+    match cell {
+        BrowserCell::Status | BrowserCell::OriginStatus => row.status.clone(),
+        BrowserCell::RunStatus => row.run_status.clone(),
+        BrowserCell::OriginLabel => row.origin_label.clone(),
+        BrowserCell::Title => row.title.clone(),
+        BrowserCell::Key => row.key.clone(),
+        BrowserCell::NextAction => row.next_action.clone(),
+        BrowserCell::Duration => row.duration.clone().unwrap_or_else(|| "-".into()),
+        BrowserCell::Size => row.size.clone().unwrap_or_else(|| "-".into()),
+        BrowserCell::Branch => row.branch.clone().unwrap_or_else(|| "not prepared".into()),
+        BrowserCell::Source => row.source.clone(),
+        BrowserCell::Task => format!("{}  task {}", row.title, row.key),
+    }
+}
+
 fn row_matches_filter(row: &BrowserRow, filter: &str) -> bool {
     if filter.is_empty() {
         return true;
@@ -1817,7 +2115,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         let bound = [
-            'j', 'k', 'g', 'G', 'v', 's', '?', 'r', 'i', '/', 'm', 'q', 'h', 'l',
+            'j', 'k', 'g', 'G', 'v', 'a', 's', '?', 'r', 'i', '/', 'm', 'q', 'h', 'l', 'y',
         ];
         for ch in bound {
             assert!(
@@ -1825,6 +2123,7 @@ mod tests {
                 "hard-bound List key '{ch}' missing from keymap"
             );
         }
+        assert!(keymap_text.contains("Space"));
         bound.into_iter().collect()
     }
 
@@ -1986,6 +2285,171 @@ mod tests {
         app.handle(KeyInput::Esc);
         assert_eq!(app.mode(), Mode::List);
         assert_eq!(app.selected_row().map(|row| row.key.clone()), before);
+    }
+
+    #[test]
+    fn space_toggles_selection_and_esc_clears() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+
+        app.handle(KeyInput::Char(' '));
+        assert_eq!(app.selected_key_count(), 1);
+        app.handle(KeyInput::Down);
+        app.handle(KeyInput::Char(' '));
+        assert_eq!(app.selected_key_count(), 2);
+        app.handle(KeyInput::Esc);
+
+        assert_eq!(app.selected_key_count(), 0);
+    }
+
+    #[test]
+    fn a_toggles_all_visible_and_respects_filter() {
+        let mut app = AppState::new(vec![
+            source_row("alpha", "local"),
+            source_row("beta", "local"),
+        ]);
+        app.handle(KeyInput::Char('/'));
+        for ch in "alpha".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+        app.handle(KeyInput::Enter);
+
+        app.handle(KeyInput::Char('a'));
+        assert_eq!(app.selected_key_count(), 1);
+        app.handle(KeyInput::Char('a'));
+
+        assert_eq!(app.selected_key_count(), 0);
+    }
+
+    #[test]
+    fn selection_survives_row_reload_and_drops_missing_keys() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+        app.handle(KeyInput::Char(' '));
+        app.handle(KeyInput::Down);
+        app.handle(KeyInput::Char(' '));
+
+        app.replace_rows_preserving_selection(vec![source_row("a", "local")], Vec::new(), "a");
+
+        assert_eq!(app.selected_key_count(), 1);
+    }
+
+    #[test]
+    fn v_enters_range_select_and_extends_with_jk() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+
+        app.handle(KeyInput::Char('v'));
+        assert_eq!(app.mode(), Mode::RangeSelect);
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Esc);
+
+        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.selected_key_count(), 3);
+    }
+
+    #[test]
+    fn range_select_recomputes_selection_when_cursor_moves_back() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+
+        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('k'));
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+
+        assert_eq!(count, 2);
+        assert!(text.contains("a"));
+        assert!(text.contains("b"));
+        assert!(!text.contains("c"));
+    }
+
+    #[test]
+    fn range_select_preserves_prior_selection_outside_current_range() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char(' '));
+        app.handle(KeyInput::Char('g'));
+
+        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Char('j'));
+        app.handle(KeyInput::Char('k'));
+        app.handle(KeyInput::Esc);
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+
+        assert_eq!(count, 2);
+        assert!(text.contains("a"));
+        assert!(!text.contains("b"));
+        assert!(text.contains("c"));
+    }
+
+    #[test]
+    fn range_select_exits_when_anchor_disappears_on_reload() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+        app.handle(KeyInput::Char('v'));
+
+        app.replace_rows_preserving_selection(vec![source_row("b", "local")], Vec::new(), "b");
+
+        assert_eq!(app.mode(), Mode::List);
+    }
+
+    #[test]
+    fn y_copies_selected_visible_rows_or_current() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+        assert_eq!(count, 1);
+        assert!(text.contains("a"));
+
+        app.handle(KeyInput::Char(' '));
+        app.handle(KeyInput::Down);
+        app.handle(KeyInput::Char(' '));
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+
+        assert_eq!(count, 2);
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.lines().next().unwrap().contains('\t'));
+    }
+
+    #[test]
+    fn y_copies_only_selected_rows_still_visible() {
+        let mut app = AppState::new(vec![
+            source_row("alpha", "local"),
+            source_row("beta", "local"),
+        ]);
+        app.handle(KeyInput::Char('a'));
+        app.handle(KeyInput::Char('/'));
+        for ch in "alpha".chars() {
+            app.handle(KeyInput::Char(ch));
+        }
+        app.handle(KeyInput::Enter);
+
+        let Outcome::CopyRows { count, text } = app.handle(KeyInput::Char('y')) else {
+            panic!("expected CopyRows");
+        };
+
+        assert_eq!(count, 1);
+        assert!(text.contains("alpha"));
+        assert!(!text.contains("beta"));
     }
 
     #[test]
@@ -2866,7 +3330,8 @@ run = "run-demo"
     fn footer_swaps_entirely_per_mode() {
         let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
         let list_footer = app.status_line().to_string();
-        assert!(list_footer.contains("Enter/v"));
+        assert!(list_footer.contains("Enter reader"));
+        assert!(list_footer.contains("v range"));
         assert!(list_footer.contains("m actions"));
 
         app.handle(KeyInput::Enter);

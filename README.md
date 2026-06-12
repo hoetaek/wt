@@ -257,9 +257,11 @@ merge.
   pull requests.
   In a TTY, bare `wt task list` opens the full-screen interactive browser.
   Pipes, `--json`, and `--quiet` keep the existing text and JSON contracts.
-  Enter opens the selected task or workflow in the full-screen reader. Origin
-  actions such as diff, fetch, pull, and push are available through the `m`
-  action menu and matching shortcuts.
+  Enter opens the selected task or workflow in the full-screen reader. Space,
+  `v`, `a`, and `y` mark rows, range-select visible rows, toggle all visible
+  rows, and copy selected rows to the clipboard. Origin actions such as diff,
+  fetch, pull, and push are available through the `m` action menu and matching
+  shortcuts.
 - `wt task origin import [<issue>...]` imports provider issues as TaskDocuments,
   records title, branch, body, and `[origin]`, and may materialize the provider
   issue branch first; it does not start worktrees, local branches, TaskRuns,
