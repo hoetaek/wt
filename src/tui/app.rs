@@ -850,6 +850,7 @@ impl AppState {
         self.running = None;
         self.popup = None;
         self.status_line = status;
+        self.notice = None;
     }
 
     pub(crate) fn filter(&self) -> &str {
@@ -1939,6 +1940,22 @@ mod tests {
         assert!(!app.action_in_flight());
         assert_eq!(app.status_line(), "pulled origin-sync-tui");
         assert_eq!(app.output_lines().len(), 1);
+    }
+
+    #[test]
+    fn finishing_action_clears_stale_notice() {
+        let mut app = app();
+        app.begin_action("origin-sync-tui", "pull");
+        app.show_dispatch_message("action in progress - wait for it to finish".into());
+        assert_eq!(
+            app.notice(),
+            Some("action in progress - wait for it to finish")
+        );
+
+        app.finish_action("pulled origin-sync-tui".into());
+
+        assert_eq!(app.notice(), None);
+        assert_eq!(app.status_line(), "pulled origin-sync-tui");
     }
 
     #[test]
