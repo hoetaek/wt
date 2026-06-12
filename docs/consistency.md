@@ -1201,7 +1201,7 @@ Inventory-only field인 source는 기본 text에서 group으로 표현하고, pa
 summary는 text에서 반복하지 않고 JSON output에 둔다. JSON output은 두 mode 모두
 `{ "tasks": [...], "invalid_tasks": [...] }` top-level shape와 기존 row field를 유지한다.
 Duration이 human column으로 승격되어도 새 JSON top-level을 만들지 않고, full body 읽기는 TUI
-body 뷰가 소유한다. Bare JSON은 actionable working set만 담고, `--all --json`은 full
+Reader가 소유한다. Bare JSON은 actionable working set만 담고, `--all --json`은 full
 inventory를 담는다.
 TaskDocument TOML parse/validation failure는 조용히 숨기지 않고 text warning 또는 JSON
 `invalid_tasks`로 보고한다. Non-interactive text/JSON output과 browser initial render는
@@ -1209,16 +1209,17 @@ worktree, local branch, TaskRun, Workflow, provider issue, pull request, agent s
 수정하지 않는다. Workflow inventory는 계속 `wt workflow list`, worktree/branch/site state는
 계속 `wt list`가 맡는다.
 
-Task list TUI에서 `v`는 선택된 TaskDocument body 전문을 browser를 떠나지 않고 읽는 body 뷰를
-연다. Body 뷰는 같은 terminal surface 안의 vertical band layout이며, 선택 task title과 scroll
-percent indicator를 함께 보여주고 `j`/`k`, PageUp/PageDown으로 스크롤한다. Local scaffold body는
-알려진 Planning template을 따를 수 있지만 provider issue import body는 외부 본문을 verbatim으로
-보존하므로 untrusted display input이다. Body 뷰는 terminal control sequence와 tab을 먼저
+Task list TUI에서 Enter는 선택된 TaskDocument body 전문을 browser를 떠나지 않고 읽는
+full-screen Reader 모드를 연다. `v`는 후속 range-select PR 전까지 Reader를 여는 임시
+별칭이다. Reader는 같은 terminal surface 안의 vertical band layout이며, 선택 task title,
+wrap 후 줄 범위, scroll percent indicator를 함께 보여주고 `j`/`k`, `d`/`u`,
+Ctrl-D/Ctrl-U, PageUp/PageDown, `g`/`G`로 스크롤한다. Local scaffold body는 알려진
+Planning template을 따를 수 있지만 provider issue import body는 외부 본문을 verbatim으로
+보존하므로 untrusted display input이다. Reader는 terminal control sequence와 tab을 먼저
 sanitize해야 한다. 범용 Markdown renderer를 붙이지 않는 것은 trust boundary가 아니라 simplicity
 선택이며, heading, checkbox, fenced code, inline code/강조 표식 같은 알려진 line pattern만
-경량 styling으로 렌더한다. Body 뷰가 열려 있는 동안 Enter action menu, origin shortcut
-dispatch, archive 같은 row action 진입은 막히고, `v` 또는 Esc로 닫은 뒤에만 다시 list action을
-수행한다.
+경량 styling으로 렌더한다. Reader가 열려 있는 동안 action menu, origin shortcut dispatch,
+archive 같은 row action 진입은 막히고, `q` 또는 Esc로 닫은 뒤에만 다시 list action을 수행한다.
 
 `wt task archive <key...>`는 active TaskDocument를 `<repo-root>/.wt/execution/archive/tasks/<key>/`
 아래로 옮겨 active task inventory에서 감추는 visibility/retention command다. Workflow archive와
@@ -1621,7 +1622,7 @@ Inventory interactive mode는 `wt task list`와 `wt workflow list`의 TTY human 
 
 인터랙티브 브라우저의 초기 렌더는 read-only다. Provider 호출 없이 TaskDocument,
 Workflow, origin snapshot 같은 디스크 상태만 읽는다. 액션 메뉴는 `OriginActionMenu`
-모델이 단일 소스이며, 단축키는 액셀러레이터일 뿐이다. 모든 액션은 Enter 메뉴에서
+모델이 단일 소스이며, 단축키는 액셀러레이터일 뿐이다. 모든 액션은 `m` 메뉴에서
 발견 가능해야 한다.
 
 Task list 브라우저의 source view는 출처 축을 보는 TUI 전용 presentation filter다.
