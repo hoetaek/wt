@@ -14,7 +14,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::io;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 const MIN_BROWSER_WIDTH: u16 = 40;
 const MIN_BROWSER_HEIGHT: u16 = 8;
@@ -54,11 +54,32 @@ fn run_browser_with_backend(
     let mut origin_fetch: Option<dispatch::InFlightOriginFetch> = None;
     let mut pending_reply: Option<mpsc::Sender<UiReply>> = None;
     let mut ctrl_c_armed = false;
+    let mut reader_refresh_tick = Instant::now();
+    let mut reader_mtime: Option<SystemTime> = None;
 
     loop {
         terminal
             .draw(|frame| draw(frame, &mut app))
             .context("draw TUI browser")?;
+
+        if app.reader_open() && reader_mtime.is_none() {
+            reader_mtime = app.selected_row_mtime();
+        }
+        if app.reader_open() && reader_refresh_tick.elapsed() >= Duration::from_secs(1) {
+            reader_refresh_tick = Instant::now();
+            let current_mtime = app.selected_row_mtime();
+            let decision = reader_refresh_decision(true, reader_mtime, current_mtime);
+            if decision.refresh {
+                if app.refresh_reader_body(true) {
+                    reader_mtime = decision.next_mtime;
+                }
+            } else {
+                reader_mtime = decision.next_mtime;
+            }
+        } else if !app.reader_open() {
+            let decision = reader_refresh_decision(false, reader_mtime, None);
+            reader_mtime = decision.next_mtime;
+        }
 
         poll_origin_fetch(&mut app, &mut origin_fetch, &mut pending_reply, origin_ctx);
 
@@ -118,7 +139,16 @@ fn run_browser_with_backend(
                         continue;
                     }
 
-                    match app.handle(input) {
+                    let was_reader_open = app.reader_open();
+                    let outcome = app.handle(input);
+                    if app.reader_open() && reader_mtime.is_none() {
+                        reader_mtime = app.selected_row_mtime();
+                        reader_refresh_tick = Instant::now();
+                    } else if was_reader_open && !app.reader_open() {
+                        reader_mtime = None;
+                    }
+
+                    match outcome {
                         Outcome::Continue => {}
                         Outcome::Quit => break,
                         Outcome::Refresh => {
@@ -386,6 +416,31 @@ fn is_ctrl_c(key: KeyEvent) -> bool {
     key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReaderRefreshDecision {
+    refresh: bool,
+    next_mtime: Option<SystemTime>,
+}
+
+fn reader_refresh_decision(
+    reader_open: bool,
+    baseline: Option<SystemTime>,
+    current_mtime: Option<SystemTime>,
+) -> ReaderRefreshDecision {
+    if !reader_open {
+        return ReaderRefreshDecision {
+            refresh: false,
+            next_mtime: None,
+        };
+    }
+    let refresh = baseline.is_some() && current_mtime.is_some() && current_mtime != baseline;
+    let next_mtime = current_mtime.or(baseline);
+    ReaderRefreshDecision {
+        refresh,
+        next_mtime,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,6 +500,67 @@ mod tests {
 
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(key_input(ctrl_c), None);
+    }
+
+    #[test]
+    fn reader_refresh_decision_initializes_baseline_without_refresh() {
+        let mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+
+        assert_eq!(
+            reader_refresh_decision(true, None, Some(mtime)),
+            ReaderRefreshDecision {
+                refresh: false,
+                next_mtime: Some(mtime),
+            }
+        );
+    }
+
+    #[test]
+    fn reader_refresh_decision_detects_changed_mtime() {
+        let before = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let after = SystemTime::UNIX_EPOCH + Duration::from_secs(2);
+
+        assert_eq!(
+            reader_refresh_decision(true, Some(before), Some(after)),
+            ReaderRefreshDecision {
+                refresh: true,
+                next_mtime: Some(after),
+            }
+        );
+    }
+
+    #[test]
+    fn reader_refresh_decision_resets_baseline_when_reader_closes() {
+        let mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+
+        assert_eq!(
+            reader_refresh_decision(false, Some(mtime), Some(mtime)),
+            ReaderRefreshDecision {
+                refresh: false,
+                next_mtime: None,
+            }
+        );
+    }
+
+    #[test]
+    fn reader_refresh_decision_keeps_baseline_during_temporary_missing_mtime() {
+        let before = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let after = SystemTime::UNIX_EPOCH + Duration::from_secs(2);
+
+        assert_eq!(
+            reader_refresh_decision(true, Some(before), None),
+            ReaderRefreshDecision {
+                refresh: false,
+                next_mtime: Some(before),
+            }
+        );
+        assert_eq!(
+            reader_refresh_decision(true, Some(before), Some(after)),
+            ReaderRefreshDecision {
+                refresh: true,
+                next_mtime: Some(after),
+            }
+        );
     }
 
     #[test]

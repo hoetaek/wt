@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const LIST_START: &str = "◆";
 const BAR: &str = "│";
@@ -144,6 +144,7 @@ pub(crate) fn origin_only_rows(
                 size: None,
                 branch: None,
                 source: "provider-origin".into(),
+                path: None,
                 preview_lines: origin_issue_preview_lines(&provider, &import_id, &body),
                 body,
                 menu: OriginActionMenu::for_origin_issue_placeholder("Provider issue"),
@@ -170,6 +171,8 @@ fn origin_issue_preview_lines(provider: &str, id: &str, hint: &str) -> Vec<Strin
 struct TaskListRow {
     key: String,
     path: String,
+    #[serde(skip_serializing)]
+    source_path: PathBuf,
     title: String,
     branch: Option<String>,
     origin: Option<TaskOriginSummary>,
@@ -351,20 +354,29 @@ fn read_task_row(ctx: &Ctx, path: &Path, run_statuses: &TaskRunStatusIndex) -> R
     let document: TaskDocument = toml::from_str(&content)
         .with_context(|| format!("Failed to parse task: {relative_path}"))?;
     let run_status = run_statuses.status_for(&key);
-    task_row_with_run_status(ctx, key, relative_path, document, run_status)
+    task_row_with_run_status(
+        ctx,
+        key,
+        relative_path,
+        path.to_path_buf(),
+        document,
+        run_status,
+    )
 }
 
 #[cfg(test)]
 fn task_row(ctx: &Ctx, key: String, path: String, document: TaskDocument) -> Result<TaskListRow> {
     let run_statuses = TaskRunStatusIndex::load(ctx)?;
+    let source_path = PathBuf::from(&path);
     let run_status = run_statuses.status_for(&key);
-    task_row_with_run_status(ctx, key, path, document, run_status)
+    task_row_with_run_status(ctx, key, path, source_path, document, run_status)
 }
 
 fn task_row_with_run_status(
     ctx: &Ctx,
     key: String,
     path: String,
+    source_path: PathBuf,
     document: TaskDocument,
     run_status: String,
 ) -> Result<TaskListRow> {
@@ -391,6 +403,7 @@ fn task_row_with_run_status(
     Ok(TaskListRow {
         key,
         path,
+        source_path,
         title: document.title,
         branch: task::prepared_branch_name(&document.branch).map(str::to_string),
         origin,
@@ -469,6 +482,7 @@ fn browser_row(row: &TaskListRow) -> crate::tui::app::BrowserRow {
         size: row.size.clone(),
         branch: row.branch.clone(),
         source: row.source.clone(),
+        path: Some(row.source_path.clone()),
         body: row.body.clone(),
         preview_lines: browser_preview_lines(row),
         menu: row.origin_action_menu(),
@@ -1015,6 +1029,7 @@ mod tests {
             size: None,
             branch: Some("demo".into()),
             source: source.into(),
+            path: None,
             body: String::new(),
             preview_lines: Vec::new(),
             menu: OriginActionMenu::for_local_task(key, title),
@@ -1462,6 +1477,42 @@ updated_at = "2026-05-18T00:00:01Z"
             task_inventory_column(&row, TaskListColumnKind::Source),
             browser_row(&row).source
         );
+    }
+
+    #[test]
+    fn task_browser_row_path_points_to_real_file_for_reader_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        let task_path = tasks_dir.join("demo.toml");
+        fs::write(
+            &task_path,
+            r#"title = "Demo"
+branch = "demo"
+body = "old task body"
+"#,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, true).unwrap();
+        let rows = browser_rows(&report);
+        assert_eq!(rows[0].path.as_deref(), Some(task_path.as_path()));
+        assert!(rows[0].path.as_ref().is_some_and(|path| path.exists()));
+
+        let mut app = crate::tui::app::AppState::new(rows);
+        app.handle(crate::tui::app::KeyInput::Enter);
+        fs::write(
+            &task_path,
+            r#"title = "Demo"
+branch = "demo"
+body = "new task body"
+"#,
+        )
+        .unwrap();
+        app.handle(crate::tui::app::KeyInput::Char('r'));
+
+        assert!(app.selected_row().unwrap().body.contains("new task body"));
     }
 
     #[test]
