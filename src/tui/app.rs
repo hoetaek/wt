@@ -1547,7 +1547,6 @@ impl AppState {
                     row.body = body;
                 }
                 self.invalidate_body_wrap_cache();
-                self.reader_scroll = 0;
                 self.clamp_reader_scroll();
             }
             Err(err) => {
@@ -2013,7 +2012,44 @@ mod tests {
         app.handle(KeyInput::Char('r'));
 
         assert!(app.selected_row().unwrap().body.contains("short"));
+        let line_count = app.wrapped_body_lines(80).len();
+        app.clamp_reader_scroll_to(line_count.saturating_sub(app.reader_viewport_height()));
         assert_eq!(app.reader_scroll(), 0);
+    }
+
+    #[test]
+    fn reader_refresh_preserves_scroll_when_body_remains_long() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("task.toml");
+        let long_body = (0..60)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(
+            &path,
+            format!("title = \"t\"\nbranch = \"b\"\nbody = \"\"\"{long_body}\"\"\"\n"),
+        )
+        .unwrap();
+        let mut app = app_with_body_and_path(&long_body, Some(path.clone()));
+        app.handle(KeyInput::Enter);
+        app.set_reader_viewport_height(10);
+        app.handle(KeyInput::Char('G'));
+        let before = app.reader_scroll();
+        assert_ne!(before, 0);
+
+        let refreshed_body = (0..70)
+            .map(|index| format!("refreshed line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(
+            &path,
+            format!("title = \"t\"\nbranch = \"b\"\nbody = \"\"\"{refreshed_body}\"\"\"\n"),
+        )
+        .unwrap();
+        app.handle(KeyInput::Char('r'));
+
+        assert!(app.selected_row().unwrap().body.contains("refreshed line"));
+        assert_eq!(app.reader_scroll(), before);
     }
 
     #[test]
