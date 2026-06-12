@@ -64,6 +64,7 @@ fn run_browser_with_backend(
     let mut reader_refresh_tick = Instant::now();
     let mut reader_mtime: Option<SystemTime> = None;
     let mut click_tracker = ClickTracker::default();
+    let mut mouse_gesture = MouseGestureTracker::default();
 
     loop {
         terminal
@@ -216,7 +217,7 @@ fn run_browser_with_backend(
                 if matches!(mouse.kind, MouseEventKind::Drag(MouseButton::Left)) {
                     click_tracker.reset();
                 }
-                if let Some(input) = mouse_input(&app, mouse) {
+                if let Some(input) = mouse_gesture.input(&app, mouse) {
                     let input = match input {
                         MouseInput::Down { visible_index }
                             if click_tracker.is_double(visible_index, Instant::now()) =>
@@ -260,25 +261,6 @@ fn sync_mouse_capture(session: &mut TerminalSession, mode: Mode) -> Result<()> {
         .context("sync TUI browser mouse capture")
 }
 
-fn mouse_input(app: &AppState, mouse: MouseEvent) -> Option<MouseInput> {
-    if matches!(app.mode(), Mode::Reader | Mode::Menu | Mode::FilterInput) || app.has_popup() {
-        return None;
-    }
-
-    match mouse.kind {
-        MouseEventKind::Down(MouseButton::Left) => {
-            crate::tui::render::table_mouse_target(app, mouse.column, mouse.row)
-                .map(|visible_index| MouseInput::Down { visible_index })
-        }
-        MouseEventKind::Drag(MouseButton::Left) => {
-            crate::tui::render::table_mouse_target(app, mouse.column, mouse.row)
-                .map(|visible_index| MouseInput::Drag { visible_index })
-        }
-        MouseEventKind::Up(MouseButton::Left) => Some(MouseInput::Up),
-        _ => None,
-    }
-}
-
 #[derive(Default)]
 struct ClickTracker {
     last_down: Option<(usize, Instant)>,
@@ -300,6 +282,44 @@ impl ClickTracker {
 
         self.last_down = Some((visible_index, now));
         false
+    }
+}
+
+#[derive(Default)]
+struct MouseGestureTracker {
+    active: bool,
+}
+
+impl MouseGestureTracker {
+    fn input(&mut self, app: &AppState, mouse: MouseEvent) -> Option<MouseInput> {
+        if matches!(app.mode(), Mode::Reader | Mode::Menu | Mode::FilterInput) || app.has_popup() {
+            self.active = false;
+            return None;
+        }
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let target = crate::tui::render::table_mouse_target(app, mouse.column, mouse.row);
+                self.active = target.is_some();
+                target.map(|visible_index| MouseInput::Down { visible_index })
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if !self.active {
+                    return None;
+                }
+                crate::tui::render::table_mouse_target(app, mouse.column, mouse.row)
+                    .map(|visible_index| MouseInput::Drag { visible_index })
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self.active {
+                    self.active = false;
+                    Some(MouseInput::Up)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 }
 
@@ -549,7 +569,10 @@ mod tests {
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions, OutputMode};
+    use crate::origin_action_menu::{OriginActionMenu, OriginLabel};
     use crate::services::issues::IssueListItem;
+    use crate::tui::app::TableMouseLayout;
+    use ratatui::layout::Rect;
     use std::sync::mpsc;
 
     fn test_ctx(root: &std::path::Path) -> Ctx {
@@ -564,6 +587,44 @@ mod tests {
                 ..CtxOptions::default()
             },
         )
+    }
+
+    fn row(key: &str) -> BrowserRow {
+        BrowserRow {
+            key: key.into(),
+            title: key.into(),
+            status: "stale".into(),
+            run_status: "new".into(),
+            origin_label: "Linear WT-142".into(),
+            next_action: "diff".into(),
+            duration: None,
+            size: None,
+            branch: Some(format!("feature/{key}")),
+            source: "local".into(),
+            path: None,
+            body: String::new(),
+            preview_lines: vec!["Origin      Linear WT-142".into()],
+            menu: OriginActionMenu::for_origin_task(key, key, OriginLabel::new("linear", "WT-142")),
+        }
+    }
+
+    fn app_with_mouse_layout() -> AppState {
+        let app = AppState::new(vec![row("a"), row("b")]);
+        app.set_table_mouse_layout(Some(TableMouseLayout {
+            rows: Rect::new(1, 1, 10, 2),
+            first_visible_index: 0,
+            visible_count: 2,
+        }));
+        app
+    }
+
+    fn left_mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
     }
 
     #[test]
@@ -670,6 +731,50 @@ mod tests {
         tracker.reset();
 
         assert!(!tracker.is_double(0, now + Duration::from_millis(100)));
+    }
+
+    #[test]
+    fn outside_mouse_release_does_not_commit_keyboard_range_select() {
+        let mut app = app_with_mouse_layout();
+        app.handle(KeyInput::Char('v'));
+        assert_eq!(app.mode(), Mode::RangeSelect);
+        let mut tracker = MouseGestureTracker::default();
+
+        let down = tracker.input(
+            &app,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 0, 0),
+        );
+        let up = tracker.input(
+            &app,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 0, 0),
+        );
+
+        assert_eq!(down, None);
+        assert_eq!(up, None);
+        assert_eq!(app.mode(), Mode::RangeSelect);
+    }
+
+    #[test]
+    fn row_mouse_release_commits_active_range_select_gesture() {
+        let mut app = app_with_mouse_layout();
+        app.handle(KeyInput::Char('v'));
+        assert_eq!(app.mode(), Mode::RangeSelect);
+        let mut tracker = MouseGestureTracker::default();
+
+        if let Some(input) = tracker.input(
+            &app,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+        ) {
+            app.handle_mouse(input);
+        }
+        if let Some(input) = tracker.input(
+            &app,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 1),
+        ) {
+            app.handle_mouse(input);
+        }
+
+        assert_eq!(app.mode(), Mode::List);
     }
 
     #[test]
