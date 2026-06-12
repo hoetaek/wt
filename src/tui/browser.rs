@@ -214,18 +214,8 @@ fn run_browser_with_backend(
                 }
             }
             Event::Mouse(mouse) => {
-                if matches!(mouse.kind, MouseEventKind::Drag(MouseButton::Left)) {
-                    click_tracker.reset();
-                }
                 if let Some(input) = mouse_gesture.input(&app, mouse) {
-                    let input = match input {
-                        MouseInput::Down { visible_index }
-                            if click_tracker.is_double(visible_index, Instant::now()) =>
-                        {
-                            MouseInput::DoubleClick { visible_index }
-                        }
-                        other => other,
-                    };
+                    let input = mouse_input_for_app(input, &mut click_tracker, Instant::now());
                     let was_reader_open = app.reader_open();
                     let outcome = app.handle_mouse(input);
                     if app.reader_open() && reader_mtime.is_none() {
@@ -263,62 +253,101 @@ fn sync_mouse_capture(session: &mut TerminalSession, mode: Mode) -> Result<()> {
 
 #[derive(Default)]
 struct ClickTracker {
-    last_down: Option<(usize, Instant)>,
+    last_click: Option<(usize, Instant)>,
+    pending_double: Option<usize>,
 }
 
 impl ClickTracker {
     fn reset(&mut self) {
-        self.last_down = None;
+        self.last_click = None;
+        self.pending_double = None;
     }
 
-    fn is_double(&mut self, visible_index: usize, now: Instant) -> bool {
-        if let Some((last_visible_index, at)) = self.last_down
+    fn down(&mut self, visible_index: usize, now: Instant) {
+        self.pending_double = None;
+        if let Some((last_visible_index, at)) = self.last_click
             && last_visible_index == visible_index
             && now.duration_since(at) <= DOUBLE_CLICK_INTERVAL
         {
-            self.last_down = None;
+            self.pending_double = Some(visible_index);
+        }
+    }
+
+    fn drag(&mut self) {
+        self.reset();
+    }
+
+    fn up(&mut self, visible_index: usize, now: Instant) -> bool {
+        if self.pending_double == Some(visible_index) {
+            self.reset();
             return true;
         }
 
-        self.last_down = Some((visible_index, now));
+        self.pending_double = None;
+        self.last_click = Some((visible_index, now));
         false
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserMouseInput {
+    Down { visible_index: usize },
+    Drag { visible_index: usize },
+    Up { visible_index: usize },
+}
+
 #[derive(Default)]
 struct MouseGestureTracker {
-    active: bool,
+    active_visible_index: Option<usize>,
 }
 
 impl MouseGestureTracker {
-    fn input(&mut self, app: &AppState, mouse: MouseEvent) -> Option<MouseInput> {
+    fn input(&mut self, app: &AppState, mouse: MouseEvent) -> Option<BrowserMouseInput> {
         if matches!(app.mode(), Mode::Reader | Mode::Menu | Mode::FilterInput) || app.has_popup() {
-            self.active = false;
+            self.active_visible_index = None;
             return None;
         }
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let target = crate::tui::render::table_mouse_target(app, mouse.column, mouse.row);
-                self.active = target.is_some();
-                target.map(|visible_index| MouseInput::Down { visible_index })
+                self.active_visible_index = target;
+                target.map(|visible_index| BrowserMouseInput::Down { visible_index })
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if !self.active {
-                    return None;
-                }
+                self.active_visible_index?;
                 crate::tui::render::table_mouse_target(app, mouse.column, mouse.row)
-                    .map(|visible_index| MouseInput::Drag { visible_index })
+                    .map(|visible_index| BrowserMouseInput::Drag { visible_index })
             }
-            MouseEventKind::Up(MouseButton::Left) => {
-                if self.active {
-                    self.active = false;
-                    Some(MouseInput::Up)
-                } else {
-                    None
-                }
-            }
+            MouseEventKind::Up(MouseButton::Left) => self
+                .active_visible_index
+                .take()
+                .map(|visible_index| BrowserMouseInput::Up { visible_index }),
             _ => None,
+        }
+    }
+}
+
+fn mouse_input_for_app(
+    input: BrowserMouseInput,
+    click_tracker: &mut ClickTracker,
+    now: Instant,
+) -> MouseInput {
+    match input {
+        BrowserMouseInput::Down { visible_index } => {
+            click_tracker.down(visible_index, now);
+            MouseInput::Down { visible_index }
+        }
+        BrowserMouseInput::Drag { visible_index } => {
+            click_tracker.drag();
+            MouseInput::Drag { visible_index }
+        }
+        BrowserMouseInput::Up { visible_index } => {
+            if click_tracker.up(visible_index, now) {
+                MouseInput::DoubleClick { visible_index }
+            } else {
+                MouseInput::Up
+            }
         }
     }
 }
@@ -627,6 +656,19 @@ mod tests {
         }
     }
 
+    fn handle_browser_mouse(
+        app: &mut AppState,
+        gesture: &mut MouseGestureTracker,
+        clicks: &mut ClickTracker,
+        mouse: MouseEvent,
+        now: Instant,
+    ) {
+        if let Some(input) = gesture.input(app, mouse) {
+            let input = mouse_input_for_app(input, clicks, now);
+            app.handle_mouse(input);
+        }
+    }
+
     #[test]
     fn popup_outcome_maps_to_ui_reply_exhaustively() {
         assert_eq!(reply_for(PopupOutcome::Bool(true)), UiReply::Bool(true));
@@ -710,16 +752,22 @@ mod tests {
         let mut tracker = ClickTracker::default();
         let now = Instant::now();
 
-        assert!(!tracker.is_double(0, now));
-        assert!(tracker.is_double(0, now + Duration::from_millis(399)));
+        tracker.down(0, now);
+        assert!(!tracker.up(0, now));
+        tracker.down(0, now + Duration::from_millis(399));
+        assert!(tracker.up(0, now + Duration::from_millis(399)));
 
         let mut tracker = ClickTracker::default();
-        assert!(!tracker.is_double(0, now));
-        assert!(!tracker.is_double(1, now + Duration::from_millis(100)));
+        tracker.down(0, now);
+        assert!(!tracker.up(0, now));
+        tracker.down(1, now + Duration::from_millis(100));
+        assert!(!tracker.up(1, now + Duration::from_millis(100)));
 
         let mut tracker = ClickTracker::default();
-        assert!(!tracker.is_double(0, now));
-        assert!(!tracker.is_double(0, now + Duration::from_millis(401)));
+        tracker.down(0, now);
+        assert!(!tracker.up(0, now));
+        tracker.down(0, now + Duration::from_millis(401));
+        assert!(!tracker.up(0, now + Duration::from_millis(401)));
     }
 
     #[test]
@@ -727,10 +775,100 @@ mod tests {
         let mut tracker = ClickTracker::default();
         let now = Instant::now();
 
-        assert!(!tracker.is_double(0, now));
-        tracker.reset();
+        tracker.down(0, now);
+        assert!(!tracker.up(0, now));
+        tracker.down(0, now + Duration::from_millis(100));
+        tracker.drag();
 
-        assert!(!tracker.is_double(0, now + Duration::from_millis(100)));
+        assert!(!tracker.up(0, now + Duration::from_millis(100)));
+    }
+
+    #[test]
+    fn second_click_drag_selects_range_instead_of_opening_reader() {
+        let mut app = app_with_mouse_layout();
+        let mut gesture = MouseGestureTracker::default();
+        let mut clicks = ClickTracker::default();
+        let now = Instant::now();
+
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+            now,
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 1),
+            now,
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(100),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Drag(MouseButton::Left), 2, 2),
+            now + Duration::from_millis(110),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 2),
+            now + Duration::from_millis(120),
+        );
+
+        assert_eq!(app.mode(), Mode::List);
+        assert!(!app.reader_open());
+        assert!(app.is_row_marked("a"));
+        assert!(app.is_row_marked("b"));
+    }
+
+    #[test]
+    fn second_click_up_opens_reader_within_double_click_window() {
+        let mut app = app_with_mouse_layout();
+        let mut gesture = MouseGestureTracker::default();
+        let mut clicks = ClickTracker::default();
+        let now = Instant::now();
+
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+            now,
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 1),
+            now,
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(100),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(120),
+        );
+
+        assert_eq!(app.mode(), Mode::Reader);
     }
 
     #[test]
@@ -759,20 +897,24 @@ mod tests {
         let mut app = app_with_mouse_layout();
         app.handle(KeyInput::Char('v'));
         assert_eq!(app.mode(), Mode::RangeSelect);
-        let mut tracker = MouseGestureTracker::default();
+        let mut gesture = MouseGestureTracker::default();
+        let mut clicks = ClickTracker::default();
+        let now = Instant::now();
 
-        if let Some(input) = tracker.input(
-            &app,
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
             left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
-        ) {
-            app.handle_mouse(input);
-        }
-        if let Some(input) = tracker.input(
-            &app,
+            now,
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
             left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 1),
-        ) {
-            app.handle_mouse(input);
-        }
+            now,
+        );
 
         assert_eq!(app.mode(), Mode::List);
     }
