@@ -15,6 +15,8 @@ const SIDEBAR_RIGHT_MIN_LIST_WIDTH: u16 = 80;
 const SIDEBAR_RIGHT_MIN_WIDTH: u16 = 32;
 const SIDEBAR_BOTTOM_MIN_WIDTH: u16 = 50;
 const SIDEBAR_BOTTOM_HEIGHT: u16 = 7;
+const READER_BODY_HORIZONTAL_PADDING: u16 = 1;
+const MIN_READER_BODY_WIDTH_FOR_HORIZONTAL_PADDING: u16 = 48;
 const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -588,9 +590,14 @@ fn draw_output_panel(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 }
 
 fn draw_reader(frame: &mut Frame<'_>, area: Rect, app: &mut AppState) {
-    let visible_count = area.height.saturating_sub(2) as usize;
+    let body_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::chrome_style())
+        .title_style(theme::chrome_style());
+    let body_area = reader_body_inner(body_block.inner(area));
+    let visible_count = body_area.height as usize;
     app.set_reader_viewport_height(visible_count);
-    let content_width = area.width.saturating_sub(2).max(1) as usize;
+    let content_width = body_area.width.max(1) as usize;
     let mut visual_lines = app.wrapped_body_lines(content_width);
     if visual_lines.is_empty() {
         visual_lines.push(Line::styled("no body", theme::dim_style()));
@@ -616,14 +623,21 @@ fn draw_reader(frame: &mut Frame<'_>, area: Rect, app: &mut AppState) {
         .skip(start)
         .take(visible_count)
         .collect::<Vec<_>>();
-    let body = Paragraph::new(rendered_lines).block(
-        Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(theme::chrome_style())
-            .title_style(theme::chrome_style()),
-    );
-    frame.render_widget(body, area);
+    frame.render_widget(body_block.title(title), area);
+    frame.render_widget(Paragraph::new(rendered_lines), body_area);
+}
+
+fn reader_body_inner(area: Rect) -> Rect {
+    if area.width < MIN_READER_BODY_WIDTH_FOR_HORIZONTAL_PADDING {
+        return area;
+    }
+    Rect {
+        x: area.x.saturating_add(READER_BODY_HORIZONTAL_PADDING),
+        width: area
+            .width
+            .saturating_sub(READER_BODY_HORIZONTAL_PADDING.saturating_mul(2)),
+        ..area
+    }
 }
 
 fn body_viewport_max_start(line_count: usize, visible_count: usize) -> usize {
@@ -1534,6 +1548,24 @@ mod tests {
         );
         assert_eq!(constraints[4], Constraint::Length(24));
         assert_eq!(constraints[5], Constraint::Length(18));
+    }
+
+    #[test]
+    fn reader_body_adds_horizontal_padding_when_roomy() {
+        let area = Rect::new(0, 0, 80, 24);
+        let inner = reader_body_inner(area);
+
+        assert_eq!(inner.x, area.x + 1);
+        assert_eq!(inner.width, area.width - 2);
+    }
+
+    #[test]
+    fn reader_body_omits_horizontal_padding_when_cramped() {
+        let area = Rect::new(0, 0, 47, 24);
+        let inner = reader_body_inner(area);
+
+        assert_eq!(inner.x, area.x);
+        assert_eq!(inner.width, area.width);
     }
 
     #[test]

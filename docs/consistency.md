@@ -1189,9 +1189,10 @@ column model을 쓰지만 row ordering contract는 표면별로 다르다. Text 
 `provider-origin`, `local` source group 순서로 보여주고 각 group 안에서는 collected row order를
 유지한다. TUI browser는 source group을 만들지 않고 collected TaskDocument row order를 그대로
 보여준다. 기본 visible column은 latest TaskRun에서 파생한 `run` status(`new`, `prepared`, `running`,
-`passed`, `failed`, `skipped`, `unknown`), origin health의 `next` action, `dur` expected duration,
-grow하는 `task` title/key, `branch`다. `dur`는 TaskDocument body의 `계획 (Planning)` section에서
-`예상 소요 (expected duration)` 값을 읽으며 값이 없으면 표시 전용 fallback을 쓴다.
+`passed`, `failed`, `skipped`, `unknown`), grow하는 `task` title/key, origin health의 `next` action이다.
+Optional `dur` expected duration column은 TaskDocument body의 `계획 (Planning)` section에서
+`예상 소요 (expected duration)` 값을 읽으며 값이 없으면 표시 전용 fallback을 쓰고, optional `branch`
+column은 prepared branch를 표시한다.
 Effective managed config(`.wt.toml`, `<repo-root>/.wt/config/local.toml`, selected profile config
 merge)의 `[task_list.columns.<column>]`에서 각 column의 `hidden`과 `width`를 설정한다.
 `task` column은 남는 폭을 받는 grow column이고, 모든 column을 숨긴 설정은 빈 human row model을

@@ -724,16 +724,9 @@ fn default_task_list_columns(cfg: &Config) -> Vec<Column> {
             cfg.task_list.columns.run,
         ),
         task_list_column(
-            TaskListColumnKind::Next,
-            "next",
-            false,
-            false,
-            cfg.task_list.columns.next,
-        ),
-        task_list_column(
             TaskListColumnKind::Dur,
             "dur",
-            false,
+            true,
             false,
             cfg.task_list.columns.dur,
         ),
@@ -745,9 +738,16 @@ fn default_task_list_columns(cfg: &Config) -> Vec<Column> {
             cfg.task_list.columns.task,
         ),
         task_list_column(
+            TaskListColumnKind::Next,
+            "next",
+            false,
+            false,
+            cfg.task_list.columns.next,
+        ),
+        task_list_column(
             TaskListColumnKind::Branch,
             "branch",
-            false,
+            true,
             false,
             cfg.task_list.columns.branch,
         ),
@@ -1634,7 +1634,7 @@ body = "Task body"
     }
 
     #[test]
-    fn default_columns_show_run_dur_task_branch_hide_size() {
+    fn default_visible_columns_are_run_task_next() {
         let cols = default_task_list_columns(&Config::default());
         let visible = cols
             .iter()
@@ -1642,11 +1642,24 @@ body = "Task body"
             .map(|column| column.title.as_str())
             .collect::<Vec<_>>();
 
-        assert!(visible.contains(&"run"));
+        assert_eq!(visible, vec!["run", "task", "next"]);
+    }
+
+    #[test]
+    fn hidden_dur_and_branch_can_be_restored_by_config() {
+        let mut cfg = Config::default();
+        cfg.task_list.columns.dur.hidden = Some(false);
+        cfg.task_list.columns.branch.hidden = Some(false);
+
+        let cols = default_task_list_columns(&cfg);
+        let visible = cols
+            .iter()
+            .filter(|column| !column.hidden)
+            .map(|column| column.title.as_str())
+            .collect::<Vec<_>>();
+
         assert!(visible.contains(&"dur"));
-        assert!(visible.contains(&"task"));
         assert!(visible.contains(&"branch"));
-        assert!(!visible.contains(&"size"));
     }
 
     #[test]
@@ -1816,10 +1829,10 @@ body = '''
         assert!(
             text.lines().any(|line| {
                 line.contains("run")
-                    && line.contains("next")
-                    && line.contains("dur")
                     && line.contains("task")
-                    && line.contains("branch")
+                    && line.contains("next")
+                    && !line.contains("dur")
+                    && !line.contains("branch")
             }),
             "default browser columns should remain visible at narrow width:\n{text}"
         );
@@ -1853,8 +1866,8 @@ body = '''
         );
         assert!(
             text.lines()
-                .any(|line| line.contains("run") && line.contains("next") && line.contains("dur")),
-            "run/next/dur columns should remain visible with long keys:\n{text}"
+                .any(|line| line.contains("run") && line.contains("task") && line.contains("next")),
+            "run/task/next columns should remain visible with long keys:\n{text}"
         );
     }
 
