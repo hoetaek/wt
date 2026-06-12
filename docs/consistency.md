@@ -1214,6 +1214,14 @@ full-screen Reader 모드를 연다. `v`는 RangeSelect 모드를 열어 현재 
 `j`/`k`로 anchor부터 cursor까지의 visible row range를 선택한다. Space는 현재 row 선택을
 toggle하고, `a`는 visible row 전체 선택을 toggle한다. `y`는 선택된 visible row를, 선택이
 없으면 현재 row 하나를 현재 표시 column 순서의 tab-separated text로 clipboard에 복사한다.
+마우스 capture가 켜진 List/RangeSelect 상태에서 표 body row를 클릭하면 cursor가 그 row로
+이동하고 선택 toggle은 하지 않는다. 같은 row를 400ms 안에 다시 클릭하면 Reader를 연다. 왼쪽
+버튼을 누른 뒤 다른 row로 drag하면 기존 RangeSelect의 prior selection union visible span 규칙으로
+anchor부터 현재 row까지 선택하고, release는 range를 commit한 뒤 List로 돌아간다. 헤더, notice,
+footer, sidebar, popup/help/menu, 마지막 row 아래 빈 공간, 표 밖 column 클릭은 no-op이다.
+Reader가 열리면 mouse capture를 꺼서 terminal native drag selection/copy가 동작해야 하며,
+Reader를 닫고 List로 돌아오면 capture를 다시 켠다. 종료와 panic cleanup은 capture를 반드시
+해제한다.
 Reader는 같은 terminal surface 안의 vertical band layout이며, 선택 task title,
 wrap 후 줄 범위, scroll percent indicator를 함께 보여주고 `j`/`k`, `d`/`u`,
 Ctrl-D/Ctrl-U, PageUp/PageDown, `g`/`G`로 스크롤하며, `r`은 선택 row의 로컬 source

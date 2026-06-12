@@ -4,6 +4,7 @@ use crate::tui::reader_render::render_reader_lines;
 use crate::tui::remote_ui::PrintKind;
 use crate::workflow::WorkflowMetadata;
 use anyhow::Context;
+use ratatui::layout::Rect;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -84,6 +85,21 @@ pub(crate) enum KeyInput {
     Backspace,
     Char(char),
     CtrlChar(char),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MouseInput {
+    Down { visible_index: usize },
+    Drag { visible_index: usize },
+    DoubleClick { visible_index: usize },
+    Up,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TableMouseLayout {
+    pub(crate) rows: Rect,
+    pub(crate) first_visible_index: usize,
+    pub(crate) visible_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,6 +272,7 @@ pub(crate) struct AppState {
     columns: Vec<BrowserColumn>,
     reader_scroll: usize,
     reader_viewport_height: Cell<usize>,
+    table_mouse_layout: Cell<Option<TableMouseLayout>>,
     body_wrap_cache: RefCell<BodyWrapCache>,
     #[cfg(test)]
     body_wrap_recompute_count: Cell<usize>,
@@ -364,6 +381,13 @@ const LIST_KEYMAP: &[KeymapEntry] = &[
         key: "Enter",
         desc: "reader",
         footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::List,
+        key: "mouse",
+        desc: "click move / drag select / double-click reader",
+        footer: false,
         task_only: false,
     },
     KeymapEntry {
@@ -526,6 +550,13 @@ const READER_KEYMAP: &[KeymapEntry] = &[
         footer: true,
         task_only: false,
     },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "mouse drag",
+        desc: "terminal native selection",
+        footer: false,
+        task_only: false,
+    },
 ];
 
 const FILTER_KEYMAP: &[KeymapEntry] = &[
@@ -676,6 +707,7 @@ impl AppState {
             columns,
             reader_scroll: 0,
             reader_viewport_height: Cell::new(10),
+            table_mouse_layout: Cell::new(None),
             body_wrap_cache: RefCell::new(BodyWrapCache::default()),
             #[cfg(test)]
             body_wrap_recompute_count: Cell::new(0),
@@ -701,6 +733,51 @@ impl AppState {
             Mode::FilterInput => self.handle_filter_key(key),
             Mode::Menu => self.handle_menu_key(key),
         }
+    }
+
+    pub(crate) fn handle_mouse(&mut self, input: MouseInput) -> Outcome {
+        if self.has_popup()
+            || self.help_open
+            || matches!(self.mode, Mode::FilterInput | Mode::Menu | Mode::Reader)
+        {
+            return Outcome::Continue;
+        }
+
+        self.notice = None;
+        match input {
+            MouseInput::Down { visible_index } => {
+                if !self.select_visible_index(visible_index) {
+                    return Outcome::Continue;
+                }
+                self.range_prior_selected_keys = self.selected_keys.clone();
+                self.range_anchor_key = self.selected_key_owned();
+            }
+            MouseInput::Drag { visible_index } => {
+                if self.range_anchor_key.is_none() || !self.select_visible_index(visible_index) {
+                    return Outcome::Continue;
+                }
+                self.mode = Mode::RangeSelect;
+                self.select_range_to_cursor();
+                self.status_line = self.footer_keymap_summary();
+            }
+            MouseInput::Up => {
+                if self.mode == Mode::RangeSelect {
+                    self.exit_range_select();
+                } else {
+                    self.range_anchor_key = None;
+                    self.range_prior_selected_keys.clear();
+                }
+            }
+            MouseInput::DoubleClick { visible_index } => {
+                if !self.select_visible_index(visible_index) {
+                    return Outcome::Continue;
+                }
+                self.range_anchor_key = None;
+                self.range_prior_selected_keys.clear();
+                self.open_reader();
+            }
+        }
+        Outcome::Continue
     }
 
     pub(crate) fn mode(&self) -> Mode {
@@ -813,6 +890,14 @@ impl AppState {
 
     pub(crate) fn set_reader_viewport_height(&self, height: usize) {
         self.reader_viewport_height.set(height.max(1));
+    }
+
+    pub(crate) fn set_table_mouse_layout(&self, layout: Option<TableMouseLayout>) {
+        self.table_mouse_layout.set(layout);
+    }
+
+    pub(crate) fn table_mouse_layout(&self) -> Option<TableMouseLayout> {
+        self.table_mouse_layout.get()
     }
 
     fn reader_viewport_height(&self) -> usize {
@@ -1586,6 +1671,14 @@ impl AppState {
         }
     }
 
+    fn select_visible_index(&mut self, visible_index: usize) -> bool {
+        if visible_index >= self.visible_rows().len() {
+            return false;
+        }
+        self.set_selected_index(visible_index);
+        true
+    }
+
     fn reset_detail_scroll(&mut self) {
         self.sidebar_scroll = 0;
     }
@@ -2285,6 +2378,75 @@ mod tests {
         app.handle(KeyInput::Esc);
         assert_eq!(app.mode(), Mode::List);
         assert_eq!(app.selected_row().map(|row| row.key.clone()), before);
+    }
+
+    #[test]
+    fn mouse_down_moves_cursor_and_drag_selects_span() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+
+        app.handle_mouse(MouseInput::Down { visible_index: 0 });
+        app.handle_mouse(MouseInput::Drag { visible_index: 2 });
+        app.handle_mouse(MouseInput::Up);
+
+        assert_eq!(app.selected_key(), Some("c"));
+        assert_eq!(app.selected_key_count(), 3);
+        assert_eq!(app.mode(), Mode::List);
+    }
+
+    #[test]
+    fn mouse_drag_reuses_prior_selection_union_span() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+            source_row("d", "local"),
+        ]);
+        app.handle(KeyInput::Char(' '));
+
+        app.handle_mouse(MouseInput::Down { visible_index: 2 });
+        app.handle_mouse(MouseInput::Drag { visible_index: 3 });
+        app.handle_mouse(MouseInput::Up);
+
+        assert!(app.is_row_marked("a"));
+        assert!(!app.is_row_marked("b"));
+        assert!(app.is_row_marked("c"));
+        assert!(app.is_row_marked("d"));
+    }
+
+    #[test]
+    fn double_click_same_row_opens_reader() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+
+        app.handle_mouse(MouseInput::DoubleClick { visible_index: 1 });
+
+        assert_eq!(app.selected_key(), Some("b"));
+        assert_eq!(app.mode(), Mode::Reader);
+    }
+
+    #[test]
+    fn mouse_is_no_op_while_popup_help_or_reader_is_open() {
+        let mut app = AppState::new(vec![source_row("a", "local"), source_row("b", "local")]);
+        app.open_popup(PopupSpec::Confirm {
+            prompt: "Run?".into(),
+            default: false,
+        });
+        app.handle_mouse(MouseInput::Down { visible_index: 1 });
+        assert_eq!(app.selected_key(), Some("a"));
+        app.handle_popup_key(KeyInput::Esc);
+
+        app.handle(KeyInput::Char('?'));
+        app.handle_mouse(MouseInput::Down { visible_index: 1 });
+        assert_eq!(app.selected_key(), Some("a"));
+        app.handle(KeyInput::Char('?'));
+
+        app.handle(KeyInput::Enter);
+        app.handle_mouse(MouseInput::Down { visible_index: 1 });
+        assert_eq!(app.selected_key(), Some("a"));
+        assert_eq!(app.mode(), Mode::Reader);
     }
 
     #[test]

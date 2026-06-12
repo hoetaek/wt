@@ -1,5 +1,6 @@
 use crate::tui::app::{
     AppState, BrowserCell, BrowserColumn, BrowserColumnWidth, BrowserRow, Mode, PopupView,
+    TableMouseLayout,
 };
 use crate::tui::remote_ui::PrintKind;
 use crate::tui::theme;
@@ -271,6 +272,7 @@ fn bottom_sidebar_possible(width: u16, available_height: u16) -> bool {
 
 fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     if let Some(message) = app.empty_state_message() {
+        app.set_table_mouse_layout(None);
         let empty = Paragraph::new(message).block(
             Block::default()
                 .title(app.inventory_title_line())
@@ -286,6 +288,12 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
     let selected_index = app.selected_visible_index().unwrap_or(0);
     let row_capacity = table_row_capacity(area);
     let offset = row_viewport_offset(selected_index, row_capacity);
+    let data_rows = table_data_rows(area, row_capacity);
+    app.set_table_mouse_layout(Some(TableMouseLayout {
+        rows: data_rows,
+        first_visible_index: offset,
+        visible_count: visible_rows.len(),
+    }));
     let columns = app.columns();
     let effective_widths = effective_column_widths(columns, area.width);
     let rows = visible_rows
@@ -316,6 +324,31 @@ fn draw_rows(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
                 .title_style(theme::chrome_style()),
         );
     frame.render_widget(table, area);
+}
+
+pub(crate) fn table_mouse_target(app: &AppState, column: u16, row: u16) -> Option<usize> {
+    let layout = app.table_mouse_layout()?;
+    if column < layout.rows.x || column >= layout.rows.x.saturating_add(layout.rows.width) {
+        return None;
+    }
+    if row < layout.rows.y || row >= layout.rows.y.saturating_add(layout.rows.height) {
+        return None;
+    }
+
+    let visible_index = layout
+        .first_visible_index
+        .saturating_add(row.saturating_sub(layout.rows.y) as usize);
+    (visible_index < layout.visible_count).then_some(visible_index)
+}
+
+fn table_data_rows(area: Rect, row_capacity: usize) -> Rect {
+    let inner = chrome_block().inner(area);
+    Rect {
+        x: inner.x,
+        y: inner.y.saturating_add(1),
+        width: inner.width,
+        height: (row_capacity.min(u16::MAX as usize) as u16).min(inner.height.saturating_sub(1)),
+    }
 }
 
 fn table_row_capacity(area: Rect) -> usize {
@@ -646,7 +679,7 @@ fn draw_help_popup(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
         if entry_count == 0 {
             0
         } else {
-            1 + entry_count.div_ceil(3)
+            1 + entry_count.div_ceil(4)
         }
     })
     .sum::<usize>() as u16
@@ -669,7 +702,7 @@ fn draw_help_popup(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
             continue;
         }
         lines.push(Line::styled(help_mode_label(mode), theme::chrome_style()));
-        lines.extend(entries.chunks(3).map(|chunk| {
+        lines.extend(entries.chunks(4).map(|chunk| {
             let mut spans = Vec::new();
             for (index, (_, key, desc)) in chunk.iter().enumerate() {
                 if index > 0 {
@@ -718,12 +751,12 @@ fn popup_rect(area: Rect, desired_height: u16) -> Rect {
 }
 
 fn help_popup_rect(area: Rect, desired_height: u16) -> Rect {
-    let max_height = area.height.saturating_sub(2).max(3);
+    let max_height = area.height.max(3);
     let height = desired_height.min(max_height).min(area.height.max(1));
     let [area] = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
         .areas(area);
-    let [area] = Layout::horizontal([Constraint::Percentage(70)])
+    let [area] = Layout::horizontal([Constraint::Percentage(90)])
         .flex(Flex::Center)
         .areas(area);
     area
@@ -1077,6 +1110,12 @@ mod tests {
         browser_row
     }
 
+    fn local_rows(count: usize) -> Vec<BrowserRow> {
+        (0..count)
+            .map(|index| source_row(&format!("row-{index}"), "local"))
+            .collect()
+    }
+
     fn line_contains_text(buffer: &Buffer, width: u16, y: u16, text: &str) -> bool {
         let chars = text.chars().collect::<Vec<_>>();
         (0..=width.saturating_sub(chars.len() as u16)).any(|x| {
@@ -1122,6 +1161,43 @@ mod tests {
                     .then(|| buffer[(x, y)].style())
             })
         })
+    }
+
+    #[test]
+    fn table_mouse_target_maps_rendered_body_rows() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+        render_buffer_mut(80, 12, &mut app);
+
+        assert_eq!(table_mouse_target(&app, 2, 6), Some(0));
+        assert_eq!(table_mouse_target(&app, 2, 7), Some(1));
+        assert_eq!(table_mouse_target(&app, 2, 8), Some(2));
+    }
+
+    #[test]
+    fn table_mouse_target_ignores_non_row_regions() {
+        let mut app = AppState::new(vec![source_row("a", "local")]);
+        render_buffer_mut(80, 12, &mut app);
+
+        assert_eq!(table_mouse_target(&app, 2, 0), None);
+        assert_eq!(table_mouse_target(&app, 2, 3), None);
+        assert_eq!(table_mouse_target(&app, 2, 4), None);
+        assert_eq!(table_mouse_target(&app, 2, 7), None);
+        assert_eq!(table_mouse_target(&app, 0, 6), None);
+        assert_eq!(table_mouse_target(&app, 79, 6), None);
+    }
+
+    #[test]
+    fn table_mouse_target_honors_scroll_offset() {
+        let mut app = AppState::new(local_rows(10));
+        app.handle(KeyInput::Char('G'));
+        render_buffer_mut(80, 10, &mut app);
+
+        assert_eq!(table_mouse_target(&app, 2, 6), Some(8));
+        assert_eq!(table_mouse_target(&app, 2, 7), Some(9));
     }
 
     fn has_colored_cell(buffer: &Buffer, width: u16, height: u16) -> bool {
