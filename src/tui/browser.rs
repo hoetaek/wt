@@ -293,36 +293,47 @@ impl ClickTracker {
 enum BrowserMouseInput {
     Down { visible_index: usize },
     Drag { visible_index: usize },
-    Up { visible_index: usize },
+    Up { visible_index: usize, dragged: bool },
 }
 
 #[derive(Default)]
 struct MouseGestureTracker {
-    active_visible_index: Option<usize>,
+    active: Option<ActiveMouseGesture>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ActiveMouseGesture {
+    visible_index: usize,
+    dragged: bool,
 }
 
 impl MouseGestureTracker {
     fn input(&mut self, app: &AppState, mouse: MouseEvent) -> Option<BrowserMouseInput> {
         if matches!(app.mode(), Mode::Reader | Mode::Menu | Mode::FilterInput) || app.has_popup() {
-            self.active_visible_index = None;
+            self.active = None;
             return None;
         }
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let target = crate::tui::render::table_mouse_target(app, mouse.column, mouse.row);
-                self.active_visible_index = target;
+                self.active = target.map(|visible_index| ActiveMouseGesture {
+                    visible_index,
+                    dragged: false,
+                });
                 target.map(|visible_index| BrowserMouseInput::Down { visible_index })
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                self.active_visible_index?;
+                self.active.as_mut()?.dragged = true;
                 crate::tui::render::table_mouse_target(app, mouse.column, mouse.row)
                     .map(|visible_index| BrowserMouseInput::Drag { visible_index })
             }
-            MouseEventKind::Up(MouseButton::Left) => self
-                .active_visible_index
-                .take()
-                .map(|visible_index| BrowserMouseInput::Up { visible_index }),
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.active.take().map(|gesture| BrowserMouseInput::Up {
+                    visible_index: gesture.visible_index,
+                    dragged: gesture.dragged,
+                })
+            }
             _ => None,
         }
     }
@@ -342,7 +353,13 @@ fn mouse_input_for_app(
             click_tracker.drag();
             MouseInput::Drag { visible_index }
         }
-        BrowserMouseInput::Up { visible_index } => {
+        BrowserMouseInput::Up {
+            visible_index,
+            dragged,
+        } => {
+            if dragged {
+                return MouseInput::Up;
+            }
             if click_tracker.up(visible_index, now) {
                 MouseInput::DoubleClick { visible_index }
             } else {
@@ -869,6 +886,53 @@ mod tests {
         );
 
         assert_eq!(app.mode(), Mode::Reader);
+    }
+
+    #[test]
+    fn drag_release_does_not_seed_next_click_as_double_click() {
+        let mut app = app_with_mouse_layout();
+        let mut gesture = MouseGestureTracker::default();
+        let mut clicks = ClickTracker::default();
+        let now = Instant::now();
+
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+            now,
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Drag(MouseButton::Left), 2, 2),
+            now + Duration::from_millis(10),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 2),
+            now + Duration::from_millis(20),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Down(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(100),
+        );
+        handle_browser_mouse(
+            &mut app,
+            &mut gesture,
+            &mut clicks,
+            left_mouse(MouseEventKind::Up(MouseButton::Left), 2, 1),
+            now + Duration::from_millis(120),
+        );
+
+        assert_eq!(app.mode(), Mode::List);
+        assert!(!app.reader_open());
     }
 
     #[test]
