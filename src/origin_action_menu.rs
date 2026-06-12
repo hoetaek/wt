@@ -28,7 +28,7 @@ impl OriginActionMenu {
         Self {
             title: title.into(),
             items: vec![
-                OriginActionItem::enabled(OriginAction::Publish, "Publish as issue", "pub")
+                OriginActionItem::enabled(OriginAction::Publish, "Publish as issue", "P")
                     .external_write(),
                 OriginActionItem::enabled(OriginAction::Attach, "Attach existing issue", "t"),
                 OriginActionItem::enabled(
@@ -59,7 +59,7 @@ impl OriginActionMenu {
                 OriginActionItem::disabled(
                     OriginAction::Push,
                     "Push to issue",
-                    "P",
+                    "push",
                     no_origin_reason,
                 )
                 .external_write(),
@@ -730,9 +730,9 @@ mod tests {
             Some(OriginAction::CopyReference)
         );
         let local = OriginActionMenu::for_local_task("scratch-clean", "Scratch cleanup");
+        assert_eq!(local.action_for_shortcut("P"), Some(OriginAction::Publish));
         assert_eq!(local.action_for_shortcut("A"), Some(OriginAction::Archive));
         assert_eq!(local.action_for_shortcut("t"), Some(OriginAction::Attach));
-        assert_eq!(local.action_for_shortcut("P"), None);
     }
 
     #[test]

@@ -368,12 +368,12 @@ fn mouse_input_for_app(
         } => {
             if dragged {
                 click_tracker.drag();
-                return MouseInput::Up;
+                return MouseInput::Up { dragged: true };
             }
             if click_tracker.up(visible_index, now) {
                 MouseInput::DoubleClick { visible_index }
             } else {
-                MouseInput::Up
+                MouseInput::Up { dragged: false }
             }
         }
     }
@@ -1111,7 +1111,7 @@ mod tests {
     }
 
     #[test]
-    fn row_mouse_release_commits_active_range_select_gesture() {
+    fn row_mouse_release_without_drag_keeps_keyboard_range_select() {
         let mut app = app_with_mouse_layout();
         app.handle(KeyInput::Char('v'));
         assert_eq!(app.mode(), Mode::RangeSelect);
@@ -1134,7 +1134,7 @@ mod tests {
             now,
         );
 
-        assert_eq!(app.mode(), Mode::List);
+        assert_eq!(app.mode(), Mode::RangeSelect);
     }
 
     #[test]

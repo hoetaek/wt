@@ -41,10 +41,12 @@ enum Block {
         marker: String,
         checkbox: Option<bool>,
         spans: Vec<StyledSpan>,
+        quote_depth: usize,
     },
     Code {
         language: Option<String>,
         text: String,
+        quote_depth: usize,
     },
     Quote(Vec<StyledSpan>),
     Rule,
@@ -84,6 +86,7 @@ impl Block {
                 marker,
                 checkbox,
                 spans,
+                quote_depth,
             } => {
                 let mut rendered = vec![StyledSpan::new(marker.clone(), list_marker_style(), None)];
                 rendered.push(StyledSpan::plain(" "));
@@ -97,9 +100,25 @@ impl Block {
                 }
                 rendered.extend(spans);
                 let continuation = display_width(&marker) + 1 + checkbox.map(|_| 2).unwrap_or(0);
-                wrap_spans(rendered, width, Some(continuation))
+                let lines = wrap_spans(
+                    rendered,
+                    width.saturating_sub(quote_prefix_width(quote_depth)),
+                    Some(continuation),
+                );
+                prefix_quote_lines(lines, quote_depth)
             }
-            Self::Code { language, text } => code_lines(&text, language.as_deref(), width),
+            Self::Code {
+                language,
+                text,
+                quote_depth,
+            } => {
+                let lines = code_lines(
+                    &text,
+                    language.as_deref(),
+                    width.saturating_sub(quote_prefix_width(quote_depth)),
+                );
+                prefix_quote_lines(lines, quote_depth)
+            }
             Self::Quote(spans) => {
                 let mut rendered = vec![
                     StyledSpan::new("│", quote_style(), None),
@@ -192,6 +211,7 @@ struct ItemState {
     checkbox: Option<bool>,
     spans: Vec<StyledSpan>,
     emitted: bool,
+    quote_depth: usize,
 }
 
 #[derive(Debug, Default)]
@@ -221,11 +241,7 @@ impl MarkdownState {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
             Event::Text(text) => self.text(text.as_ref()),
-            Event::Code(code) => self.push_span(StyledSpan::new(
-                code.to_string(),
-                code_style(),
-                self.link.clone(),
-            )),
+            Event::Code(code) => self.code_span(code.as_ref()),
             Event::SoftBreak | Event::HardBreak => self.push_span(StyledSpan::plain("\n")),
             Event::Rule => self.blocks.push(Block::Rule),
             Event::TaskListMarker(checked) => {
@@ -244,6 +260,7 @@ impl MarkdownState {
                 self.heading = Some((heading_level_number(level), String::new()))
             }
             Tag::CodeBlock(kind) => {
+                self.emit_current_item_if_needed();
                 self.code = Some((language_from_code_block(kind), String::new()))
             }
             Tag::List(start) => self.start_list(start),
@@ -292,7 +309,11 @@ impl MarkdownState {
             }
             TagEnd::CodeBlock => {
                 if let Some((language, text)) = self.code.take() {
-                    self.blocks.push(Block::Code { language, text });
+                    self.blocks.push(Block::Code {
+                        language,
+                        text,
+                        quote_depth: self.quote_depth,
+                    });
                 }
             }
             TagEnd::List(_) => {
@@ -355,6 +376,7 @@ impl MarkdownState {
         };
         self.item_stack.push(ItemState {
             marker,
+            quote_depth: self.quote_depth,
             ..ItemState::default()
         });
     }
@@ -376,6 +398,7 @@ impl MarkdownState {
             marker: item.marker.clone(),
             checkbox: item.checkbox,
             spans: item.spans.clone(),
+            quote_depth: item.quote_depth,
         });
     }
 
@@ -384,7 +407,20 @@ impl MarkdownState {
             marker: item.marker,
             checkbox: item.checkbox,
             spans: item.spans,
+            quote_depth: item.quote_depth,
         });
+    }
+
+    fn code_span(&mut self, code: &str) {
+        if let Some((_, heading)) = &mut self.heading {
+            heading.push_str(code);
+            return;
+        }
+        self.push_span(StyledSpan::new(
+            code.to_string(),
+            code_style(),
+            self.link.clone(),
+        ));
     }
 
     fn text(&mut self, text: &str) {
@@ -585,6 +621,7 @@ fn wrap_spans(
         lines.push(line_from_units(
             continuation.then_some(continuation_width.unwrap_or(0)),
             &units[start..line_end],
+            width,
         ));
         start = next_start;
         continuation = true;
@@ -614,7 +651,7 @@ fn span_units(spans: &[StyledSpan]) -> Vec<Unit> {
         .collect()
 }
 
-fn line_from_units(prefix_width: Option<usize>, units: &[Unit]) -> Line<'static> {
+fn line_from_units(prefix_width: Option<usize>, units: &[Unit], width: usize) -> Line<'static> {
     let mut spans = Vec::new();
     if let Some(prefix_width) = prefix_width.filter(|width| *width > 0) {
         spans.push(Span::raw(" ".repeat(prefix_width)));
@@ -624,13 +661,19 @@ fn line_from_units(prefix_width: Option<usize>, units: &[Unit]) -> Line<'static>
     let mut current_link = None::<String>;
     for unit in units {
         if current_style != Some(unit.style) || current_link != unit.link {
-            push_rendered_span(&mut spans, &mut current, current_style, current_link.take());
+            push_rendered_span(
+                &mut spans,
+                &mut current,
+                current_style,
+                current_link.take(),
+                width,
+            );
             current_style = Some(unit.style);
             current_link = unit.link.clone();
         }
         current.push(unit.ch);
     }
-    push_rendered_span(&mut spans, &mut current, current_style, current_link);
+    push_rendered_span(&mut spans, &mut current, current_style, current_link, width);
     Line::from(spans)
 }
 
@@ -639,18 +682,42 @@ fn push_rendered_span(
     text: &mut String,
     style: Option<Style>,
     link: Option<String>,
+    width: usize,
 ) {
     if text.is_empty() {
         return;
     }
     let content = if let Some(destination) = link.and_then(|link| safe_hyperlink_destination(&link))
     {
-        format!("\x1b]8;;{destination}\x07{text}\x1b]8;;\x07")
+        let linked = format!("\x1b]8;;{destination}\x07{text}\x1b]8;;\x07");
+        if linked.chars().count() <= width {
+            linked
+        } else {
+            text.clone()
+        }
     } else {
         text.clone()
     };
     spans.push(Span::styled(content, style.unwrap_or_default()));
     text.clear();
+}
+
+fn quote_prefix_width(quote_depth: usize) -> usize {
+    usize::from(quote_depth > 0) * 2
+}
+
+fn prefix_quote_lines(lines: Vec<Line<'static>>, quote_depth: usize) -> Vec<Line<'static>> {
+    if quote_depth == 0 {
+        return lines;
+    }
+    lines
+        .into_iter()
+        .map(|line| {
+            let mut spans = vec![Span::styled("│", quote_style()), Span::raw(" ")];
+            spans.extend(line.spans);
+            Line::from(spans)
+        })
+        .collect()
 }
 
 fn safe_hyperlink_destination(destination: &str) -> Option<String> {
@@ -945,5 +1012,68 @@ mod tests {
                 "\u{1b}]8;;https://example.com\u{7}site\u{1b}]8;;\u{7}",
             ]
         );
+    }
+
+    #[test]
+    fn inline_code_stays_inside_heading_text() {
+        let lines = render_reader_lines("# Run `wt task list`", 80);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec!["Run wt task list"]);
+    }
+
+    #[test]
+    fn fenced_code_inside_list_keeps_intro_before_code() {
+        let body = "- run this:\n\n  ```sh\n  wt task list\n  ```";
+        let lines = render_reader_lines(body, 80);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>();
+
+        let item_index = rendered
+            .iter()
+            .position(|line| line.contains("run this:"))
+            .expect("list item should render before nested code");
+        let code_index = rendered
+            .iter()
+            .position(|line| line.contains("wt task list"))
+            .expect("nested code should render");
+        assert!(
+            item_index < code_index,
+            "list item should introduce its nested code: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn quoted_fenced_code_and_lists_keep_quote_marker() {
+        let body = "> - quoted item\n>\n> ```rust\n> fn main() {}\n> ```";
+        let lines = render_reader_lines(body, 80);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>();
+
+        let item = rendered
+            .iter()
+            .find(|line| line.contains("quoted item"))
+            .expect("quoted list item should render");
+        let code = rendered
+            .iter()
+            .find(|line| line.contains("fn main"))
+            .expect("quoted code should render");
+        assert!(
+            item.starts_with("│ "),
+            "quoted list lost marker: {rendered:?}"
+        );
+        assert!(
+            code.starts_with("│ "),
+            "quoted code lost marker: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn long_link_destinations_fall_back_to_visible_label() {
+        let destination = format!("https://example.com/{}", "very-long-path".repeat(20));
+        let body = format!("[label]({destination})");
+        let lines = render_reader_lines(&body, 20);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>().join("\n");
+
+        assert_eq!(rendered, "label");
+        assert!(!rendered.contains("\u{1b}]8;;"));
     }
 }

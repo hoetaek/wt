@@ -92,7 +92,7 @@ pub(crate) enum MouseInput {
     Down { visible_index: usize },
     Drag { visible_index: usize },
     DoubleClick { visible_index: usize },
-    Up,
+    Up { dragged: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -760,10 +760,10 @@ impl AppState {
                 self.select_range_to_cursor();
                 self.status_line = self.footer_keymap_summary();
             }
-            MouseInput::Up => {
-                if self.mode == Mode::RangeSelect {
+            MouseInput::Up { dragged } => {
+                if dragged && self.mode == Mode::RangeSelect {
                     self.exit_range_select();
-                } else {
+                } else if self.mode != Mode::RangeSelect {
                     self.range_anchor_key = None;
                     self.range_prior_selected_keys.clear();
                 }
@@ -2390,7 +2390,7 @@ mod tests {
 
         app.handle_mouse(MouseInput::Down { visible_index: 0 });
         app.handle_mouse(MouseInput::Drag { visible_index: 2 });
-        app.handle_mouse(MouseInput::Up);
+        app.handle_mouse(MouseInput::Up { dragged: true });
 
         assert_eq!(app.selected_key(), Some("c"));
         assert_eq!(app.selected_key_count(), 3);
@@ -2409,7 +2409,7 @@ mod tests {
 
         app.handle_mouse(MouseInput::Down { visible_index: 2 });
         app.handle_mouse(MouseInput::Drag { visible_index: 3 });
-        app.handle_mouse(MouseInput::Up);
+        app.handle_mouse(MouseInput::Up { dragged: true });
 
         assert!(app.is_row_marked("a"));
         assert!(!app.is_row_marked("b"));
@@ -2510,6 +2510,22 @@ mod tests {
 
         assert_eq!(app.mode(), Mode::List);
         assert_eq!(app.selected_key_count(), 3);
+    }
+
+    #[test]
+    fn mouse_up_without_drag_does_not_exit_keyboard_range_select() {
+        let mut app = AppState::new(vec![
+            source_row("a", "local"),
+            source_row("b", "local"),
+            source_row("c", "local"),
+        ]);
+
+        app.handle(KeyInput::Char('v'));
+        app.handle(KeyInput::Char('j'));
+        app.handle_mouse(MouseInput::Up { dragged: false });
+
+        assert_eq!(app.mode(), Mode::RangeSelect);
+        assert_eq!(app.selected_key_count(), 2);
     }
 
     #[test]
@@ -3626,7 +3642,13 @@ run = "run-demo"
         );
         app.handle(KeyInput::Down);
         app.handle(KeyInput::Down);
-        assert_eq!(app.handle(KeyInput::Char('P')), Outcome::Continue);
+        assert_eq!(
+            app.handle(KeyInput::Char('P')),
+            Outcome::Dispatch {
+                key: "scratch-clean".into(),
+                action: OriginAction::Publish
+            }
+        );
     }
 
     #[test]

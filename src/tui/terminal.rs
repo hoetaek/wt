@@ -90,10 +90,23 @@ fn enter_crossterm_terminal(side_effects: &impl CrosstermSideEffects) -> Result<
     }
 
     if let Err(err) = side_effects.enable_mouse_capture() {
-        let _ = side_effects.leave_alternate_screen();
-        let _ = side_effects.disable_raw_mode();
+        let leave_err = side_effects.leave_alternate_screen().err();
+        let raw_err = side_effects.disable_raw_mode().err();
         CROSSTERM_SESSION_ACTIVE.store(false, Ordering::SeqCst);
-        return Err(err);
+        let rollback_errors = [leave_err, raw_err]
+            .into_iter()
+            .flatten()
+            .map(|err| format!("{err:#}"))
+            .collect::<Vec<_>>();
+        if rollback_errors.is_empty() {
+            return Err(err);
+        }
+        return Err(err).with_context(|| {
+            format!(
+                "failed to rollback terminal state after mouse capture failure: {}",
+                rollback_errors.join("; ")
+            )
+        });
     }
 
     Ok(())
@@ -202,6 +215,9 @@ mod tests {
     #[derive(Default)]
     struct RecordingCrosstermSideEffects {
         log: Arc<Mutex<Vec<&'static str>>>,
+        fail_enable_mouse_capture: bool,
+        fail_leave_alternate_screen: bool,
+        fail_disable_raw_mode: bool,
     }
 
     impl CrosstermSideEffects for RecordingCrosstermSideEffects {
@@ -217,6 +233,9 @@ mod tests {
 
         fn enable_mouse_capture(&self) -> anyhow::Result<()> {
             self.log.lock().unwrap().push("enable_mouse_capture");
+            if self.fail_enable_mouse_capture {
+                bail!("enable mouse capture failed");
+            }
             Ok(())
         }
 
@@ -227,11 +246,17 @@ mod tests {
 
         fn leave_alternate_screen(&self) -> anyhow::Result<()> {
             self.log.lock().unwrap().push("leave_alternate_screen");
+            if self.fail_leave_alternate_screen {
+                bail!("leave alternate screen failed");
+            }
             Ok(())
         }
 
         fn disable_raw_mode(&self) -> anyhow::Result<()> {
             self.log.lock().unwrap().push("disable_raw_mode");
+            if self.fail_disable_raw_mode {
+                bail!("disable raw mode failed");
+            }
             Ok(())
         }
     }
@@ -326,6 +351,39 @@ mod tests {
                 "enter_alternate_screen",
                 "enable_mouse_capture",
                 "disable_mouse_capture",
+                "leave_alternate_screen",
+                "disable_raw_mode"
+            ]
+        );
+    }
+
+    #[test]
+    fn crossterm_enter_reports_mouse_capture_rollback_failures() {
+        let _guard = CROSSTERM_ACTIVE_TEST_LOCK.lock().unwrap();
+        CROSSTERM_SESSION_ACTIVE.store(false, Ordering::SeqCst);
+        let _reset = ResetCrosstermSessionActive;
+        let side_effects = RecordingCrosstermSideEffects {
+            fail_enable_mouse_capture: true,
+            fail_leave_alternate_screen: true,
+            fail_disable_raw_mode: true,
+            ..RecordingCrosstermSideEffects::default()
+        };
+        let log = Arc::clone(&side_effects.log);
+
+        let error = enter_crossterm_terminal(&side_effects).unwrap_err();
+        let rendered = format!("{error:#}");
+
+        assert!(rendered.contains("enable mouse capture failed"));
+        assert!(rendered.contains("failed to rollback terminal state"));
+        assert!(rendered.contains("leave alternate screen failed"));
+        assert!(rendered.contains("disable raw mode failed"));
+        assert!(!CROSSTERM_SESSION_ACTIVE.load(Ordering::SeqCst));
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                "enable_raw_mode",
+                "enter_alternate_screen",
+                "enable_mouse_capture",
                 "leave_alternate_screen",
                 "disable_raw_mode"
             ]
