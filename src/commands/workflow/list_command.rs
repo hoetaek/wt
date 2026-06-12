@@ -20,7 +20,7 @@ use crate::workflow::{WorkflowMetadata, WorkflowMode};
 use anyhow::Result;
 use serde::Serialize;
 use std::io::{IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const LIST_START: &str = "◆";
 const BAR: &str = "│";
@@ -61,6 +61,8 @@ pub(crate) struct WorkflowListReport {
 struct WorkflowListRow {
     id: String,
     path: String,
+    #[serde(skip)]
+    source_path: PathBuf,
     mode: String,
     title: String,
     body: Option<String>,
@@ -229,7 +231,7 @@ fn workflow_browser_row(row: &WorkflowListRow) -> crate::tui::app::BrowserRow {
         size: None,
         branch: None,
         source: "workflow".into(),
-        path: Some(std::path::PathBuf::from(&row.path)),
+        path: Some(row.source_path.clone()),
         body: row.body.clone().unwrap_or_default(),
         preview_lines: workflow_browser_preview_lines(row),
         menu: row.origin_action_menu(),
@@ -319,6 +321,7 @@ fn workflow_row(ctx: &Ctx, path: &Path, id: String, metadata: WorkflowMetadata) 
     WorkflowListRow {
         id,
         path: workflow_relative_path(ctx, path),
+        source_path: path.to_path_buf(),
         mode: metadata.mode.as_str().into(),
         title,
         body,
@@ -999,6 +1002,42 @@ id = "WT-142"
                 .menu
                 .render_plain()
                 .contains("Publish workflow as issue")
+        );
+    }
+
+    #[test]
+    fn workflow_browser_row_path_points_to_real_file_for_reader_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        let workflow_path = workflows_dir.join("2026-06-06-001.toml");
+        std::fs::write(
+            &workflow_path,
+            workflow_toml_with_one_task_origin("Ship provider-origin UX", "WT-100", "demo"),
+        )
+        .unwrap();
+
+        let report = collect(&ctx).unwrap();
+        let rows = workflow_browser_rows(&report);
+        assert_eq!(rows[0].path.as_deref(), Some(workflow_path.as_path()));
+        assert!(rows[0].path.as_ref().is_some_and(|path| path.exists()));
+
+        let mut app = crate::tui::app::AppState::workflow_with_diagnostics(rows, Vec::new());
+        app.handle(crate::tui::app::KeyInput::Enter);
+        std::fs::write(
+            &workflow_path,
+            workflow_toml_with_one_task_origin("Refreshed provider-origin UX", "WT-100", "demo")
+                .replace("workflow body", "refreshed workflow body"),
+        )
+        .unwrap();
+        app.handle(crate::tui::app::KeyInput::Char('r'));
+
+        assert!(
+            app.selected_row()
+                .unwrap()
+                .body
+                .contains("refreshed workflow body")
         );
     }
 

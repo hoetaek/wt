@@ -428,13 +428,6 @@ const READER_KEYMAP: &[KeymapEntry] = &[
     },
     KeymapEntry {
         mode: Mode::Reader,
-        key: "Ctrl-D/U",
-        desc: "half page",
-        footer: true,
-        task_only: false,
-    },
-    KeymapEntry {
-        mode: Mode::Reader,
         key: "PageUp/Dn",
         desc: "page",
         footer: true,
@@ -444,6 +437,13 @@ const READER_KEYMAP: &[KeymapEntry] = &[
         mode: Mode::Reader,
         key: "g/G",
         desc: "top/bottom",
+        footer: true,
+        task_only: false,
+    },
+    KeymapEntry {
+        mode: Mode::Reader,
+        key: "r",
+        desc: "refresh",
         footer: true,
         task_only: false,
     },
@@ -2874,6 +2874,7 @@ run = "run-demo"
         let reader_footer = app.status_line().to_string();
         assert!(reader_footer.contains("d/u"));
         assert!(reader_footer.contains("g/G"));
+        assert!(reader_footer.contains("r refresh"));
         assert!(!reader_footer.contains("sidebar"));
     }
 
