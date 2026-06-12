@@ -213,6 +213,9 @@ fn run_browser_with_backend(
                 }
             }
             Event::Mouse(mouse) => {
+                if matches!(mouse.kind, MouseEventKind::Drag(MouseButton::Left)) {
+                    click_tracker.reset();
+                }
                 if let Some(input) = mouse_input(&app, mouse) {
                     let input = match input {
                         MouseInput::Down { visible_index }
@@ -656,6 +659,17 @@ mod tests {
         let mut tracker = ClickTracker::default();
         assert!(!tracker.is_double(0, now));
         assert!(!tracker.is_double(0, now + Duration::from_millis(401)));
+    }
+
+    #[test]
+    fn drag_resets_double_click_tracking() {
+        let mut tracker = ClickTracker::default();
+        let now = Instant::now();
+
+        assert!(!tracker.is_double(0, now));
+        tracker.reset();
+
+        assert!(!tracker.is_double(0, now + Duration::from_millis(100)));
     }
 
     #[test]
