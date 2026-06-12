@@ -29,10 +29,11 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
     let show_reader = app.reader_open();
     let show_output = !app.output_lines().is_empty();
     let header_height = header_height(app, area);
+    let notice_height = u16::from(app.notice().is_some());
     let detail_layout = if show_reader {
         DetailSidebarLayout::Hidden
     } else {
-        resolve_detail_sidebar_layout(area, app, header_height, show_output)
+        resolve_detail_sidebar_layout(area, app, header_height, notice_height, show_output)
     };
     let row_min_height = if show_reader || matches!(detail_layout, DetailSidebarLayout::Bottom) {
         5
@@ -43,6 +44,9 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
         Constraint::Length(header_height),
         Constraint::Min(row_min_height),
     ];
+    if app.notice().is_some() {
+        constraints.insert(1, Constraint::Length(1));
+    }
     if show_output {
         constraints.push(Constraint::Length(output_panel_height(area)));
     }
@@ -55,6 +59,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut AppState) {
     let mut chunk_index = 0;
     draw_header(frame, chunks[chunk_index], app);
     chunk_index += 1;
+    if app.notice().is_some() {
+        draw_notice(frame, chunks[chunk_index], app);
+        chunk_index += 1;
+    }
     if show_reader {
         draw_reader(frame, chunks[chunk_index], app);
     } else if let DetailSidebarLayout::Right(sidebar_width) = detail_layout {
@@ -101,6 +109,15 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
 
     let header = Paragraph::new(lines).block(chrome_block());
     frame.render_widget(header, area);
+}
+
+fn draw_notice(frame: &mut Frame<'_>, area: Rect, app: &AppState) {
+    if let Some(notice) = app.notice() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(notice.to_string(), theme::notice_style())),
+            area,
+        );
+    }
 }
 
 fn header_height(app: &AppState, area: Rect) -> u16 {
@@ -209,6 +226,7 @@ fn resolve_detail_sidebar_layout(
     area: Rect,
     app: &AppState,
     header_height: u16,
+    notice_height: u16,
     show_output: bool,
 ) -> DetailSidebarLayout {
     if !app.sidebar_open() {
@@ -223,6 +241,7 @@ fn resolve_detail_sidebar_layout(
     let available_height = area
         .height
         .saturating_sub(header_height)
+        .saturating_sub(notice_height)
         .saturating_sub(output_height)
         .saturating_sub(1);
     if available_height < 5 {
@@ -1122,6 +1141,35 @@ mod tests {
     }
 
     #[test]
+    fn notice_renders_below_header_and_releases_row_when_cleared() {
+        let _guard = ColorGuard::set(true);
+        let mut app = AppState::new(vec![row("origin-sync-tui", "Origin sync TUI", "conflict")]);
+        app.show_dispatch_message("Copied reference linear:WT-142".into());
+
+        let with_notice = render_buffer(80, 24, &app);
+
+        assert!(line_contains_text(
+            &with_notice,
+            80,
+            4,
+            "Copied reference linear:WT-142"
+        ));
+        assert_eq!(with_notice[(0, 4)].style().fg, Some(Color::Yellow));
+        assert!(line_contains_text(&with_notice, 80, 5, "Tasks"));
+
+        app.handle(KeyInput::Down);
+        let cleared = render_buffer(80, 24, &app);
+
+        assert!(!line_contains_text(
+            &cleared,
+            80,
+            4,
+            "Copied reference linear:WT-142"
+        ));
+        assert!(line_contains_text(&cleared, 80, 4, "Tasks"));
+    }
+
+    #[test]
     fn invariant_i6_browser_task_column_preserves_key_when_title_is_truncated() {
         let app = AppState::task_with_columns(
             vec![row(
@@ -1391,6 +1439,30 @@ mod tests {
 
         assert!(text.contains("task a"));
         assert!(text.contains("body-marker"));
+    }
+
+    #[test]
+    fn notice_height_participates_in_bottom_sidebar_threshold() {
+        let mut browser_row = source_row("a", "provider-origin");
+        browser_row.title = "task a".into();
+        browser_row.body = "BODY-MARKER".into();
+        browser_row.preview_lines = vec!["META-MARKER".into()];
+        let mut app = AppState::new(vec![browser_row]);
+
+        let without_notice = buffer_text(70, 17, &app);
+        assert!(
+            without_notice.contains("BODY-MARKER"),
+            "height 17 has enough room for bottom sidebar without notice:\n{without_notice}"
+        );
+
+        app.show_dispatch_message("Copied reference linear:WT-142".into());
+        let with_notice = buffer_text(70, 17, &app);
+
+        assert!(with_notice.contains("Copied reference linear:WT-142"));
+        assert!(
+            !with_notice.contains("BODY-MARKER"),
+            "notice consumes the threshold row, so bottom sidebar should hide:\n{with_notice}"
+        );
     }
 
     #[test]

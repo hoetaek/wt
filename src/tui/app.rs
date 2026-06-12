@@ -239,6 +239,7 @@ pub(crate) struct AppState {
     menu_selected_index: usize,
     mode: Mode,
     status_line: String,
+    notice: Option<String>,
     copy: BrowserCopy,
     popup: Option<PopupState>,
     output: OutputPanel,
@@ -590,6 +591,7 @@ impl AppState {
             menu_selected_index: 0,
             mode: Mode::List,
             status_line: String::new(),
+            notice: None,
             copy,
             popup: None,
             output: OutputPanel::default(),
@@ -610,6 +612,8 @@ impl AppState {
     }
 
     pub(crate) fn handle(&mut self, key: KeyInput) -> Outcome {
+        self.notice = None;
+
         if self.help_open {
             return self.handle_help_key(key);
         }
@@ -628,6 +632,10 @@ impl AppState {
 
     pub(crate) fn status_line(&self) -> &str {
         &self.status_line
+    }
+
+    pub(crate) fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
     }
 
     pub(crate) fn open_popup(&mut self, spec: PopupSpec) {
@@ -842,6 +850,7 @@ impl AppState {
         self.running = None;
         self.popup = None;
         self.status_line = status;
+        self.notice = None;
     }
 
     pub(crate) fn filter(&self) -> &str {
@@ -1007,12 +1016,12 @@ impl AppState {
             .is_some_and(|item| !item.is_enabled())
     }
 
-    /// Show a status-line dispatch result: close the action menu and put the
-    /// one-line message in the status line. No row refresh — status-line
-    /// actions do not change on-disk state.
+    /// Show a one-line dispatch result without replacing the footer keymap.
+    /// No row refresh — dispatch message actions do not change on-disk state.
     pub(crate) fn show_dispatch_message(&mut self, message: String) {
         self.mode = Mode::List;
-        self.status_line = message;
+        self.status_line = self.list_status_line();
+        self.notice = Some(message);
     }
 
     pub(crate) fn replace_rows_preserving_selection(
@@ -1079,6 +1088,7 @@ impl AppState {
         self.reset_detail_scroll();
         self.select_first_enabled_menu_item();
         self.clamp_reader_scroll();
+        self.notice = None;
         if self.mode == Mode::List {
             self.status_line = self.list_status_line();
         }
@@ -1934,6 +1944,22 @@ mod tests {
     }
 
     #[test]
+    fn finishing_action_clears_stale_notice() {
+        let mut app = app();
+        app.begin_action("origin-sync-tui", "pull");
+        app.show_dispatch_message("action in progress - wait for it to finish".into());
+        assert_eq!(
+            app.notice(),
+            Some("action in progress - wait for it to finish")
+        );
+
+        app.finish_action("pulled origin-sync-tui".into());
+
+        assert_eq!(app.notice(), None);
+        assert_eq!(app.status_line(), "pulled origin-sync-tui");
+    }
+
+    #[test]
     fn archive_running_action_uses_archiving_label() {
         let mut app = app();
 
@@ -2259,6 +2285,20 @@ mod tests {
         );
 
         assert_eq!(app.visible_keys(), vec!["github:175", "github:178"]);
+        assert!(app.status_line().contains("just now"));
+    }
+
+    #[test]
+    fn applying_origin_fetch_clears_stale_notice() {
+        let mut app = AppState::new(vec![]);
+        app.set_source_view_for_test(SourceView::OriginOnly);
+        app.begin_origin_fetch();
+        app.show_dispatch_message("origin issue fetch already in progress".into());
+        assert_eq!(app.notice(), Some("origin issue fetch already in progress"));
+
+        app.apply_origin_fetch(Ok(vec![origin_row("github:175")]), "just now");
+
+        assert_eq!(app.notice(), None);
         assert!(app.status_line().contains("just now"));
     }
 
@@ -2709,7 +2749,19 @@ mod tests {
     }
 
     #[test]
-    fn show_dispatch_message_closes_menu_and_fills_status_line() {
+    fn dispatch_message_routes_to_notice_and_clears_on_next_input() {
+        let mut app = app();
+        app.show_dispatch_message("Copied reference linear:WT-142".into());
+        assert_eq!(app.notice(), Some("Copied reference linear:WT-142"));
+        assert!(app.status_line().contains("m actions"));
+
+        app.handle(KeyInput::Down);
+
+        assert_eq!(app.notice(), None);
+    }
+
+    #[test]
+    fn show_dispatch_message_closes_menu_and_preserves_footer_keymap() {
         let mut app = app();
         app.handle(KeyInput::Char('m'));
         assert_eq!(app.mode(), Mode::Menu);
@@ -2717,7 +2769,8 @@ mod tests {
         app.show_dispatch_message("Copied reference linear:WT-142".into());
 
         assert_eq!(app.mode(), Mode::List);
-        assert_eq!(app.status_line(), "Copied reference linear:WT-142");
+        assert_eq!(app.notice(), Some("Copied reference linear:WT-142"));
+        assert!(app.status_line().contains("m actions"));
     }
 
     #[test]
