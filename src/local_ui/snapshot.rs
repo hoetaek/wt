@@ -1596,7 +1596,7 @@ fn site_provider_name(provider: &SiteProvider) -> &'static str {
         SiteProvider::None => "none",
         SiteProvider::Herd => "herd",
         SiteProvider::Valet => "valet",
-        SiteProvider::DockerProxy => "docker-proxy",
+        SiteProvider::External => "external",
         SiteProvider::Traefik => "traefik",
     }
 }

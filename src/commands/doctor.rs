@@ -445,12 +445,12 @@ fn collect_site_provider_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<Doc
 
     match site.provider {
         SiteProvider::None => checks.push(DoctorCheck::ok("site_provider", Some("none".into()))),
-        SiteProvider::DockerProxy => {
+        SiteProvider::External => {
+            checks.push(DoctorCheck::ok("site_provider", Some("external".into())));
             checks.push(DoctorCheck::ok(
-                "site_provider",
-                Some("docker_proxy".into()),
+                "external_site",
+                Some("wt registers no proxy — ensure your external router serves the site URL".into()),
             ));
-            checks.push(DoctorCheck::ok("docker_proxy", Some("ok".into())));
         }
         SiteProvider::Herd => {
             checks.push(DoctorCheck::ok("site_provider", Some("herd".into())));
@@ -459,7 +459,7 @@ fn collect_site_provider_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<Doc
                 checks,
                 "herd_cli",
                 "herd",
-                "Install Herd CLI, or change [site].provider to \"valet\"/\"docker_proxy\"/\"none\".",
+                "Install Herd CLI, or change [site].provider to \"valet\"/\"external\"/\"none\".",
             );
         }
         SiteProvider::Valet => {
@@ -469,7 +469,7 @@ fn collect_site_provider_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<Doc
                 checks,
                 "valet_cli",
                 "valet",
-                "Install Valet CLI, or change [site].provider to \"herd\"/\"docker_proxy\"/\"none\".",
+                "Install Valet CLI, or change [site].provider to \"herd\"/\"external\"/\"none\".",
             );
         }
         SiteProvider::Traefik => {
@@ -479,7 +479,7 @@ fn collect_site_provider_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<Doc
                 checks,
                 "traefik_cli",
                 "traefik",
-                "Install Traefik CLI, or change [site].provider to \"herd\"/\"valet\"/\"docker_proxy\"/\"none\".",
+                "Install Traefik CLI, or change [site].provider to \"herd\"/\"valet\"/\"external\"/\"none\".",
             );
         }
     }
@@ -1488,9 +1488,10 @@ fn check_site_provider(ctx: &Ctx, config: &Config) {
 
     match site.provider {
         SiteProvider::None => ctx.ui.print_step("Site provider: none"),
-        SiteProvider::DockerProxy => {
-            ctx.ui.print_step("Site provider: docker_proxy");
-            ctx.ui.print_step("Docker proxy: ok");
+        SiteProvider::External => {
+            ctx.ui.print_step("Site provider: external");
+            ctx.ui
+                .print_step("External site: wt registers no proxy — ensure your external router serves the site URL");
         }
         SiteProvider::Herd => {
             ctx.ui.print_step("Site provider: herd");
@@ -1498,7 +1499,7 @@ fn check_site_provider(ctx: &Ctx, config: &Config) {
                 ctx,
                 "herd",
                 "herd CLI",
-                "Install Herd CLI, or change [site].provider to \"valet\"/\"docker_proxy\"/\"none\".",
+                "Install Herd CLI, or change [site].provider to \"valet\"/\"external\"/\"none\".",
             );
         }
         SiteProvider::Valet => {
@@ -1507,7 +1508,7 @@ fn check_site_provider(ctx: &Ctx, config: &Config) {
                 ctx,
                 "valet",
                 "valet CLI",
-                "Install Valet CLI, or change [site].provider to \"herd\"/\"docker_proxy\"/\"none\".",
+                "Install Valet CLI, or change [site].provider to \"herd\"/\"external\"/\"none\".",
             );
         }
         SiteProvider::Traefik => {
@@ -1516,7 +1517,7 @@ fn check_site_provider(ctx: &Ctx, config: &Config) {
                 ctx,
                 "traefik",
                 "Traefik CLI",
-                "Install Traefik CLI, or change [site].provider to \"herd\"/\"valet\"/\"docker_proxy\"/\"none\".",
+                "Install Traefik CLI, or change [site].provider to \"herd\"/\"valet\"/\"external\"/\"none\".",
             );
         }
     }
@@ -2778,10 +2779,10 @@ parent = "develop"
     }
 
     #[test]
-    fn docker_proxy_site_provider_does_not_require_cli() {
+    fn external_site_provider_does_not_require_cli() {
         let config = Config {
             site: Some(SiteConfig {
-                provider: SiteProvider::DockerProxy,
+                provider: SiteProvider::External,
                 ..Default::default()
             }),
             ..Default::default()
@@ -2794,8 +2795,8 @@ parent = "develop"
         run(&ctx, None, None).unwrap();
 
         let steps = steps.lock().unwrap().join("\n");
-        assert!(steps.contains("Site provider: docker_proxy"));
-        assert!(steps.contains("Docker proxy: ok"));
+        assert!(steps.contains("Site provider: external"));
+        assert!(steps.contains("External site: wt registers no proxy"));
         assert!(warnings.lock().unwrap().is_empty());
     }
 

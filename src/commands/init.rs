@@ -296,7 +296,7 @@ impl InitDefaults {
             crate::config::SiteProvider::None => InitSiteProvider::None,
             crate::config::SiteProvider::Herd => InitSiteProvider::Herd,
             crate::config::SiteProvider::Valet => InitSiteProvider::Valet,
-            crate::config::SiteProvider::DockerProxy => InitSiteProvider::DockerProxy,
+            crate::config::SiteProvider::External => InitSiteProvider::External,
             crate::config::SiteProvider::Traefik => InitSiteProvider::Traefik,
         });
         let gh_user = config
@@ -1030,7 +1030,7 @@ fn build_plan_notices(
                 "traefik",
                 "traefik CLI가 없습니다. 생성된 Traefik site 설정은 저장할 수 있지만 site setup에는 traefik이 필요합니다",
             ),
-            InitSiteProvider::DockerProxy | InitSiteProvider::None => {}
+            InitSiteProvider::External | InitSiteProvider::None => {}
         }
     }
 
@@ -2553,7 +2553,7 @@ fn ordered_site_providers(default: Option<&InitSiteProvider>) -> Vec<InitSitePro
         &[
             InitSiteProvider::Herd,
             InitSiteProvider::Valet,
-            InitSiteProvider::DockerProxy,
+            InitSiteProvider::External,
             InitSiteProvider::Traefik,
             InitSiteProvider::None,
         ],
@@ -2600,7 +2600,7 @@ fn site_provider_choice_label(provider: &InitSiteProvider) -> String {
         InitSiteProvider::None => "건너뛰기",
         InitSiteProvider::Herd => "Herd",
         InitSiteProvider::Valet => "Valet",
-        InitSiteProvider::DockerProxy => "Docker proxy",
+        InitSiteProvider::External => "External",
         InitSiteProvider::Traefik => "Traefik",
     }
     .into()
@@ -2793,7 +2793,7 @@ fn explicit_site_provider(provider: Option<&InitSiteProvider>) -> Option<InitSit
     match provider {
         Some(InitSiteProvider::Herd) => Some(InitSiteProvider::Herd),
         Some(InitSiteProvider::Valet) => Some(InitSiteProvider::Valet),
-        Some(InitSiteProvider::DockerProxy) => Some(InitSiteProvider::DockerProxy),
+        Some(InitSiteProvider::External) => Some(InitSiteProvider::External),
         Some(InitSiteProvider::Traefik) => Some(InitSiteProvider::Traefik),
         Some(InitSiteProvider::None) | None => None,
     }
@@ -2861,7 +2861,7 @@ fn site_provider_name(provider: &InitSiteProvider) -> &'static str {
         InitSiteProvider::None => "none",
         InitSiteProvider::Herd => "herd",
         InitSiteProvider::Valet => "valet",
-        InitSiteProvider::DockerProxy => "docker_proxy",
+        InitSiteProvider::External => "external",
         InitSiteProvider::Traefik => "traefik",
     }
 }
@@ -4050,14 +4050,14 @@ origin_policy = "local-only"
     }
 
     #[test]
-    fn init_explicit_docker_proxy_site_defaults() {
+    fn init_explicit_external_site_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_for_dir(&dir);
 
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                site_provider: Some(InitSiteProvider::DockerProxy),
+                site_provider: Some(InitSiteProvider::External),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -4066,9 +4066,9 @@ origin_policy = "local-only"
         .unwrap();
 
         assert!(plan.content.contains("[site]"));
-        assert!(plan.content.contains("provider = \"docker_proxy\""));
+        assert!(plan.content.contains("provider = \"external\""));
         assert!(plan.content.contains("name = \"{{repo}}-{{branch_slug}}\""));
-        assert!(!plan.content.contains("provider = \"docker-proxy\""));
+        assert!(!plan.content.contains("provider = \"docker_proxy\""));
     }
 
     #[test]

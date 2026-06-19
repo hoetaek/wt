@@ -20,7 +20,7 @@ impl<'a> SiteService<'a> {
             SiteProvider::None => false,
             SiteProvider::Herd => HerdService::new(self.runner).is_available(),
             SiteProvider::Valet => ValetService::new(self.runner).is_available(),
-            SiteProvider::DockerProxy => true,
+            SiteProvider::External => true,
             SiteProvider::Traefik => true,
         }
     }
@@ -34,7 +34,7 @@ impl<'a> SiteService<'a> {
         target: Option<&str>,
     ) -> Result<()> {
         match provider {
-            SiteProvider::None | SiteProvider::DockerProxy => Ok(()),
+            SiteProvider::None | SiteProvider::External => Ok(()),
             SiteProvider::Herd => {
                 let herd = HerdService::new(self.runner);
                 herd.link(site_name, cwd)?;
@@ -61,7 +61,7 @@ impl<'a> SiteService<'a> {
 
     pub fn unregister(&self, provider: &SiteProvider, site_name: &str) -> Result<bool> {
         match provider {
-            SiteProvider::None | SiteProvider::DockerProxy => Ok(false),
+            SiteProvider::None | SiteProvider::External => Ok(false),
             SiteProvider::Herd => HerdService::new(self.runner).unlink(site_name),
             SiteProvider::Valet => ValetService::new(self.runner).unlink(site_name),
             SiteProvider::Traefik => TraefikService::new().unregister(site_name),
@@ -74,7 +74,7 @@ pub fn provider_label(provider: &SiteProvider) -> &'static str {
         SiteProvider::None => "Site",
         SiteProvider::Herd => "Herd",
         SiteProvider::Valet => "Valet",
-        SiteProvider::DockerProxy => "Docker proxy",
+        SiteProvider::External => "External",
         SiteProvider::Traefik => "Traefik",
     }
 }
@@ -131,13 +131,13 @@ mod tests {
     }
 
     #[test]
-    fn docker_proxy_is_noop() {
+    fn external_is_noop() {
         let runner = MockRunner::new();
 
         let svc = SiteService::new(&runner);
-        assert!(svc.is_available(&SiteProvider::DockerProxy));
+        assert!(svc.is_available(&SiteProvider::External));
         svc.register(
-            &SiteProvider::DockerProxy,
+            &SiteProvider::External,
             "sample-app-feature",
             Path::new("/tmp/app"),
             true,
@@ -145,7 +145,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !svc.unregister(&SiteProvider::DockerProxy, "sample-app-feature")
+            !svc.unregister(&SiteProvider::External, "sample-app-feature")
                 .unwrap()
         );
         assert!(runner.calls.lock().unwrap().is_empty());

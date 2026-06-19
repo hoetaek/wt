@@ -144,7 +144,7 @@ Optional integrations:
 - `linear` for Linear issue workflows
 - `cmux` for workspace/window automation and agent status surfaces
 - Codex, Claude, Gemini, or another configured agent command
-- Herd, Valet, Docker proxy, or Traefik for local site helpers
+- Herd, Valet, External, or Traefik for local site helpers
 
 ## Quick Start
 

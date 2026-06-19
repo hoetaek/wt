@@ -34,7 +34,7 @@ pub(super) fn register_site(ctx: &Ctx, wt_path: &Path, site: &SiteDescriptor) {
     let site_service = SiteService::new(ctx.runner.as_ref());
     if site_service.is_available(&site.provider) {
         let site_root = wt_path.join(&site.root);
-        let action = if site.provider == SiteProvider::DockerProxy {
+        let action = if site.provider == SiteProvider::External {
             "Using"
         } else {
             "Registering"

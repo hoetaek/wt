@@ -25,8 +25,8 @@ fn doctor(ctx: &Ctx) -> Result<()> {
             ctx.ui.print_step("Site provider: none");
             Ok(())
         }
-        SiteProvider::DockerProxy => {
-            ctx.ui.print_step("Site provider: docker_proxy");
+        SiteProvider::External => {
+            ctx.ui.print_step("Site provider: external");
             ok(ctx, "no local site CLI is required");
             Ok(())
         }
@@ -190,7 +190,7 @@ fn provider_name(provider: &SiteProvider) -> &'static str {
         SiteProvider::None => "none",
         SiteProvider::Herd => "herd",
         SiteProvider::Valet => "valet",
-        SiteProvider::DockerProxy => "docker_proxy",
+        SiteProvider::External => "external",
         SiteProvider::Traefik => "traefik",
     }
 }

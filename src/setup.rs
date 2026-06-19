@@ -1775,7 +1775,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_site_template_vars_supports_docker_proxy_url_override() {
+    fn apply_site_template_vars_supports_external_url_override() {
         use crate::config::{Config, SiteConfig, SiteProvider};
         use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
@@ -1789,7 +1789,7 @@ mod tests {
         };
         let config = Config {
             site: Some(SiteConfig {
-                provider: SiteProvider::DockerProxy,
+                provider: SiteProvider::External,
                 name: Some("{{branch_slug}}.local.test".into()),
                 url: Some("https://{{site_name}}".into()),
                 ..SiteConfig::default()

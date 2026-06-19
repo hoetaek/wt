@@ -523,7 +523,15 @@ pub enum SiteProvider {
     None,
     Herd,
     Valet,
-    DockerProxy,
+    /// Site routing is handled OUTSIDE wt — an auto-discovery docker proxy, a
+    /// cloud/devcontainer ingress, a k8s Ingress, a tunnel, or a shared team proxy.
+    /// wt registers and tears down NOTHING; it only computes the per-worktree
+    /// site_name/site_url and threads them into env, agent context, and the browser
+    /// tab. Use this (not `none`) when an external router already serves the URL but
+    /// you still want wt's per-worktree URL templating. Renamed from `docker_proxy`
+    /// (kept as a serde alias) — it was never docker-specific.
+    #[serde(alias = "docker_proxy")]
+    External,
     Traefik,
 }
 

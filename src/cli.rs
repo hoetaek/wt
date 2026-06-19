@@ -798,8 +798,8 @@ pub enum InitSiteProvider {
     None,
     Herd,
     Valet,
-    #[value(name = "docker_proxy")]
-    DockerProxy,
+    #[value(name = "external", alias = "docker_proxy")]
+    External,
     Traefik,
 }
 
@@ -3238,19 +3238,31 @@ mod tests {
     }
 
     #[test]
-    fn init_accepts_docker_proxy_site_provider() {
-        let cli = parse(&["wt", "init", "--site-provider", "docker_proxy"]);
+    fn init_accepts_external_site_provider() {
+        let cli = parse(&["wt", "init", "--site-provider", "external"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Init {
-                site_provider: Some(InitSiteProvider::DockerProxy),
+                site_provider: Some(InitSiteProvider::External),
                 ..
             })
         ));
     }
 
     #[test]
-    fn init_rejects_docker_proxy_kebab_alias() {
+    fn init_accepts_docker_proxy_site_provider_alias() {
+        let cli = parse(&["wt", "init", "--site-provider", "docker_proxy"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Init {
+                site_provider: Some(InitSiteProvider::External),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn init_rejects_external_kebab_alias() {
         let result = Cli::try_parse_from(["wt", "init", "--site-provider", "docker-proxy"]);
         assert!(result.is_err());
     }
