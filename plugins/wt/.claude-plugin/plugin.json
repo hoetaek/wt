@@ -1,7 +1,7 @@
 {
   "name": "wt",
   "description": "wt lifecycle skills for worktree-based agent orchestration",
-  "version": "0.48.0",
+  "version": "0.1.0",
   "author": {
     "name": "hoetaek",
     "email": "hoetaek@indischool.com"

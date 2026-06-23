@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,10 +21,6 @@ const readJSON = (rel) => {
   }
 };
 
-const cargoToml = readFileSync(join(ROOT, "Cargo.toml"), "utf8");
-const cargoVersion = cargoToml.match(/^version = "([^"]+)"/m)?.[1];
-if (!cargoVersion) fail("Cargo.toml: missing package version");
-
 const ccPlugin = readJSON("plugins/wt/.claude-plugin/plugin.json");
 const codexPlugin = readJSON("plugins/wt/.codex-plugin/plugin.json");
 const ccMarket = readJSON(".claude-plugin/marketplace.json");
@@ -42,8 +38,8 @@ if (!codexEntry) fail("Codex marketplace missing wt entry");
 if (ccEntry?.source !== "./plugins/wt") fail("Claude marketplace source must be ./plugins/wt");
 if (codexEntry?.source?.path !== "./plugins/wt") fail("Codex marketplace source.path must be ./plugins/wt");
 
+const pluginVersion = ccPlugin?.version;
 const versions = {
-  "Cargo.toml": cargoVersion,
   "Claude plugin": ccPlugin?.version,
   "Codex plugin": codexPlugin?.version,
   "Claude marketplace metadata": ccMarket?.metadata?.version,
@@ -53,8 +49,8 @@ const versions = {
 };
 for (const [name, version] of Object.entries(versions)) {
   if (!version) fail(`${name}: missing version`);
-  if (cargoVersion && version && version !== cargoVersion) {
-    fail(`${name}: version ${version} does not match Cargo.toml ${cargoVersion}`);
+  if (pluginVersion && version && version !== pluginVersion) {
+    fail(`${name}: version ${version} does not match plugin version ${pluginVersion}`);
   }
 }
 
@@ -78,4 +74,4 @@ if (errors.length) {
   process.exit(1);
 }
 
-console.log(`ok manifests: wt ${cargoVersion}`);
+console.log(`ok manifests: wt plugin ${pluginVersion}`);

@@ -133,6 +133,7 @@ npx --yes skills@latest add /path/to/wt/plugins/wt \
 The installable skills live once under `plugins/wt/skills/`, matching the
 Claude/Codex plugin bundle. Do not install them by symlinking global skill
 directories to a local checkout; install from the plugin bundle instead.
+The plugin version is managed separately from the `wt` CLI version.
 Installing these skills only installs Agent Skills playbooks. It does not
 install the `wt` binary, run `wt init`, write `.wt.toml`, configure providers,
 or create personal `wt` task/workflow state. Internal repo-only skills such as
