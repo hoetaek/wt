@@ -71,14 +71,23 @@ lifecycle. The pack contains:
 - `config`
 - `autopilot`
 
-For an interactive install, run one command and choose the skills, agent, and
-scope from the prompts:
+Install from the pushed plugin bundle rather than linking global skills to a
+local checkout. For an interactive install, run one command and choose the
+skills, agent, and scope from the prompts:
 
 ```bash
 npx skills add https://github.com/hoetaek/wt/tree/master/plugins/wt
 ```
 
 Select the `wt` plugin skills you want.
+
+For Claude Code, add this repository as a plugin marketplace, then install the
+`wt` plugin:
+
+```bash
+claude plugin marketplace add https://github.com/hoetaek/wt
+claude plugin install wt
+```
 
 For a non-interactive Codex global install, pass explicit skill names:
 
@@ -122,8 +131,9 @@ npx --yes skills@latest add /path/to/wt/plugins/wt \
 ```
 
 The installable skills live once under `plugins/wt/skills/`, matching the
-Claude/Codex plugin bundle. Installing these skills only installs Agent Skills
-playbooks. It does not
+Claude/Codex plugin bundle. Do not install them by symlinking global skill
+directories to a local checkout; install from the plugin bundle instead.
+Installing these skills only installs Agent Skills playbooks. It does not
 install the `wt` binary, run `wt init`, write `.wt.toml`, configure providers,
 or create personal `wt` task/workflow state. Internal repo-only skills such as
 `consistency` live outside the installable plugin pack.
