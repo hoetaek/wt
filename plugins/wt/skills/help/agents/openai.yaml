@@ -1,0 +1,4 @@
+interface:
+  display_name: "WT Help"
+  short_description: "Show the wt lifecycle quick reference"
+  default_prompt: "Use $help to show a quick reference for the wt mental model, lifecycle skills, setup commands, and common `wt run` starts."

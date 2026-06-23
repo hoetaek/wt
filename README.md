@@ -64,12 +64,14 @@ used by another project.
 This repository also ships an installable Agent Skills pack for the `wt`
 lifecycle. The pack contains:
 
-- `welcome`
+- `help`
 - `ready`
 - `work`
 - `land`
 - `config`
 - `autopilot`
+- `variants`
+- `writing-tasks`
 
 Install from the pushed plugin bundle rather than linking global skills to a
 local checkout. For an interactive install, run one command and choose the
@@ -93,12 +95,14 @@ For a non-interactive Codex global install, pass explicit skill names:
 
 ```bash
 npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/plugins/wt \
-  --skill welcome \
+  --skill help \
   --skill ready \
   --skill work \
   --skill land \
   --skill config \
   --skill autopilot \
+  --skill variants \
+  --skill writing-tasks \
   -g -a codex --copy -y
 ```
 
@@ -106,12 +110,14 @@ From a local clone of this repository, use `./plugins/wt` as the source:
 
 ```bash
 npx --yes skills@latest add ./plugins/wt \
-  --skill welcome \
+  --skill help \
   --skill ready \
   --skill work \
   --skill land \
   --skill config \
   --skill autopilot \
+  --skill variants \
+  --skill writing-tasks \
   -g -a codex --copy -y
 ```
 
@@ -121,12 +127,14 @@ plugin directory, and omit `-g`:
 
 ```bash
 npx --yes skills@latest add /path/to/wt/plugins/wt \
-  --skill welcome \
+  --skill help \
   --skill ready \
   --skill work \
   --skill land \
   --skill config \
   --skill autopilot \
+  --skill variants \
+  --skill writing-tasks \
   -a codex --copy -y
 ```
 

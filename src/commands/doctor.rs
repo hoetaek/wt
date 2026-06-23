@@ -449,7 +449,10 @@ fn collect_site_provider_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<Doc
             checks.push(DoctorCheck::ok("site_provider", Some("external".into())));
             checks.push(DoctorCheck::ok(
                 "external_site",
-                Some("wt registers no proxy — ensure your external router serves the site URL".into()),
+                Some(
+                    "wt registers no proxy — ensure your external router serves the site URL"
+                        .into(),
+                ),
             ));
         }
         SiteProvider::Herd => {
