@@ -71,7 +71,6 @@ lifecycle. The pack contains:
 - `config`
 - `autopilot`
 - `variants`
-- `writing-tasks`
 
 Install from the pushed plugin bundle rather than linking global skills to a
 local checkout. For an interactive install, run one command and choose the
@@ -102,7 +101,6 @@ npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/plugins/wt
   --skill config \
   --skill autopilot \
   --skill variants \
-  --skill writing-tasks \
   -g -a codex --copy -y
 ```
 
@@ -117,7 +115,6 @@ npx --yes skills@latest add ./plugins/wt \
   --skill config \
   --skill autopilot \
   --skill variants \
-  --skill writing-tasks \
   -g -a codex --copy -y
 ```
 
@@ -134,7 +131,6 @@ npx --yes skills@latest add /path/to/wt/plugins/wt \
   --skill config \
   --skill autopilot \
   --skill variants \
-  --skill writing-tasks \
   -a codex --copy -y
 ```
 

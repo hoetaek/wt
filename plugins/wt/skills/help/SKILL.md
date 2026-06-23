@@ -36,7 +36,6 @@ phase skills.
 | **land** | `$land` | Review, land or discard, and settle lessons. |
 | **autopilot** | `$autopilot` | Run the ready-approved path through work and land. |
 | **variants** | `$variants` | Compare multiple implementation variants. |
-| **writing-tasks** | `$writing-tasks` | Author or revise wt TaskDocument bodies. |
 
 ## Setup
 
