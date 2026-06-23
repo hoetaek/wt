@@ -8,6 +8,12 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+### Changed
+
+- Folded TaskDocument body authoring guidance into the `ready` skill so the wt
+  plugin exposes one preparation surface instead of a separate `writing-tasks`
+  skill.
+
 ## 0.47.0 - 2026-06-09
 
 ### Changed
