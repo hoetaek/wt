@@ -1,7 +1,7 @@
 # Retrospect Reference
 
 Use this reference from `wt-land` to capture a closed work item, or a blocked
-`wt-lifecycle` lesson, as a structured retrospective that future coordination,
+`wt-autopilot` lesson, as a structured retrospective that future coordination,
 review, landing, or skill guidance can learn from. Do not use it to track
 in-flight state — that belongs in `<repo-root>/.wt/execution/tasks`,
 `<repo-root>/.wt/execution/task-runs`, and
@@ -15,7 +15,7 @@ itself is worth preserving.
 
 - After `wt-land` proves a branch landed and cleanup ran.
 - After an intentional discard with explicit user direction.
-- At the end of a `wt-lifecycle` loop, even when a step blocked progress, if
+- At the end of a `wt-autopilot` loop, even when a step blocked progress, if
   the blocker is a reusable lesson for the next cycle.
 - When the user explicitly says "retrospect" or "retrospective 작성".
 
@@ -31,7 +31,7 @@ Choose the type before writing:
   otherwise closed after `wt-land` proved integration/discard and cleanup
   safety. Record outcome, evidence, merge or discard proof, cleanup, and
   lessons.
-- Blocked lesson retrospect: the `wt-lifecycle` loop stopped before landing —
+- Blocked lesson retrospect: the `wt-autopilot` loop stopped before landing —
   missing execution handoff, failed launch, unresolved review evidence,
   landing conflict ownership, or unclear policy. Record the missing step and
   the reusable lesson only. Do not turn the retrospective into TaskRun,
@@ -125,7 +125,7 @@ kind = "<direct-task | workflow-batch | workflow-stack | matrix | multi-pr-cycle
 target = "<task key, workflow id, PR number(s), or topic>"
 outcome = "<landed | discarded | partial | blocked>"
 commit = "<merge commit oid(s)>"
-skills = ["wt-lifecycle", "wt-ready", ...]   # skills actually used in this loop
+skills = ["wt-autopilot", "wt-ready", ...]   # skills actually used in this loop
 tags = ["..."]                          # searchable topic tags
 
 # Optional when split into multiple files
@@ -175,7 +175,7 @@ items = [
 
 [[action_candidates]]
 summary = "<one-line action this retrospective recommends>"
-owner = "<wt | wt-lifecycle | wt-ready | wt-work | wt-land | coordinator | <user>>"
+owner = "<wt | wt-autopilot | wt-ready | wt-work | wt-land | coordinator | <user>>"
 status = "candidate"               # or "addressed" / "promoted"
 promote_to = "<a TaskDocument path, or the leaf workspace, when known>"
 done_when = "<observable criterion that closes this candidate>"
@@ -184,7 +184,7 @@ done_when = "<observable criterion that closes this candidate>"
 # One entry per lesson that warrants a permanent behavior change.
 # Skip this table entirely when no lesson rises to that bar.
 lesson = "<the mistake or friction this entry exists to prevent next time>"
-owner = "<wt | wt-lifecycle | wt-ready | wt-work | wt-land | coordinator | <user>>"
+owner = "<wt | wt-autopilot | wt-ready | wt-work | wt-land | coordinator | <user>>"
 target_file = "<absolute or repo-relative path of the file that must change>"
 target_section = "<heading, anchor, or line range inside target_file>"
 change = "<what the edit should say or constrain, in one or two sentences>"
@@ -270,7 +270,7 @@ such that the agent never makes that mistake again.
   it. "Update CLAUDE.md somewhere" is not enough; "Add a bullet under
   `CLAUDE.md` > `## 문제 해결 원칙` after item 5" is.
 - Name the owner. Use the same vocabulary as `[[action_candidates]]`
-  (`wt | wt-lifecycle | wt-ready | wt-work | wt-land | coordinator | <user>`)
+  (`wt | wt-autopilot | wt-ready | wt-work | wt-land | coordinator | <user>`)
   so the reader knows who is responsible for applying the change.
 - Record each such change as one `[[harness_tuning]]` entry in the TOML. If no
   lesson rises to that bar, omit the table entirely rather than padding it.
@@ -293,7 +293,7 @@ Target files commonly include, but are not limited to:
    - Closed: confirm the work item is landed or explicitly discarded. If the
      branch is still active and can continue normally, stop and let the
      matching lifecycle skill finish first.
-   - Blocked lesson: confirm the `wt-lifecycle` loop is stopped at a named
+   - Blocked lesson: confirm the `wt-autopilot` loop is stopped at a named
      step and the blocker is a reusable lesson. Do not write one for ordinary
      waiting, active agent work, or a routine review round.
 2. Decide scope: one file or split + cross-link.

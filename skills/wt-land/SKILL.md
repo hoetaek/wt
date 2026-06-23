@@ -15,7 +15,7 @@ pass, cleans only after that closure is safe, and records the retrospective
 lessons that should feed the next cycle.
 
 Object model, status boundaries, and pass vs cleanup commands: see
-`../wt-lifecycle/references/task-lifecycle.md`.
+`../wt-autopilot/references/task-lifecycle.md`.
 
 ## Boundaries
 

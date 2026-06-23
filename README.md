@@ -69,7 +69,7 @@ lifecycle. The pack contains:
 - `wt-work`
 - `wt-land`
 - `wt-config`
-- `wt-lifecycle`
+- `wt-autopilot`
 
 For an interactive install, run one command and choose the skills, agent, and
 scope from the prompts:
@@ -89,7 +89,7 @@ npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/skills \
   --skill wt-work \
   --skill wt-land \
   --skill wt-config \
-  --skill wt-lifecycle \
+  --skill wt-autopilot \
   -g -a codex --copy -y
 ```
 
@@ -102,7 +102,7 @@ npx --yes skills@latest add ./skills \
   --skill wt-work \
   --skill wt-land \
   --skill wt-config \
-  --skill wt-lifecycle \
+  --skill wt-autopilot \
   -g -a codex --copy -y
 ```
 
@@ -117,7 +117,7 @@ npx --yes skills@latest add /path/to/wt/skills \
   --skill wt-work \
   --skill wt-land \
   --skill wt-config \
-  --skill wt-lifecycle \
+  --skill wt-autopilot \
   -a codex --copy -y
 ```
 

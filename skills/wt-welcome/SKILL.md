@@ -1,6 +1,6 @@
 ---
 name: wt-welcome
-description: "Use to onboard a user to wt by explaining the mental model, first machine setup, the wt skill family, common `wt run` starts, and when to continue into $wt-config or $wt-lifecycle without overwhelming them."
+description: "Use to onboard a user to wt by explaining the mental model, first machine setup, the wt skill family, common `wt run` starts, and when to continue into $wt-config or $wt-autopilot without overwhelming them."
 ---
 
 # WT Welcome
@@ -19,12 +19,12 @@ Give the user a compact map:
 wt setup   = prepare this machine
 wt init    = prepare this repo's wt state/config
 wt run     = start work
-wt-lifecycle = prepare, run, land, and settle harness lessons
+wt-autopilot = after wt-ready, run, review, land, and settle the work
 wt-config  = inspect this repo and recommend the right config
 ```
 
 Explain that `wt run` starts workspaces; it does not own review, landing,
-cleanup, or long-running coordination. Those are handled by `wt-lifecycle` and its
+cleanup, or long-running coordination. Those are handled by `wt-autopilot` and its
 phase skills.
 
 ## First Answer Shape
@@ -48,10 +48,12 @@ Use this order:
 
 3. **wt skills.** Keep this short:
    - `$wt-config`: inspect the current repo and recommend repo config.
-   - `$wt-lifecycle`: prepare work, run it, land or discard it, and settle
-     reusable lessons into the harness.
-   - Phase skills such as `$wt-ready`, `$wt-work`, and `$wt-land` are normally
-     called by `$wt-lifecycle`.
+   - `$wt-autopilot`: after `$wt-ready` hands off an approved launch target, run
+     the work, review it, land or discard it, and settle reusable lessons into
+     the harness.
+   - Phase skills `$wt-ready`, `$wt-work`, and `$wt-land` can be run on their own
+     for per-step control; `$wt-autopilot` chains `$wt-work` and `$wt-land`
+     automatically after the `$wt-ready` handoff.
 4. **Common `wt run` starts.** Show only the most useful commands:
 
    ```bash
@@ -66,7 +68,7 @@ Use this order:
    Explain each in one short phrase.
 5. **Next action.** End the basic onboarding by telling the user to run
    `$wt-config` for the current repo. If they want actual work executed after
-   config is ready, point them to `$wt-lifecycle`.
+   config is ready, point them to `$wt-autopilot`.
 6. **Progressive disclosure.** Ask whether they want the deeper model. Only if
    they say yes, explain TaskDocuments, Workflows, TaskRuns, and workflow modes.
 
@@ -82,7 +84,7 @@ When the user asks for more detail, explain these concepts compactly:
 - **Modes:** `single` shares one workspace, `batch` runs independent branches,
   `stack` runs ordered dependent branches, and `matrix` runs one task through
   multiple profiles.
-- **wt-lifecycle loop:** `$wt-ready -> $wt-work -> $wt-land`.
+- **wt-autopilot loop:** `$wt-ready -> $wt-work -> $wt-land`.
 
 Keep the deeper model conceptual unless the user asks for concrete commands.
 
@@ -93,5 +95,5 @@ Keep the deeper model conceptual unless the user asks for concrete commands.
   explicitly asks for execution.
 - If the user is already inside a repo and asks what to do next, end with:
   "Run `$wt-config` here first."
-- If the user is ready to do real work, suggest `$wt-lifecycle` after config is
+- If the user is ready to do real work, suggest `$wt-autopilot` after config is
   healthy.

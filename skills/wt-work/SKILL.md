@@ -28,7 +28,7 @@ Launch -> Watch -> Steer -> Accept
 
 Object model, planning-estimate requirement, status semantics, direct vs
 workflow-linked distinction, and pass vs cleanup boundaries: see
-`../wt-lifecycle/references/task-lifecycle.md`.
+`../wt-autopilot/references/task-lifecycle.md`.
 
 ## Boundaries
 
