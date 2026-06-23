@@ -1,6 +1,6 @@
 {
   "name": "wt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "wt lifecycle skills for worktree-based agent orchestration",
   "author": {
     "name": "hoetaek",
