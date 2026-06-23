@@ -64,12 +64,12 @@ used by another project.
 This repository also ships an installable Agent Skills pack for the `wt`
 lifecycle. The pack contains:
 
-- `wt-welcome`
-- `wt-ready`
-- `wt-work`
-- `wt-land`
-- `wt-config`
-- `wt-autopilot`
+- `welcome`
+- `ready`
+- `work`
+- `land`
+- `config`
+- `autopilot`
 
 For an interactive install, run one command and choose the skills, agent, and
 scope from the prompts:
@@ -78,18 +78,18 @@ scope from the prompts:
 npx skills add https://github.com/hoetaek/wt/tree/master/plugins/wt
 ```
 
-Select the `wt-*` skills you want.
+Select the `wt` plugin skills you want.
 
 For a non-interactive Codex global install, pass explicit skill names:
 
 ```bash
 npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/plugins/wt \
-  --skill wt-welcome \
-  --skill wt-ready \
-  --skill wt-work \
-  --skill wt-land \
-  --skill wt-config \
-  --skill wt-autopilot \
+  --skill welcome \
+  --skill ready \
+  --skill work \
+  --skill land \
+  --skill config \
+  --skill autopilot \
   -g -a codex --copy -y
 ```
 
@@ -97,12 +97,12 @@ From a local clone of this repository, use `./plugins/wt` as the source:
 
 ```bash
 npx --yes skills@latest add ./plugins/wt \
-  --skill wt-welcome \
-  --skill wt-ready \
-  --skill wt-work \
-  --skill wt-land \
-  --skill wt-config \
-  --skill wt-autopilot \
+  --skill welcome \
+  --skill ready \
+  --skill work \
+  --skill land \
+  --skill config \
+  --skill autopilot \
   -g -a codex --copy -y
 ```
 
@@ -112,12 +112,12 @@ plugin directory, and omit `-g`:
 
 ```bash
 npx --yes skills@latest add /path/to/wt/plugins/wt \
-  --skill wt-welcome \
-  --skill wt-ready \
-  --skill wt-work \
-  --skill wt-land \
-  --skill wt-config \
-  --skill wt-autopilot \
+  --skill welcome \
+  --skill ready \
+  --skill work \
+  --skill land \
+  --skill config \
+  --skill autopilot \
   -a codex --copy -y
 ```
 
@@ -128,7 +128,7 @@ install the `wt` binary, run `wt init`, write `.wt.toml`, configure providers,
 or create personal `wt` task/workflow state. Internal repo-only skills such as
 `consistency` live outside the installable plugin pack.
 
-Some `wt-ready` preparation patterns are adapted from Gajae-Code's
+Some `ready` preparation patterns are adapted from Gajae-Code's
 [deep-interview](https://github.com/Yeachan-Heo/gajae-code/tree/main/packages/coding-agent/src/defaults/gjc/skills/deep-interview)
 and [ralplan](https://github.com/Yeachan-Heo/gajae-code/tree/main/packages/coding-agent/src/defaults/gjc/skills/ralplan)
 skills for `wt`'s harness-first model.

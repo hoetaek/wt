@@ -1,4 +1,0 @@
-interface:
-  display_name: "WT Autopilot"
-  short_description: "After the wt-ready handoff, run, review, and land wt work automatically"
-  default_prompt: "Use $wt-autopilot after wt-ready has handed off an approved launch target to launch and coordinate execution, review and check the work, and land or discard safely with hard stops and a completion audit, settling reusable lessons into retrospect or harness updates."

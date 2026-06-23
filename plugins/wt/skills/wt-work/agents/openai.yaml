@@ -1,4 +1,0 @@
-interface:
-  display_name: "WT Work"
-  short_description: "Launch and coordinate wt work"
-  default_prompt: "Use $wt-work to launch prepared wt task or workflow runs, capture the inspect target, coordinate feedback/review/checks, pass workflow tasks when applicable, and hand accepted work to $wt-land."

@@ -1,4 +1,0 @@
-interface:
-  display_name: "WT Config"
-  short_description: "Configure and improve wt repo config"
-  default_prompt: "Use $wt-config to initialize or improve wt config, recommend ownership/prompts/workspace/env-template/policy changes, clean noisy config, and validate with `wt config` and `wt doctor`."

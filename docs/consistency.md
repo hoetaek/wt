@@ -1160,8 +1160,8 @@ agent에게 맡길 작업의 deterministic launch contract다. 새로 준비되�
 expected duration, estimate basis, suggested watch cadence, blocked by/dependency,
 execution shape, size class, acceptance checks를 적는다. Provider issue import처럼 외부
 본문을 그대로 보존하는 TaskDocument는 이 section이 없을 수 있으므로 CLI는 단순 TOML read
-중에 launch body를 자동 생성하거나 provider body를 덮어쓰지 않는다. `wt-ready` /
-`wt-work` flow가 launch 전에 부족한 execution context를 채우는 소유자다.
+중에 launch body를 자동 생성하거나 provider body를 덮어쓰지 않는다. `ready` /
+`work` flow가 launch 전에 부족한 execution context를 채우는 소유자다.
 
 `wt task list`는 `<repo-root>/.wt/execution/tasks/<task>.toml`에 저장된 TaskDocument file 중
 actionable working set을 보여주는 canonical read-only list다. Bare `wt task list`는
