@@ -1,0 +1,19 @@
+{
+  "name": "wt",
+  "owner": {
+    "name": "hoetaek",
+    "email": "hoetaek@indischool.com"
+  },
+  "metadata": {
+    "description": "wt lifecycle skills - Claude Code + Codex plugin marketplace",
+    "version": "0.48.0"
+  },
+  "plugins": [
+    {
+      "name": "wt",
+      "source": "./plugins/wt",
+      "description": "wt lifecycle skills for agent workflow orchestration",
+      "version": "0.48.0"
+    }
+  ]
+}

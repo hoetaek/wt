@@ -75,7 +75,7 @@ For an interactive install, run one command and choose the skills, agent, and
 scope from the prompts:
 
 ```bash
-npx skills add https://github.com/hoetaek/wt/tree/master/skills
+npx skills add https://github.com/hoetaek/wt/tree/master/plugins/wt
 ```
 
 Select the `wt-*` skills you want.
@@ -83,7 +83,7 @@ Select the `wt-*` skills you want.
 For a non-interactive Codex global install, pass explicit skill names:
 
 ```bash
-npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/skills \
+npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/plugins/wt \
   --skill wt-welcome \
   --skill wt-ready \
   --skill wt-work \
@@ -93,10 +93,10 @@ npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/skills \
   -g -a codex --copy -y
 ```
 
-From a local clone of this repository, use `./skills` as the source:
+From a local clone of this repository, use `./plugins/wt` as the source:
 
 ```bash
-npx --yes skills@latest add ./skills \
+npx --yes skills@latest add ./plugins/wt \
   --skill wt-welcome \
   --skill wt-ready \
   --skill wt-work \
@@ -107,11 +107,11 @@ npx --yes skills@latest add ./skills \
 ```
 
 For a project-local Codex install, run the same command from the project that
-should receive the skills, point `add` at this repository clone's `skills/`
-directory, and omit `-g`:
+should receive the skills, point `add` at this repository clone's `plugins/wt`
+plugin directory, and omit `-g`:
 
 ```bash
-npx --yes skills@latest add /path/to/wt/skills \
+npx --yes skills@latest add /path/to/wt/plugins/wt \
   --skill wt-welcome \
   --skill wt-ready \
   --skill wt-work \
@@ -121,10 +121,12 @@ npx --yes skills@latest add /path/to/wt/skills \
   -a codex --copy -y
 ```
 
-Installing these skills only installs Agent Skills playbooks. It does not
+The installable skills live once under `plugins/wt/skills/`, matching the
+Claude/Codex plugin bundle. Installing these skills only installs Agent Skills
+playbooks. It does not
 install the `wt` binary, run `wt init`, write `.wt.toml`, configure providers,
 or create personal `wt` task/workflow state. Internal repo-only skills such as
-`consistency` live outside the installable `skills/` pack.
+`consistency` live outside the installable plugin pack.
 
 Some `wt-ready` preparation patterns are adapted from Gajae-Code's
 [deep-interview](https://github.com/Yeachan-Heo/gajae-code/tree/main/packages/coding-agent/src/defaults/gjc/skills/deep-interview)

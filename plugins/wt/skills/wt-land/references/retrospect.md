@@ -282,7 +282,7 @@ Target files commonly include, but are not limited to:
 - Steering files such as `.kiro/steering/*` and equivalents in other dotfile
   setups.
 - Workflow rules and config: `.wt.toml`, `<repo-root>/.wt/config/local.toml`.
-- SKILL.md bodies under `<wt-repo>/skills/wt-*/SKILL.md` (installed views are
+- SKILL.md bodies under `<wt-repo>/plugins/wt/skills/wt-*/SKILL.md` (installed views are
   symlinks), especially `wt-land/SKILL.md` when the lesson changes closeout
   behavior.
 - Profile prompts under `<repo-root>/.wt/config/profiles/<name>/prompts/`.
