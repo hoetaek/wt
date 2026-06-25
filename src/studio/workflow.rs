@@ -37,10 +37,10 @@ pub(crate) fn validate_workflow_candidate(
     push_read_only_error(&mut errors, "tasks", candidate.tasks != disk.tasks);
     push_read_only_error(&mut errors, "origin", candidate.origin != disk.origin);
 
-    if let Some(color) = candidate.color.as_deref() {
-        if !workflow_color_allowed(color) {
-            errors.push(format!("invalid color: {color}"));
-        }
+    if let Some(color) = candidate.color.as_deref()
+        && !workflow_color_allowed(color)
+    {
+        errors.push(format!("invalid color: {color}"));
     }
 
     if errors.is_empty() {

@@ -25,8 +25,8 @@ fn doctor(ctx: &Ctx) -> Result<()> {
             ctx.ui.print_step("Site provider: none");
             Ok(())
         }
-        SiteProvider::DockerProxy => {
-            ctx.ui.print_step("Site provider: docker_proxy");
+        SiteProvider::External => {
+            ctx.ui.print_step("Site provider: external");
             ok(ctx, "no local site CLI is required");
             Ok(())
         }
@@ -190,7 +190,7 @@ fn provider_name(provider: &SiteProvider) -> &'static str {
         SiteProvider::None => "none",
         SiteProvider::Herd => "herd",
         SiteProvider::Valet => "valet",
-        SiteProvider::DockerProxy => "docker_proxy",
+        SiteProvider::External => "external",
         SiteProvider::Traefik => "traefik",
     }
 }
@@ -227,12 +227,12 @@ fn check_listener(ctx: &Ctx, bind_ip: &str, port: &str) -> Result<bool> {
 }
 
 fn traefik_binary(ctx: &Ctx) -> String {
-    if ctx.runner.has_command("traefik") {
-        if let Ok(output) = ctx.runner.run("which", &["traefik"], None) {
-            if output.success && !output.stdout.trim().is_empty() {
-                return output.stdout.trim().to_string();
-            }
-        }
+    if ctx.runner.has_command("traefik")
+        && let Ok(output) = ctx.runner.run("which", &["traefik"], None)
+        && output.success
+        && !output.stdout.trim().is_empty()
+    {
+        return output.stdout.trim().to_string();
     }
 
     "/opt/homebrew/bin/traefik".into()

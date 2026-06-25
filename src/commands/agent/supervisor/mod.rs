@@ -1079,11 +1079,11 @@ fn stop_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
             std::thread::sleep(STOP_POLL);
         }
 
-        if let Some(current) = read_registration(ctx, &registration.agent_id)? {
-            if !same_registered_supervisor(&current, registration) {
-                close_registered_cmux_host(ctx, registration);
-                return Ok(());
-            }
+        if let Some(current) = read_registration(ctx, &registration.agent_id)?
+            && !same_registered_supervisor(&current, registration)
+        {
+            close_registered_cmux_host(ctx, registration);
+            return Ok(());
         }
         if supervisor_is_alive(registration)? {
             signal::kill(pid, Signal::SIGKILL).with_context(|| {
@@ -1121,10 +1121,10 @@ fn same_registered_supervisor(current: &Registration, expected: &Registration) -
 }
 
 fn remove_registration_if_current(ctx: &Ctx, registration: &Registration) -> Result<()> {
-    if let Some(current) = read_registration(ctx, &registration.agent_id)? {
-        if same_registered_supervisor(&current, registration) {
-            remove_registration(ctx, &registration.agent_id)?;
-        }
+    if let Some(current) = read_registration(ctx, &registration.agent_id)?
+        && same_registered_supervisor(&current, registration)
+    {
+        remove_registration(ctx, &registration.agent_id)?;
     }
     Ok(())
 }
@@ -1287,9 +1287,9 @@ pub fn default_poll_interval() -> String {
 }
 
 fn format_duration(seconds: u64) -> String {
-    if seconds != 0 && seconds % (60 * 60) == 0 {
+    if seconds != 0 && seconds.is_multiple_of(60 * 60) {
         format!("{}h", seconds / (60 * 60))
-    } else if seconds != 0 && seconds % 60 == 0 {
+    } else if seconds != 0 && seconds.is_multiple_of(60) {
         format!("{}m", seconds / 60)
     } else {
         format!("{seconds}s")

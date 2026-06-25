@@ -648,6 +648,34 @@ copy = ["CLAUDE.local.md"]
 }
 
 #[test]
+fn site_provider_external_parses_from_docker_proxy_alias() {
+    // Backward compat: old configs using `docker_proxy` must still deserialize
+    // to the renamed `External` variant via the serde alias.
+    let config: Config = toml::from_str(
+        r#"
+[site]
+provider = "docker_proxy"
+"#,
+    )
+    .unwrap();
+    let site = config.site.unwrap();
+    assert_eq!(site.provider, SiteProvider::External);
+}
+
+#[test]
+fn site_provider_parses_external() {
+    let config: Config = toml::from_str(
+        r#"
+[site]
+provider = "external"
+"#,
+    )
+    .unwrap();
+    let site = config.site.unwrap();
+    assert_eq!(site.provider, SiteProvider::External);
+}
+
+#[test]
 fn workflow_policy_merges_per_field() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".wt/config")).unwrap();

@@ -1,8 +1,8 @@
 [package]
 name = "wt"
-version = "0.48.0"
+version = "0.49.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 publish = false
 description = "Worktree-based agent orchestration harness"
 license = "MIT OR Apache-2.0"
@@ -52,6 +52,11 @@ syntect = "5"
 unicode-width = "0.2"
 two-face = { version = "0.5", default-features = false, features = ["syntect-default-onig"] }
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
+# 직접 사용하지 않는 transitive dep(plist, ratatui-widgets 경유) 제약.
+# time 0.3.48의 내부 impl이 ratatui-widgets의 blanket From impl과 E0119 coherence
+# 충돌을 일으켜, --locked 없는 fresh resolution 빌드가 깨진다. upstream(time 또는
+# ratatui-widgets)이 수정 버전을 내면 이 항목을 제거한다.
+time = { version = ">=0.3.47, <0.3.48", default-features = false }
 
 [dev-dependencies]
 assert_cmd = "2"

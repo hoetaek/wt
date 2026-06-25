@@ -91,16 +91,16 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
                     "     Profile {}: {} [{}]",
                     profile_run.profile, profile_run.run, status
                 ));
-                if let Some(error) = run.and_then(|run| run.error) {
-                    if !error.trim().is_empty() {
-                        ctx.ui.print_dim(&format!("       Error: {error}"));
-                    }
+                if let Some(error) = run.and_then(|run| run.error)
+                    && !error.trim().is_empty()
+                {
+                    ctx.ui.print_dim(&format!("       Error: {error}"));
                 }
             }
-        } else if let Some(error) = task_run_record(ctx, &item.run).and_then(|run| run.error) {
-            if !error.trim().is_empty() {
-                ctx.ui.print_dim(&format!("     Error: {error}"));
-            }
+        } else if let Some(error) = task_run_record(ctx, &item.run).and_then(|run| run.error)
+            && !error.trim().is_empty()
+        {
+            ctx.ui.print_dim(&format!("     Error: {error}"));
         }
     }
     Ok(())

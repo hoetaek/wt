@@ -1,0 +1,18 @@
+{
+  "name": "wt",
+  "description": "wt lifecycle skills for worktree-based agent orchestration",
+  "version": "0.1.1",
+  "author": {
+    "name": "hoetaek",
+    "email": "hoetaek@indischool.com"
+  },
+  "homepage": "https://github.com/hoetaek/wt",
+  "repository": "https://github.com/hoetaek/wt",
+  "license": "MIT OR Apache-2.0",
+  "keywords": [
+    "wt",
+    "skills",
+    "workflow",
+    "agents"
+  ]
+}

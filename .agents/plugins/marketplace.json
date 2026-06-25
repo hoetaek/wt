@@ -1,0 +1,24 @@
+{
+  "name": "wt",
+  "interface": {
+    "displayName": "wt"
+  },
+  "metadata": {
+    "version": "0.1.1"
+  },
+  "plugins": [
+    {
+      "name": "wt",
+      "source": {
+        "source": "local",
+        "path": "./plugins/wt"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "version": "0.1.1",
+      "category": "Productivity"
+    }
+  ]
+}

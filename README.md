@@ -64,69 +64,86 @@ used by another project.
 This repository also ships an installable Agent Skills pack for the `wt`
 lifecycle. The pack contains:
 
-- `wt-welcome`
-- `wt-ready`
-- `wt-work`
-- `wt-land`
-- `wt-config`
-- `wt-lifecycle`
+- `help`
+- `ready`
+- `work`
+- `land`
+- `config`
+- `autopilot`
+- `variants`
 
-For an interactive install, run one command and choose the skills, agent, and
-scope from the prompts:
+Install from the pushed plugin bundle rather than linking global skills to a
+local checkout. For an interactive install, run one command and choose the
+skills, agent, and scope from the prompts:
 
 ```bash
-npx skills add https://github.com/hoetaek/wt/tree/master/skills
+npx skills add https://github.com/hoetaek/wt/tree/master/plugins/wt
 ```
 
-Select the `wt-*` skills you want.
+Select the `wt` plugin skills you want.
+
+For Claude Code, add this repository as a plugin marketplace, then install the
+`wt` plugin:
+
+```bash
+claude plugin marketplace add https://github.com/hoetaek/wt
+claude plugin install wt
+```
 
 For a non-interactive Codex global install, pass explicit skill names:
 
 ```bash
-npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/skills \
-  --skill wt-welcome \
-  --skill wt-ready \
-  --skill wt-work \
-  --skill wt-land \
-  --skill wt-config \
-  --skill wt-lifecycle \
+npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/plugins/wt \
+  --skill help \
+  --skill ready \
+  --skill work \
+  --skill land \
+  --skill config \
+  --skill autopilot \
+  --skill variants \
   -g -a codex --copy -y
 ```
 
-From a local clone of this repository, use `./skills` as the source:
+From a local clone of this repository, use `./plugins/wt` as the source:
 
 ```bash
-npx --yes skills@latest add ./skills \
-  --skill wt-welcome \
-  --skill wt-ready \
-  --skill wt-work \
-  --skill wt-land \
-  --skill wt-config \
-  --skill wt-lifecycle \
+npx --yes skills@latest add ./plugins/wt \
+  --skill help \
+  --skill ready \
+  --skill work \
+  --skill land \
+  --skill config \
+  --skill autopilot \
+  --skill variants \
   -g -a codex --copy -y
 ```
 
 For a project-local Codex install, run the same command from the project that
-should receive the skills, point `add` at this repository clone's `skills/`
-directory, and omit `-g`:
+should receive the skills, point `add` at this repository clone's `plugins/wt`
+plugin directory, and omit `-g`:
 
 ```bash
-npx --yes skills@latest add /path/to/wt/skills \
-  --skill wt-welcome \
-  --skill wt-ready \
-  --skill wt-work \
-  --skill wt-land \
-  --skill wt-config \
-  --skill wt-lifecycle \
+npx --yes skills@latest add /path/to/wt/plugins/wt \
+  --skill help \
+  --skill ready \
+  --skill work \
+  --skill land \
+  --skill config \
+  --skill autopilot \
+  --skill variants \
   -a codex --copy -y
 ```
 
+The installable skills live once under `plugins/wt/skills/`, matching the
+Claude/Codex plugin bundle. Do not install them by symlinking global skill
+directories to a local checkout; install from the plugin bundle instead.
+The plugin version is managed separately from the `wt` CLI version.
 Installing these skills only installs Agent Skills playbooks. It does not
 install the `wt` binary, run `wt init`, write `.wt.toml`, configure providers,
 or create personal `wt` task/workflow state. Internal repo-only skills such as
-`consistency` live outside the installable `skills/` pack.
+`consistency` live outside the installable plugin pack.
 
-Some `wt-ready` preparation patterns are adapted from Gajae-Code's
+Some `ready` preparation patterns are adapted from Gajae-Code's
 [deep-interview](https://github.com/Yeachan-Heo/gajae-code/tree/main/packages/coding-agent/src/defaults/gjc/skills/deep-interview)
 and [ralplan](https://github.com/Yeachan-Heo/gajae-code/tree/main/packages/coding-agent/src/defaults/gjc/skills/ralplan)
 skills for `wt`'s harness-first model.
@@ -136,7 +153,7 @@ skills for `wt`'s harness-first model.
 Required:
 
 - Git
-- Rust 1.85 or newer when building from source
+- Rust 1.88 or newer when building from source
 
 Optional integrations:
 
@@ -144,7 +161,7 @@ Optional integrations:
 - `linear` for Linear issue workflows
 - `cmux` for workspace/window automation and agent status surfaces
 - Codex, Claude, Gemini, or another configured agent command
-- Herd, Valet, Docker proxy, or Traefik for local site helpers
+- Herd, Valet, External, or Traefik for local site helpers
 
 ## Quick Start
 

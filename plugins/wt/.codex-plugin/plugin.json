@@ -1,0 +1,20 @@
+{
+  "name": "wt",
+  "version": "0.1.1",
+  "description": "wt lifecycle skills for worktree-based agent orchestration",
+  "author": {
+    "name": "hoetaek",
+    "email": "hoetaek@indischool.com"
+  },
+  "homepage": "https://github.com/hoetaek/wt",
+  "repository": "https://github.com/hoetaek/wt",
+  "license": "MIT OR Apache-2.0",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "wt",
+    "shortDescription": "wt lifecycle skills for coding agents",
+    "longDescription": "wt skills guide coding agents through configuring, preparing, launching, coordinating, varying, and landing wt TaskRuns and workflow work.",
+    "category": "Productivity",
+    "developerName": "hoetaek"
+  }
+}

@@ -563,10 +563,9 @@ fn next_workflow_color(ctx: &Ctx, excluded_path: Option<&Path>) -> Result<String
         .filter_map(|record| record.workflow.color.as_deref())
         .map(str::trim)
         .find(|color| !color.is_empty())
+        && let Some(idx) = palette_index(color)
     {
-        if let Some(idx) = palette_index(color) {
-            return Ok(WORKFLOW_COLOR_ROTATION[(idx + 1) % WORKFLOW_COLOR_ROTATION.len()].into());
-        }
+        return Ok(WORKFLOW_COLOR_ROTATION[(idx + 1) % WORKFLOW_COLOR_ROTATION.len()].into());
     }
 
     Ok(WORKFLOW_COLOR_ROTATION[records.len() % WORKFLOW_COLOR_ROTATION.len()].into())

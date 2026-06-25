@@ -121,10 +121,10 @@ fn print_text_report(report: &SessionReport) {
     println!("anchor_kind: {}", report.anchor_kind);
     println!("anchor_value: {}", report.anchor_value);
     println!("identity_anchor: {}", report.identity_anchor_path);
-    if report.anchor_kind == "surface" {
-        if let Some(workspace) = report.cmux_workspace_id.as_deref() {
-            println!("cmux_workspace_id: {workspace}");
-        }
+    if report.anchor_kind == "surface"
+        && let Some(workspace) = report.cmux_workspace_id.as_deref()
+    {
+        println!("cmux_workspace_id: {workspace}");
     }
 }
 

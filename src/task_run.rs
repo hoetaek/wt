@@ -473,11 +473,10 @@ pub(crate) fn ensure_workflow_routes(
         .as_deref()
         .and_then(optional_string)
         .is_none()
+        && let Some(label) = coordinator_label.and_then(optional_string)
     {
-        if let Some(label) = coordinator_label.and_then(optional_string) {
-            run.coordinator_label = Some(label);
-            changed = true;
-        }
+        run.coordinator_label = Some(label);
+        changed = true;
     }
 
     if changed {

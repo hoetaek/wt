@@ -1,4 +1,0 @@
-interface:
-  display_name: "WT Writing Tasks"
-  short_description: "Author implementation-grade TaskDocument bodies"
-  default_prompt: "Use $wt-writing-tasks to author or revise a wt TaskDocument body: files, stepwise failing tests, implementation contracts, commands with expected output, and the pre-handoff self-review."

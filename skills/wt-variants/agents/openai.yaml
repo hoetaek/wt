@@ -1,4 +1,0 @@
-interface:
-  display_name: "WT Variants"
-  short_description: "Compare profile-matrix implementation variants"
-  default_prompt: "Use $wt-variants to prepare profile-specific matrix runs for competing implementation approaches."

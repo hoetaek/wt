@@ -774,13 +774,12 @@ fn default_task_list_columns(cfg: &Config) -> Vec<Column> {
         ),
     ];
 
-    if columns.iter().all(|column| column.hidden) {
-        if let Some(task) = columns
+    if columns.iter().all(|column| column.hidden)
+        && let Some(task) = columns
             .iter_mut()
             .find(|column| column.kind == TaskListColumnKind::Task)
-        {
-            task.hidden = false;
-        }
+    {
+        task.hidden = false;
     }
 
     columns

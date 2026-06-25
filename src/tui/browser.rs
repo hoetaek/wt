@@ -141,10 +141,10 @@ fn run_browser_with_backend(
 
                 if let Some(input) = key_input(key) {
                     if app.has_popup() {
-                        if let Some(outcome) = app.handle_popup_key(input) {
-                            if let Some(reply) = pending_reply.take() {
-                                let _ = reply.send(reply_for(outcome));
-                            }
+                        if let Some(outcome) = app.handle_popup_key(input)
+                            && let Some(reply) = pending_reply.take()
+                        {
+                            let _ = reply.send(reply_for(outcome));
                         }
                         continue;
                     }

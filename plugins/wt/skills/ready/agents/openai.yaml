@@ -1,0 +1,4 @@
+interface:
+  display_name: "WT Ready"
+  short_description: "Verify and prepare executable wt work"
+  default_prompt: "Use $ready to verify the prepared context is executable as wt development work, slice it, author TaskDocument bodies, choose execution shape and workflow policy, and hand off an exact launch target to $work. Route vague thinking work to $leaf-work instead."

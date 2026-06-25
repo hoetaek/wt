@@ -27,7 +27,7 @@ effects.
 | Inline selector engine | `src/ui/selector.rs` or `src/ui/selector/*` when introduced | Selector row model, pure keyboard/filter/selection state transitions, visible-window calculation, selected-summary rendering, hidden-row counts, and the small terminal adapter for raw mode/redraw/cleanup | Domain candidate construction, command validation, persisted state schemas, provider calls, workflow/task lifecycle |
 | Config layering | `src/config/` | Config schema, `.wt.toml` and `<repo-root>/.wt/config/local.toml` load order, profile resolution, profile convention overlays, prompt merge/finalization | Worktree creation, site registration, TaskDocument/TaskRun/Workflow state |
 | Setup side effects | `src/setup.rs` and `src/setup/*` | `run_setup` orchestration plus side-effect modules for files, env/template variables, site registration, cmux workspace runtime, agent bootstrap, dependency commands, post-deps tabs, local context injection, and setup summary | Config precedence, workflow planning, task state ownership |
-| External services | `src/services/*` | Shell/tool boundaries for Git, GitHub, Linear, cmux, Herd, Valet, Docker proxy, Traefik, issue providers, and work-session observation | CLI policy, persisted wt state schemas, UX concept naming |
+| External services | `src/services/*` | Shell/tool boundaries for Git, GitHub, Linear, cmux, Herd, Valet, External site routing, Traefik, issue providers, and work-session observation | CLI policy, persisted wt state schemas, UX concept naming |
 
 ## Canonical State
 
@@ -195,8 +195,8 @@ agent hook installation, or inferred default policy.
 Site providers are external services. `SiteConfig` and provider choice live in
 `src/config/`; service dispatch lives in `src/services/site.rs`; provider
 implementations live in `src/services/herd.rs`, `src/services/valet.rs`, and
-`src/services/traefik.rs`, with no-op providers such as Docker proxy handled by
-the dispatch layer. `src/setup/site.rs` may invoke them while preparing a
+`src/services/traefik.rs`, with no-op providers such as External (the
+externally-routed/unmanaged provider) handled by the dispatch layer. `src/setup/site.rs` may invoke them while preparing a
 worktree, but provider modules should not decide CLI behavior or persisted wt
 state shape.
 

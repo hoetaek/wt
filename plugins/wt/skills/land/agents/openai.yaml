@@ -1,0 +1,4 @@
+interface:
+  display_name: "WT Land"
+  short_description: "Land, clean, and learn from wt work"
+  default_prompt: "Use $land after review passes or explicit discard to respect workflow policy, merge or prove discard, clean with `wt done`, and write retrospective timing, lessons, action candidates, and harness tuning."
