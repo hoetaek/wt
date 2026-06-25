@@ -8,11 +8,32 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.49.0 - 2026-06-25
+
+### Added
+
+- Added Claude Code and Codex plugin marketplace manifests for the wt lifecycle
+  skills, with installable plugin metadata and manifest validation.
+- Added a dedicated `autopilot` wt skill for carrying a ready-approved work item
+  through launch, coordination, review, landing, and retrospective closeout.
+
 ### Changed
 
-- Folded TaskDocument body authoring guidance into the `ready` skill so the wt
-  plugin exposes one preparation surface instead of a separate `writing-tasks`
-  skill.
+- Renamed the site provider/config surface from `docker_proxy` to `external`.
+  The old provider name is treated as legacy input and guided toward `external`.
+- Moved installable wt skills from the root `skills/` directory into the single
+  plugin source under `plugins/wt/skills/`.
+- Removed the `wt-` prefix from installable skill names. The plugin now exposes
+  `help`, `ready`, `work`, `land`, `config`, `autopilot`, and `variants`.
+- Folded TaskDocument body authoring guidance into `ready`, removing the
+  separate `writing-tasks` skill surface.
+- Split the plugin version from the CLI version. The wt plugin is now versioned
+  independently as `0.1.1`.
+
+### Fixed
+
+- Corrected the MSRV to Rust 1.88 to match actual dependency requirements.
+- Constrained `time` to `<0.3.48` to avoid fresh dependency resolution failures.
 
 ## 0.47.0 - 2026-06-09
 
