@@ -48,9 +48,13 @@ toml_edit = "0.25"
 thiserror = "2"
 ratatui = "0.30.1"
 pulldown-cmark = "0.13"
-syntect = "5"
+# 문법·테마는 전부 two-face의 미리 컴파일된 덤프에서 온다(reader_render.rs). syntect의
+# 번들 기본값·yaml/plist 런타임 파서·html 렌더러는 쓰지 않으므로 켜지 않는다 — yaml-load가
+# 끌어오던 unmaintained yaml-rust가 이 축소로 빠진다. bincode는 parsing이 dump-load를
+# 강제해 남으며, syntect를 쓰는 한 뺄 수 없다.
+syntect = { version = "5", default-features = false, features = ["parsing", "dump-load", "regex-onig"] }
 unicode-width = "0.2"
-two-face = { version = "0.5", default-features = false, features = ["syntect-default-onig"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-onig"] }
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 # 직접 사용하지 않는 transitive dep(plist, ratatui-widgets 경유) 제약.
 # time 0.3.48의 내부 impl이 ratatui-widgets의 blanket From impl과 E0119 coherence

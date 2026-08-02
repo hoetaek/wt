@@ -868,6 +868,42 @@ mod tests {
     }
 
     #[test]
+    fn highlights_rust_code_from_two_face_dumps() {
+        // syntect 기능을 parsing/dump-load/regex-onig로 좁혔으므로 문법과 테마가 전부
+        // two-face 덤프에서 온다. 그 로드가 깨지면 highlight_code가 None을 돌려주고
+        // 조용히 평문으로 fallback하기 때문에, 텍스트 단언으로는 잡히지 않는다.
+        let lines = highlight_code("fn main() {}\n", "rust").expect("rust 문법을 찾아야 한다");
+
+        assert_eq!(lines.len(), 1);
+        assert!(
+            lines[0].len() > 1,
+            "하이라이터가 키워드와 식별자를 다른 span으로 갈라야 한다: {:?}",
+            lines[0].iter().map(|span| &span.text).collect::<Vec<_>>()
+        );
+
+        // span의 fg는 theme::colors_active()가 꺼지면 비므로, 테마 덤프가 실제로 색을
+        // 싣고 있는지는 syntect 원본 출력에서 확인한다. 전역 색 토글을 건드리지 않는다.
+        let syntax_set = syntax_set();
+        let syntax = syntax_set
+            .find_syntax_by_token("rust")
+            .expect("two-face 문법 덤프에 rust가 있어야 한다");
+        let ranges = HighlightLines::new(syntax, syntax_theme())
+            .highlight_line("fn main() {}\n", syntax_set)
+            .expect("하이라이팅이 성공해야 한다");
+        let colors = ranges
+            .iter()
+            .map(|(style, _)| {
+                let fg = style.foreground;
+                (fg.r, fg.g, fg.b)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(
+            colors.len() > 1,
+            "테마 덤프가 로드됐다면 스코프별 색이 갈려야 한다: {colors:?}"
+        );
+    }
+
+    #[test]
     fn renders_heading_code_checkbox_quote_with_styles() {
         let body = "## Title\n\n- [x] done\n- [ ] todo\n\n```rust\nfn main() {}\n```\n\n> quoted\n";
         let lines = render_reader_lines(body, 40);
