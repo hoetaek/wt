@@ -8,6 +8,25 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.49.1 - 2026-09-01
+
+### Changed
+
+- Removed the repo-local consistency agent skill after moving its reusable UX
+  guidance to the global skill; `docs/consistency.md` remains the project
+  contract.
+- Narrowed syntect features to the parsers and dumps used by the TUI, removing
+  unused yaml-rust and plist dependencies without changing syntax highlighting.
+
+### Fixed
+
+- Simplified `wt init`'s generated Claude Code file permissions to the effective
+  `Edit(path)` rule, removing obsolete generated `Write(path)` rules on rerun.
+- Updated transitive dependencies to resolve five RustSec vulnerabilities and
+  an `lru` panic-safety advisory reported by `cargo audit`.
+- Fixed Herd and Valet cleanup to unlink from the configured site root, with a
+  safe name-based fallback when the root is missing or cwd-based unlink fails.
+
 ## 0.49.0 - 2026-06-25
 
 ### Added
