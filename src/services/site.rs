@@ -59,11 +59,16 @@ impl<'a> SiteService<'a> {
         }
     }
 
-    pub fn unregister(&self, provider: &SiteProvider, site_name: &str) -> Result<bool> {
+    pub fn unregister(
+        &self,
+        provider: &SiteProvider,
+        site_name: &str,
+        cwd: Option<&Path>,
+    ) -> Result<bool> {
         match provider {
             SiteProvider::None | SiteProvider::External => Ok(false),
-            SiteProvider::Herd => HerdService::new(self.runner).unlink(site_name),
-            SiteProvider::Valet => ValetService::new(self.runner).unlink(site_name),
+            SiteProvider::Herd => HerdService::new(self.runner).unlink(site_name, cwd),
+            SiteProvider::Valet => ValetService::new(self.runner).unlink(site_name, cwd),
             SiteProvider::Traefik => TraefikService::new().unregister(site_name),
         }
     }
@@ -145,8 +150,12 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !svc.unregister(&SiteProvider::External, "sample-app-feature")
-                .unwrap()
+            !svc.unregister(
+                &SiteProvider::External,
+                "sample-app-feature",
+                Some(Path::new("/tmp/app")),
+            )
+            .unwrap()
         );
         assert!(runner.calls.lock().unwrap().is_empty());
     }

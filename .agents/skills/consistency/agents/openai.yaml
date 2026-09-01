@@ -1,4 +1,0 @@
-interface:
-  display_name: "Consistency"
-  short_description: "Review UX consistency before changing code"
-  default_prompt: "Use $consistency to review this change for naming, defaults, state, and help-text consistency."

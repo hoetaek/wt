@@ -12,7 +12,12 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
 const CLAUDE_LOCAL_SETTINGS_PATH: &str = ".claude/settings.local.json";
-const CLAUDE_ALLOW_RULES: [&str; 2] = ["Edit(/.wt/**)", "Write(/.wt/**)"];
+// Claude Code의 파일 권한 검사는 `Edit(path)` 규칙만 본다. `Edit` 하나가 Write·Edit·
+// NotebookEdit 등 파일 편집 도구 전체를 덮으므로 경로당 규칙은 하나면 충분하다.
+const CLAUDE_ALLOW_RULES: [&str; 1] = ["Edit(/.wt/**)"];
+// 과거 wt init이 심었던 규칙. `Write(path)`는 매칭되지 않아 경고만 남기는 죽은 항목이라
+// 재실행 때 걷어낸다 — 같은 경로의 `Edit` 규칙이 이미 권한을 덮는다.
+const CLAUDE_RETIRED_ALLOW_RULES: [&str; 1] = ["Write(/.wt/**)"];
 const DEFAULT_INJECT_LOCAL_CONTEXT: &str = "## Local context\n- site: {{site_url}}\n- worktree: {{worktree_path}}\n- parent: {{parent_branch}}\n";
 
 #[derive(Debug, Default)]
@@ -486,7 +491,7 @@ fn maybe_scaffold_claude_allow_rules(ctx: &Ctx, options: &InitOptions) -> Result
     }
 
     if !ctx.ui.confirm(
-        "Claude가 .wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?",
+        "Claude가 .wt/** 파일을 편집할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?",
         false,
     )? {
         return Ok(());
@@ -581,6 +586,9 @@ fn merge_allow_rules_into_settings(settings: &mut serde_json::Value) -> Result<(
     let mut deduped =
         Vec::with_capacity(existing.len() + legacy_allowed.len() + CLAUDE_ALLOW_RULES.len());
     for item in existing {
+        if is_retired_allow_rule(&item) {
+            continue;
+        }
         if let Some(rule) = item.as_str()
             && CLAUDE_ALLOW_RULES.contains(&rule)
         {
@@ -593,6 +601,9 @@ fn merge_allow_rules_into_settings(settings: &mut serde_json::Value) -> Result<(
     }
 
     for item in legacy_allowed {
+        if is_retired_allow_rule(&item) {
+            continue;
+        }
         if let Some(rule) = item.as_str()
             && CLAUDE_ALLOW_RULES.contains(&rule)
         {
@@ -614,6 +625,11 @@ fn merge_allow_rules_into_settings(settings: &mut serde_json::Value) -> Result<(
 
     *allowed = deduped;
     Ok(())
+}
+
+fn is_retired_allow_rule(item: &serde_json::Value) -> bool {
+    item.as_str()
+        .is_some_and(|rule| CLAUDE_RETIRED_ALLOW_RULES.contains(&rule))
 }
 
 fn is_interactive_wizard(options: &InitOptions) -> bool {
@@ -4114,7 +4130,7 @@ origin_policy = "local-only"
                 "select: 개발 환경 설정을 어떻게 만들까요?".to_string(),
                 "select: 설정 editor command".to_string(),
                 "confirm: 설정을 생성할까요?".to_string(),
-                "confirm: Claude가 .wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?".to_string(),
+                "confirm: Claude가 .wt/** 파일을 편집할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?".to_string(),
             ]
         );
 
@@ -4650,7 +4666,7 @@ origin_policy = "local-only"
                 "select: 설정 editor command".to_string(),
                 "confirm: agent 실행 args를 추가할까요?".to_string(),
                 "confirm: 설정을 생성할까요?".to_string(),
-                "confirm: Claude가 .wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?".to_string(),
+                "confirm: Claude가 .wt/** 파일을 편집할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?".to_string(),
             ]
         );
     }
@@ -5585,18 +5601,14 @@ colors = { task = "", issue = "cyan" }
 
         let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
         let settings = read_claude_local_settings(&settings_path).unwrap();
-        assert_eq!(
-            allow_rules(&settings),
-            vec!["Edit(/.wt/**)", "Write(/.wt/**)"]
-        );
+        assert_eq!(allow_rules(&settings), vec!["Edit(/.wt/**)"]);
         assert!(settings.get("allowed").is_none());
         assert_eq!(
             settings,
             serde_json::json!({
                 "permissions": {
                     "allow": [
-                        "Edit(/.wt/**)",
-                        "Write(/.wt/**)"
+                        "Edit(/.wt/**)"
                     ]
                 }
             })
@@ -5651,7 +5663,7 @@ colors = { task = "", issue = "cyan" }
         assert!(settings.get("allowed").is_none());
         assert_eq!(
             allow_rules(&settings),
-            vec!["Edit(/.wt/**)", "Write(/.wt/**)", "Bash(echo:*)"]
+            vec!["Edit(/.wt/**)", "Bash(echo:*)"]
         );
     }
 
@@ -5712,7 +5724,37 @@ colors = { task = "", issue = "cyan" }
         assert!(settings.get("allowed").is_none());
         assert_eq!(
             allow_rules(&settings),
-            vec!["Edit(/.wt/**)", "Write(/.wt/**)", "Bash(echo:*)"]
+            vec!["Edit(/.wt/**)", "Bash(echo:*)"]
+        );
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_drops_retired_write_rule_from_permissions_allow() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{
+  "permissions": {
+    "allow": [
+      "Edit(/.wt/**)",
+      "Write(/.wt/**)",
+      "Bash(npm run *)"
+    ]
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        merge_claude_allow_rules(&settings_path).unwrap();
+        let settings = read_claude_local_settings(&settings_path).unwrap();
+
+        assert_eq!(
+            allow_rules(&settings),
+            vec!["Edit(/.wt/**)", "Bash(npm run *)"],
+            "매칭되지 않는 Write 규칙은 걷어내고 사용자 규칙은 그대로 둬야 한다"
         );
     }
 
@@ -5744,7 +5786,7 @@ colors = { task = "", issue = "cyan" }
         assert!(settings.get("allowed").is_none());
         assert_eq!(
             allow_rules(&settings),
-            vec!["Bash(npm run *)", "Edit(/.wt/**)", "Write(/.wt/**)"]
+            vec!["Bash(npm run *)", "Edit(/.wt/**)"]
         );
     }
 
@@ -5777,12 +5819,7 @@ colors = { task = "", issue = "cyan" }
         assert!(settings.get("allowed").is_none());
         assert_eq!(
             allow_rules(&settings),
-            vec![
-                "Bash(git:*)",
-                "Edit(/.wt/**)",
-                "Bash(echo:*)",
-                "Write(/.wt/**)"
-            ]
+            vec!["Bash(git:*)", "Edit(/.wt/**)", "Bash(echo:*)"]
         );
     }
 
@@ -5910,8 +5947,7 @@ colors = { task = "", issue = "cyan" }
             serde_json::json!({
                 "permissions": {
                     "allow": [
-                        "Edit(/.wt/**)",
-                        "Write(/.wt/**)"
+                        "Edit(/.wt/**)"
                     ]
                 }
             })

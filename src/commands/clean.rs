@@ -9,7 +9,7 @@ use crate::services::site::{SiteService, provider_label};
 use crate::setup;
 use crate::task_run::{self, TaskRunContext, TaskRunRecord};
 use anyhow::{Result, bail};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 pub fn run(ctx: &Ctx) -> Result<()> {
     run_with_targets(ctx, &[])
@@ -178,7 +178,12 @@ fn unlink_site(ctx: &Ctx, config: &Config, wt_path: &Path, branch: &str) -> Resu
         return Ok(());
     };
 
-    if site.unregister(&site_config.provider, &site_descriptor.name)? {
+    let site_root = safe_site_root(wt_path, &site_descriptor.root);
+    if site.unregister(
+        &site_config.provider,
+        &site_descriptor.name,
+        site_root.as_deref(),
+    )? {
         ctx.ui.print_step(&format!(
             "  {}: {} unlinked",
             provider_label(&site_config.provider),
@@ -186,6 +191,22 @@ fn unlink_site(ctx: &Ctx, config: &Config, wt_path: &Path, branch: &str) -> Resu
         ));
     }
     Ok(())
+}
+
+fn safe_site_root(worktree: &Path, root: &str) -> Option<PathBuf> {
+    let root = Path::new(root);
+    if root.components().any(|component| {
+        matches!(
+            component,
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir
+        )
+    }) {
+        return None;
+    }
+
+    let worktree = worktree.canonicalize().ok()?;
+    let candidate = worktree.join(root).canonicalize().ok()?;
+    candidate.starts_with(&worktree).then_some(candidate)
 }
 
 fn load_cmux_workspaces(ctx: &Ctx, cmux: &CmuxService<'_>) -> Vec<CmuxWorkspace> {
@@ -1067,9 +1088,10 @@ updated_at = "2026-05-18T00:00:00Z"
     }
 
     #[test]
-    fn clean_uses_matching_profile_config_for_site_unlink() {
+    fn clean_unlinks_herd_site_from_configured_root() {
         let repo = tempfile::tempdir().unwrap();
-        let worktree = repo.path().with_file_name("repo-cms-codex");
+        let worktree = repo.path().join("repo-cms-codex");
+        std::fs::create_dir_all(worktree.join("public")).unwrap();
         let profile_dir = repo.path().join(".wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
@@ -1078,6 +1100,7 @@ updated_at = "2026-05-18T00:00:00Z"
 [site]
 provider = "herd"
 name = "profile-{{branch_slug}}"
+root = "public"
 "#,
         )
         .unwrap();
@@ -1113,13 +1136,39 @@ name = "profile-{{branch_slug}}"
             }),
             Box::new(MockUi::new()),
         );
+        let site_root = std::fs::canonicalize(worktree.join("public")).unwrap();
 
         run_with_targets(&ctx, &["cms-codex".into()]).unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert!(calls.iter().any(|(cmd, args, _)| {
-            cmd == "herd" && args == &vec!["unlink".to_string(), "profile-cms-codex".to_string()]
+        assert!(calls.iter().any(|(cmd, args, cwd)| {
+            cmd == "herd"
+                && args == &vec!["unlink".to_string()]
+                && cwd.as_deref() == Some(site_root.as_path())
         }));
+    }
+
+    #[test]
+    fn site_root_rejects_paths_outside_worktree() {
+        let worktree = tempfile::tempdir().unwrap();
+        std::fs::create_dir(worktree.path().join("public")).unwrap();
+
+        assert_eq!(
+            safe_site_root(worktree.path(), "public"),
+            Some(std::fs::canonicalize(worktree.path().join("public")).unwrap())
+        );
+        assert_eq!(safe_site_root(worktree.path(), "../public"), None);
+        assert_eq!(safe_site_root(worktree.path(), "/tmp/public"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn site_root_rejects_symlink_outside_worktree() {
+        let worktree = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), worktree.path().join("public")).unwrap();
+
+        assert_eq!(safe_site_root(worktree.path(), "public"), None);
     }
 
     #[test]
