@@ -546,7 +546,7 @@ pub mod mock {
     pub type CommandCall = (String, Vec<String>, Option<PathBuf>);
 
     pub struct MockRunner {
-        responses: Mutex<VecDeque<CmdOutput>>,
+        responses: Mutex<VecDeque<Result<CmdOutput>>>,
         pub calls: Mutex<Vec<CommandCall>>,
         available_commands: Vec<String>,
     }
@@ -567,19 +567,26 @@ pub mod mock {
         }
 
         pub fn add_response(&mut self, stdout: &str, success: bool) {
-            self.responses.lock().unwrap().push_back(CmdOutput {
+            self.responses.lock().unwrap().push_back(Ok(CmdOutput {
                 stdout: stdout.into(),
                 stderr: String::new(),
                 success,
-            });
+            }));
         }
 
         pub fn add_response_with_stderr(&mut self, stdout: &str, stderr: &str, success: bool) {
-            self.responses.lock().unwrap().push_back(CmdOutput {
+            self.responses.lock().unwrap().push_back(Ok(CmdOutput {
                 stdout: stdout.into(),
                 stderr: stderr.into(),
                 success,
-            });
+            }));
+        }
+
+        pub fn add_error(&mut self, message: &str) {
+            self.responses
+                .lock()
+                .unwrap()
+                .push_back(Err(anyhow::anyhow!(message.to_string())));
         }
 
         pub fn add_command(&mut self, cmd: &str) {
@@ -598,7 +605,7 @@ pub mod mock {
                 .lock()
                 .unwrap()
                 .pop_front()
-                .ok_or_else(|| anyhow::anyhow!("MockRunner: no more responses queued"))
+                .unwrap_or_else(|| Err(anyhow::anyhow!("MockRunner: no more responses queued")))
         }
 
         fn has_command(&self, cmd: &str) -> bool {
