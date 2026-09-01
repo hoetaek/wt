@@ -34,11 +34,13 @@ impl<'a> ValetService<'a> {
     }
 
     pub fn unlink(&self, site_name: &str, cwd: &Path) -> Result<bool> {
-        if cwd.is_dir() {
-            let out = self.runner.run("valet", &["unlink"], Some(cwd))?;
-            if out.success {
-                return Ok(true);
-            }
+        if cwd.is_dir()
+            && self
+                .runner
+                .run("valet", &["unlink"], Some(cwd))
+                .is_ok_and(|out| out.success)
+        {
+            return Ok(true);
         }
 
         let out = self.runner.run("valet", &["unlink", site_name], None)?;
@@ -93,6 +95,24 @@ mod tests {
     fn unlink_falls_back_to_site_name() {
         let mut runner = MockRunner::new();
         runner.add_response("", false);
+        runner.add_response("", true);
+
+        let svc = ValetService::new(&runner);
+        let cwd = tempfile::tempdir().unwrap();
+        assert!(svc.unlink("sample-app-feature", cwd.path()).unwrap());
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].1, vec!["unlink"]);
+        assert_eq!(calls[0].2.as_deref(), Some(cwd.path()));
+        assert_eq!(calls[1].1, vec!["unlink", "sample-app-feature"]);
+        assert_eq!(calls[1].2, None);
+    }
+
+    #[test]
+    fn unlink_falls_back_to_site_name_when_cwd_call_errors() {
+        let mut runner = MockRunner::new();
+        runner.add_error("cwd disappeared");
         runner.add_response("", true);
 
         let svc = ValetService::new(&runner);
