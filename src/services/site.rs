@@ -59,7 +59,12 @@ impl<'a> SiteService<'a> {
         }
     }
 
-    pub fn unregister(&self, provider: &SiteProvider, site_name: &str, cwd: &Path) -> Result<bool> {
+    pub fn unregister(
+        &self,
+        provider: &SiteProvider,
+        site_name: &str,
+        cwd: Option<&Path>,
+    ) -> Result<bool> {
         match provider {
             SiteProvider::None | SiteProvider::External => Ok(false),
             SiteProvider::Herd => HerdService::new(self.runner).unlink(site_name, cwd),
@@ -148,7 +153,7 @@ mod tests {
             !svc.unregister(
                 &SiteProvider::External,
                 "sample-app-feature",
-                Path::new("/tmp/app"),
+                Some(Path::new("/tmp/app")),
             )
             .unwrap()
         );
