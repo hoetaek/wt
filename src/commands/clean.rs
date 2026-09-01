@@ -9,7 +9,7 @@ use crate::services::site::{SiteService, provider_label};
 use crate::setup;
 use crate::task_run::{self, TaskRunContext, TaskRunRecord};
 use anyhow::{Result, bail};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 pub fn run(ctx: &Ctx) -> Result<()> {
     run_with_targets(ctx, &[])
@@ -178,8 +178,12 @@ fn unlink_site(ctx: &Ctx, config: &Config, wt_path: &Path, branch: &str) -> Resu
         return Ok(());
     };
 
-    let site_root = wt_path.join(&site_descriptor.root);
-    if site.unregister(&site_config.provider, &site_descriptor.name, &site_root)? {
+    let site_root = safe_site_root(wt_path, &site_descriptor.root);
+    if site.unregister(
+        &site_config.provider,
+        &site_descriptor.name,
+        site_root.as_deref(),
+    )? {
         ctx.ui.print_step(&format!(
             "  {}: {} unlinked",
             provider_label(&site_config.provider),
@@ -187,6 +191,17 @@ fn unlink_site(ctx: &Ctx, config: &Config, wt_path: &Path, branch: &str) -> Resu
         ));
     }
     Ok(())
+}
+
+fn safe_site_root(worktree: &Path, root: &str) -> Option<PathBuf> {
+    let root = Path::new(root);
+    (!root.components().any(|component| {
+        matches!(
+            component,
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir
+        )
+    }))
+    .then(|| worktree.join(root))
 }
 
 fn load_cmux_workspaces(ctx: &Ctx, cmux: &CmuxService<'_>) -> Vec<CmuxWorkspace> {
@@ -1126,6 +1141,18 @@ root = "public"
                 && args == &vec!["unlink".to_string()]
                 && cwd.as_deref() == Some(site_root.as_path())
         }));
+    }
+
+    #[test]
+    fn site_root_rejects_paths_outside_worktree() {
+        let worktree = Path::new("/tmp/worktree");
+
+        assert_eq!(
+            safe_site_root(worktree, "public"),
+            Some(worktree.join("public"))
+        );
+        assert_eq!(safe_site_root(worktree, "../public"), None);
+        assert_eq!(safe_site_root(worktree, "/tmp/public"), None);
     }
 
     #[test]
