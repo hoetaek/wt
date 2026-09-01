@@ -195,13 +195,18 @@ fn unlink_site(ctx: &Ctx, config: &Config, wt_path: &Path, branch: &str) -> Resu
 
 fn safe_site_root(worktree: &Path, root: &str) -> Option<PathBuf> {
     let root = Path::new(root);
-    (!root.components().any(|component| {
+    if root.components().any(|component| {
         matches!(
             component,
             Component::Prefix(_) | Component::RootDir | Component::ParentDir
         )
-    }))
-    .then(|| worktree.join(root))
+    }) {
+        return None;
+    }
+
+    let worktree = worktree.canonicalize().ok()?;
+    let candidate = worktree.join(root).canonicalize().ok()?;
+    candidate.starts_with(&worktree).then_some(candidate)
 }
 
 fn load_cmux_workspaces(ctx: &Ctx, cmux: &CmuxService<'_>) -> Vec<CmuxWorkspace> {
@@ -1131,11 +1136,11 @@ root = "public"
             }),
             Box::new(MockUi::new()),
         );
+        let site_root = std::fs::canonicalize(worktree.join("public")).unwrap();
 
         run_with_targets(&ctx, &["cms-codex".into()]).unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        let site_root = worktree.join("public");
         assert!(calls.iter().any(|(cmd, args, cwd)| {
             cmd == "herd"
                 && args == &vec!["unlink".to_string()]
@@ -1145,14 +1150,25 @@ root = "public"
 
     #[test]
     fn site_root_rejects_paths_outside_worktree() {
-        let worktree = Path::new("/tmp/worktree");
+        let worktree = tempfile::tempdir().unwrap();
+        std::fs::create_dir(worktree.path().join("public")).unwrap();
 
         assert_eq!(
-            safe_site_root(worktree, "public"),
-            Some(worktree.join("public"))
+            safe_site_root(worktree.path(), "public"),
+            Some(std::fs::canonicalize(worktree.path().join("public")).unwrap())
         );
-        assert_eq!(safe_site_root(worktree, "../public"), None);
-        assert_eq!(safe_site_root(worktree, "/tmp/public"), None);
+        assert_eq!(safe_site_root(worktree.path(), "../public"), None);
+        assert_eq!(safe_site_root(worktree.path(), "/tmp/public"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn site_root_rejects_symlink_outside_worktree() {
+        let worktree = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), worktree.path().join("public")).unwrap();
+
+        assert_eq!(safe_site_root(worktree.path(), "public"), None);
     }
 
     #[test]
