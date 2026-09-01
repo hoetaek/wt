@@ -33,8 +33,15 @@ impl<'a> ValetService<'a> {
         Ok(())
     }
 
-    pub fn unlink(&self, site_name: &str) -> Result<bool> {
-        let out = self.runner.run("valet", &["unlink", site_name], None)?;
+    pub fn unlink(&self, site_name: &str, cwd: &Path) -> Result<bool> {
+        let out = self.runner.run("valet", &["unlink"], Some(cwd))?;
+        if out.success {
+            return Ok(true);
+        }
+
+        let out = self
+            .runner
+            .run("valet", &["unlink", site_name], Some(cwd))?;
         Ok(out.success)
     }
 }
@@ -69,12 +76,33 @@ mod tests {
     }
 
     #[test]
-    fn unlink_returns_success_status() {
+    fn unlink_uses_cwd_and_returns_success_status() {
         let mut runner = MockRunner::new();
         runner.add_response("", true);
 
         let svc = ValetService::new(&runner);
-        assert!(svc.unlink("sample-app-feature").unwrap());
+        let cwd = Path::new("/tmp/sample-app-feature");
+        assert!(svc.unlink("sample-app-feature", cwd).unwrap());
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["unlink"]);
+        assert_eq!(calls[0].2.as_deref(), Some(cwd));
+    }
+
+    #[test]
+    fn unlink_falls_back_to_site_name() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", false);
+        runner.add_response("", true);
+
+        let svc = ValetService::new(&runner);
+        let cwd = Path::new("/tmp/sample-app-feature");
+        assert!(svc.unlink("sample-app-feature", cwd).unwrap());
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["unlink"]);
+        assert_eq!(calls[1].1, vec!["unlink", "sample-app-feature"]);
+        assert_eq!(calls[1].2.as_deref(), Some(cwd));
     }
 
     #[test]
