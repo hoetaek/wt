@@ -32,12 +32,14 @@ impl<'a> HerdService<'a> {
     }
 
     pub fn unlink(&self, site_name: &str, cwd: &Path) -> Result<bool> {
-        let out = self.runner.run("herd", &["unlink"], Some(cwd))?;
-        if out.success {
-            return Ok(true);
+        if cwd.is_dir() {
+            let out = self.runner.run("herd", &["unlink"], Some(cwd))?;
+            if out.success {
+                return Ok(true);
+            }
         }
 
-        let out = self.runner.run("herd", &["unlink", site_name], Some(cwd))?;
+        let out = self.runner.run("herd", &["unlink", site_name], None)?;
         Ok(out.success)
     }
 }
@@ -78,12 +80,12 @@ mod tests {
         runner.add_response("", true);
 
         let svc = HerdService::new(&runner);
-        let cwd = Path::new("/tmp/sample-app-proj-680");
-        assert!(svc.unlink("sample-app-proj-680", cwd).unwrap());
+        let cwd = tempfile::tempdir().unwrap();
+        assert!(svc.unlink("sample-app-proj-680", cwd.path()).unwrap());
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls[0].1, vec!["unlink"]);
-        assert_eq!(calls[0].2.as_deref(), Some(cwd));
+        assert_eq!(calls[0].2.as_deref(), Some(cwd.path()));
     }
 
     #[test]
@@ -93,13 +95,31 @@ mod tests {
         runner.add_response("", true);
 
         let svc = HerdService::new(&runner);
-        let cwd = Path::new("/tmp/sample-app-proj-680");
-        assert!(svc.unlink("sample-app-proj-680", cwd).unwrap());
+        let cwd = tempfile::tempdir().unwrap();
+        assert!(svc.unlink("sample-app-proj-680", cwd.path()).unwrap());
 
         let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].1, vec!["unlink"]);
+        assert_eq!(calls[0].2.as_deref(), Some(cwd.path()));
         assert_eq!(calls[1].1, vec!["unlink", "sample-app-proj-680"]);
-        assert_eq!(calls[1].2.as_deref(), Some(cwd));
+        assert_eq!(calls[1].2, None);
+    }
+
+    #[test]
+    fn unlink_uses_site_name_when_cwd_is_missing() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+
+        let svc = HerdService::new(&runner);
+        let parent = tempfile::tempdir().unwrap();
+        let cwd = parent.path().join("missing");
+        assert!(svc.unlink("sample-app-proj-680", &cwd).unwrap());
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec!["unlink", "sample-app-proj-680"]);
+        assert_eq!(calls[0].2, None);
     }
 
     #[test]

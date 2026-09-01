@@ -1070,7 +1070,8 @@ updated_at = "2026-05-18T00:00:00Z"
     #[test]
     fn clean_unlinks_herd_site_from_configured_root() {
         let repo = tempfile::tempdir().unwrap();
-        let worktree = repo.path().with_file_name("repo-cms-codex");
+        let worktree = repo.path().join("repo-cms-codex");
+        std::fs::create_dir_all(worktree.join("public")).unwrap();
         let profile_dir = repo.path().join(".wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
