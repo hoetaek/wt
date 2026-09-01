@@ -178,7 +178,8 @@ fn unlink_site(ctx: &Ctx, config: &Config, wt_path: &Path, branch: &str) -> Resu
         return Ok(());
     };
 
-    if site.unregister(&site_config.provider, &site_descriptor.name)? {
+    let site_root = wt_path.join(&site_descriptor.root);
+    if site.unregister(&site_config.provider, &site_descriptor.name, &site_root)? {
         ctx.ui.print_step(&format!(
             "  {}: {} unlinked",
             provider_label(&site_config.provider),
@@ -1067,9 +1068,10 @@ updated_at = "2026-05-18T00:00:00Z"
     }
 
     #[test]
-    fn clean_uses_matching_profile_config_for_site_unlink() {
+    fn clean_unlinks_herd_site_from_configured_root() {
         let repo = tempfile::tempdir().unwrap();
-        let worktree = repo.path().with_file_name("repo-cms-codex");
+        let worktree = repo.path().join("repo-cms-codex");
+        std::fs::create_dir_all(worktree.join("public")).unwrap();
         let profile_dir = repo.path().join(".wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
@@ -1078,6 +1080,7 @@ updated_at = "2026-05-18T00:00:00Z"
 [site]
 provider = "herd"
 name = "profile-{{branch_slug}}"
+root = "public"
 "#,
         )
         .unwrap();
@@ -1117,8 +1120,11 @@ name = "profile-{{branch_slug}}"
         run_with_targets(&ctx, &["cms-codex".into()]).unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert!(calls.iter().any(|(cmd, args, _)| {
-            cmd == "herd" && args == &vec!["unlink".to_string(), "profile-cms-codex".to_string()]
+        let site_root = worktree.join("public");
+        assert!(calls.iter().any(|(cmd, args, cwd)| {
+            cmd == "herd"
+                && args == &vec!["unlink".to_string()]
+                && cwd.as_deref() == Some(site_root.as_path())
         }));
     }
 
